@@ -2124,33 +2124,10 @@ static void build_settings(void) {
     lv_obj_set_style_bg_color(sep1, SSC_C_BORDER, 0);
     lv_obj_set_style_bg_opa(sep1, LV_OPA_COVER, 0);
 
-    /* ---- HTTP Endpoint (Vereins-Dashboard) ---- */
-    section_title(body, "SUPERSAUNA.CLUB ENDPOINT");
-    kv_label(body, "AKTIV");
-    set_http_enabled_sw = lv_switch_create(body);
-    lv_obj_set_style_bg_color(set_http_enabled_sw, SSC_C_ELEVATED, 0);
-    lv_obj_set_style_bg_color(set_http_enabled_sw, SSC_C_ACCENT, LV_STATE_CHECKED|LV_PART_INDICATOR);
-
-    kv_label(body, "URL");
-    set_http_url_ta = make_textarea(body, "https://supersauna.club/api/session", false);
-
-    kv_label(body, "BEARER TOKEN");
-    set_http_token_ta = make_textarea(body, "optional", true);
-
-    lv_obj_t *http_apply = lv_btn_create(body);
-    style_primary_btn(http_apply);
-    lv_obj_set_size(http_apply, 420, 42);
-    lv_obj_t *hal = lv_label_create(http_apply);
-    lv_label_set_text(hal, LV_SYMBOL_OK "  HTTP-KONFIG SPEICHERN");
-    lv_obj_set_style_text_font(hal, F_SM, 0);
-    lv_obj_center(hal);
-    lv_obj_add_event_cb(http_apply, on_http_apply_clicked, LV_EVENT_CLICKED, NULL);
-
-    lv_obj_t *sep2 = lv_obj_create(body);
-    lv_obj_remove_style_all(sep2);
-    lv_obj_set_size(sep2, 420, 1);
-    lv_obj_set_style_bg_color(sep2, SSC_C_BORDER, 0);
-    lv_obj_set_style_bg_opa(sep2, LV_OPA_COVER, 0);
+    /* HINWEIS: Die Supersauna.club-API-Section ist nach unten verschoben
+     * und ausgegraut ("ZUKUNFTS-FEATURE"), siehe weiter unten nach INFO.
+     * Die globalen set_http_*-Variablen werden trotzdem dort allokiert
+     * damit on_http_apply_clicked / existierende Callbacks nicht segfaulten. */
 
     /* ---- MariaDB ---- */
     section_title(body, "MARIADB");
@@ -2187,13 +2164,63 @@ static void build_settings(void) {
     section_title(body, "INFO");
     lv_obj_t *info = lv_label_create(body);
     lv_label_set_text(info,
-        "Super Sauna Club — Sauna Logger\n"
+        "Super Sauna Club - Sauna Logger\n"
         "Version " SSC_APP_VERSION "\n"
-        "supersauna.club · Oberes Piestingtal\n"
+        "Open Source | Apache 2.0\n"
+        "supersauna.club | Oberes Piestingtal\n"
         "SenseCAP D1S | ESP32-S3 + RP2040\n"
         "KI-assistierte Entwicklung");
     lv_obj_set_style_text_color(info, SSC_C_TEXT_MUTED, 0);
     lv_obj_set_style_text_font(info, F_XS, 0);
+
+    /* ---- ZUKUNFTS-FEATURE: supersauna.club API (ausgegraut) ------------
+     * Endpoint zum Push von Session-Daten an ein zentrales Vereins-
+     * Dashboard. Server-Seite existiert noch nicht, daher visuell
+     * disabled. Variablen werden angelegt damit on_http_apply_clicked
+     * nicht auf NULL greift - Klick macht aber nichts Sinnvolles. */
+    lv_obj_t *sep_future = lv_obj_create(body);
+    lv_obj_remove_style_all(sep_future);
+    lv_obj_set_size(sep_future, 420, 24);
+    lv_obj_set_style_bg_opa(sep_future, LV_OPA_TRANSP, 0);
+
+    section_title(body, "ZUKUNFTS-FEATURE: SUPERSAUNA.CLUB API");
+
+    lv_obj_t *future_hint = lv_label_create(body);
+    lv_label_set_long_mode(future_hint, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(future_hint,
+        "Automatischer Push der Session-Daten an das Vereins-Dashboard. "
+        "Server noch in Planung - UI aktuell nur Platzhalter.");
+    lv_obj_set_style_text_color(future_hint, SSC_C_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(future_hint, F_XS, 0);
+    lv_obj_set_width(future_hint, 420);
+
+    kv_label(body, "AKTIV");
+    set_http_enabled_sw = lv_switch_create(body);
+    lv_obj_set_style_bg_color(set_http_enabled_sw, SSC_C_ELEVATED, 0);
+    lv_obj_set_style_bg_color(set_http_enabled_sw, SSC_C_ACCENT, LV_STATE_CHECKED|LV_PART_INDICATOR);
+    lv_obj_add_state(set_http_enabled_sw, LV_STATE_DISABLED);
+    lv_obj_set_style_opa(set_http_enabled_sw, LV_OPA_40, 0);
+
+    kv_label(body, "URL");
+    set_http_url_ta = make_textarea(body, "https://supersauna.club/api/session", false);
+    lv_obj_add_state(set_http_url_ta, LV_STATE_DISABLED);
+    lv_obj_set_style_opa(set_http_url_ta, LV_OPA_40, 0);
+
+    kv_label(body, "BEARER TOKEN");
+    set_http_token_ta = make_textarea(body, "optional", true);
+    lv_obj_add_state(set_http_token_ta, LV_STATE_DISABLED);
+    lv_obj_set_style_opa(set_http_token_ta, LV_OPA_40, 0);
+
+    lv_obj_t *http_apply = lv_btn_create(body);
+    style_primary_btn(http_apply);
+    lv_obj_set_size(http_apply, 420, 42);
+    lv_obj_t *hal = lv_label_create(http_apply);
+    lv_label_set_text(hal, LV_SYMBOL_OK "  HTTP-KONFIG SPEICHERN");
+    lv_obj_set_style_text_font(hal, F_SM, 0);
+    lv_obj_center(hal);
+    lv_obj_add_event_cb(http_apply, on_http_apply_clicked, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_state(http_apply, LV_STATE_DISABLED);
+    lv_obj_set_style_opa(http_apply, LV_OPA_40, 0);
 
     /* ---- DANGER ZONE (ganz unten, extra abstand, rot markiert) ---- */
     lv_obj_t *sep_dz = lv_obj_create(body);
