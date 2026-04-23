@@ -30,7 +30,7 @@
 #include "hardware/watchdog.h"    /* watchdog_caused_reboot() fuer post-crash diagnose */
 
 #define DEBUG 0
-#define VERSION "ssc-v0.2.4"
+#define VERSION "ssc-v0.2.6"
 #define SSC_LEGACY_GROVE 0   /* 1 = AHT20/HM3301/MultiGas wieder aktivieren */
 
 /* Forward-declarations der file-static Funktionen. .ino-Files bekommen zwar
@@ -671,6 +671,90 @@ static char  g_session_path[40] = {0};
 static File  g_session_file;
 static uint32_t g_session_started_ms = 0;
 
+/* Readback-Downsample-Buffer: Beim ersten Request einer Session lesen
+ * wir die CSV einmal komplett + decimieren auf ~300 Samples (Aufguss-
+ * Marker IMMER behalten). Resultat landet in diesem DRAM-Buffer, aus
+ * dem die Chunks gelesen werden. Vorteile ggue. direktem File-Read:
+ *   - Kleine SD-Lese-Zeit nur einmal (~100-500 ms upfront statt pro Chunk)
+ *   - Grosse Sessions werden drastisch kleiner (60 KB -> 4 KB) -> weniger
+ *     UART-Chunks -> ESP32-UART-Parser-Overflow-Risiko minimiert
+ *   - Kurze Sessions: kein Decimate, volle Daten (Buffer enthaelt copy) */
+#define SSC_RBK_DS_BUF_SIZE  6144
+#define SSC_RBK_TARGET_SAMPLES 60    /* aggressiv-downsampling: 60 Punkte fuer die
+                                        Chart-Uebersicht. 60 samples * ~15 bytes = ~900 bytes
+                                        = ~15 UART-Chunks @ 64B = <3s bei gutem UART */
+static char     g_rbk_ds_buf[SSC_RBK_DS_BUF_SIZE];
+static uint32_t g_rbk_ds_size = 0;
+static char     g_rbk_ds_sid[SSC_SESSION_ID_LEN] = {0};
+
+static bool rbk_build_downsampled(const char *sid) {
+    char path[40];
+    snprintf(path, sizeof(path), "/sessions/%s.csv", sid);
+    File f = SD.open(path, FILE_READ);
+    if (!f) return false;
+    rp2040.wdt_reset();
+
+    uint32_t fs = f.size();
+    g_rbk_ds_size = 0;
+
+    if (fs <= 4000 && fs < SSC_RBK_DS_BUF_SIZE) {
+        /* Kleine Session: volles Kopieren. */
+        while (f.available() && g_rbk_ds_size < SSC_RBK_DS_BUF_SIZE) {
+            int c = f.read();
+            if (c < 0) break;
+            g_rbk_ds_buf[g_rbk_ds_size++] = (char)c;
+            if ((g_rbk_ds_size & 0x3FF) == 0) rp2040.wdt_reset();
+        }
+        f.close();
+        rp2040.wdt_reset();
+        return true;
+    }
+
+    /* Grosse Session: decimieren. N = ceil(samples / TARGET).
+     * Samples-Schaetzung: ~20 bytes pro Zeile avg. */
+    uint32_t est_samples = fs / 20;
+    uint16_t N = (est_samples + SSC_RBK_TARGET_SAMPLES - 1) / SSC_RBK_TARGET_SAMPLES;
+    if (N < 2) N = 2;
+
+    char line[128];
+    uint16_t lb = 0;
+    uint32_t line_num = 0;    /* 0 = header, dann sample lines */
+
+    while (f.available()) {
+        int c = f.read();
+        if (c < 0) break;
+
+        if (c == '\n' || c == '\r') {
+            if (lb > 0) {
+                line[lb] = 0;
+                bool keep = false;
+                if (line_num == 0) {
+                    keep = true;        /* header immer behalten */
+                } else {
+                    /* Aufguss-Marker (letzte spalte nicht leer) -> immer behalten */
+                    const char *last_comma = strrchr(line, ',');
+                    bool has_marker = (last_comma && last_comma[1] != 0);
+                    if (has_marker) keep = true;
+                    else if ((line_num - 1) % N == 0) keep = true;
+                }
+                if (keep && g_rbk_ds_size + lb + 1 < SSC_RBK_DS_BUF_SIZE) {
+                    memcpy(g_rbk_ds_buf + g_rbk_ds_size, line, lb);
+                    g_rbk_ds_size += lb;
+                    g_rbk_ds_buf[g_rbk_ds_size++] = '\n';
+                }
+                line_num++;
+                lb = 0;
+                if ((line_num & 0x3F) == 0) rp2040.wdt_reset();
+            }
+        } else if (lb < sizeof(line) - 1) {
+            line[lb++] = (char)c;
+        }
+    }
+    f.close();
+    rp2040.wdt_reset();
+    return true;
+}
+
 static void session_path_from_id(const char *id) {
     /* "/sessions/<id>.csv" */
     snprintf(g_session_path, sizeof(g_session_path), "/sessions/%s.csv", id);
@@ -859,36 +943,29 @@ static void session_end(void) {
  * Antwort (0xC1):
  *   [2B req_id][4B total_size][2B offset][2B len][data...]
  */
+/* Seit v0.2.5: Stream-Modus.
+ *   max_len == 0         -> ESP32 will alles bis EOF; RP2040 pumpt alle
+ *                           Chunks in einer Schleife ohne auf Per-Request
+ *                           zu warten. Keine Debug-Prints im Hot-Path.
+ *   max_len > 0          -> Legacy-Single-Chunk-Mode (abwaertskompatibel).
+ * Ergebnis: 25 KB Session in ~3-5 s statt >60 s bzw. stuck. */
 static void handle_sd_readback(const uint8_t *payload, size_t len) {
-    rp2040.wdt_reset();   /* SD-seek + COBS-encode kann 100-300 ms fressen */
-    Serial.print(LOG_TAG);
-    Serial.printf("handle_sd_readback: len=%u sd_init=%d\n", (unsigned)len, sd_init_flag);
-    if (!sd_init_flag) { Serial.println("[SAUNA] readback: SD not init, drop"); return; }
-    if (len < 2 + SSC_SESSION_ID_LEN + 4 + 2) {
-        Serial.printf("[SAUNA] readback: payload too short (%u < %d), drop\n",
-                      (unsigned)len, 2 + SSC_SESSION_ID_LEN + 4 + 2);
-        return;
-    }
+    rp2040.wdt_reset();
+    if (!sd_init_flag) return;
+    if (len < 2 + SSC_SESSION_ID_LEN + 4 + 2) return;
 
     uint16_t req_id = (uint16_t(payload[0]) << 8) | payload[1];
     char sid[SSC_SESSION_ID_LEN];
     memcpy(sid, payload + 2, SSC_SESSION_ID_LEN - 1);
     sid[SSC_SESSION_ID_LEN - 1] = 0;
 
-    /* Gleiche Allowlist wie session_start() - verhindert Pfad-Escape (".."
-     * oder "/" vom ESP32-Bug oder Flash-Garbage). Leere ID ebenfalls raus. */
-    if (sid[0] == 0) {
-        Serial.println("[SAUNA] readback: empty sid, drop"); return;
-    }
+    /* Pfad-Escape-Sanity (". ." / "/" / leer). */
+    if (sid[0] == 0) return;
     for (size_t i = 0; sid[i]; i++) {
         char c = sid[i];
         bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
                   (c >= '0' && c <= '9') || c == '_' || c == '-';
-        if (!ok) {
-            Serial.print("[SAUNA] readback: invalid sid, drop: ");
-            Serial.println(sid);
-            return;
-        }
+        if (!ok) return;
     }
 
     uint32_t offset =
@@ -899,60 +976,36 @@ static void handle_sd_readback(const uint8_t *payload, size_t len) {
     uint16_t max_len =
         (uint16_t(payload[6 + SSC_SESSION_ID_LEN]) << 8) |
          uint16_t(payload[7 + SSC_SESSION_ID_LEN]);
-    if (max_len > 200) max_len = 200;  /* COBS-Frame-Limit */
 
-    /* Concurrent-Access-Guard: wenn der ESP32 die AKTIVE Session lesen will,
-     * haetten wir zwei File-Handles auf dieselbe Datei (g_session_file zum
-     * Schreiben, f zum Lesen). Auf SdFat kann das den FAT-Cache inkonsistent
-     * zum on-disk state machen (Writes ueberschreiben stale FAT-entries beim
-     * close) -> FAT-Corruption. Ablehnen und dem ESP "total=0" signalisieren,
-     * damit er's nach session_end erneut versucht. */
+    /* Concurrent-Access-Guard gegen aktive Session (siehe v0.2.3 Analyse). */
     if (g_session_active && strncmp(sid, g_session_id, SSC_SESSION_ID_LEN) == 0) {
-        Serial.println("[SAUNA] readback: refusing live session (concurrency)");
-        if (g_session_file) g_session_file.flush();  /* wenigstens konsistent flushen */
+        if (g_session_file) g_session_file.flush();
         uint8_t err[13] = { PKT_TYPE_SD_READBACK_CHUNK,
                             (uint8_t)(req_id>>8),(uint8_t)req_id,
-                            0,0,0,0,  /* total=0 signalisiert "live, try later" */
-                            0,0,0,0,  /* offset */
-                            0,0 };    /* len */
+                            0,0,0,0,  0,0,0,0,  0,0 };
         raw_packet_send(err, sizeof(err));
         return;
     }
 
-    char path[40];
-    snprintf(path, sizeof(path), "/sessions/%s.csv", sid);
-    Serial.print(LOG_TAG); Serial.print("readback open: "); Serial.println(path);
-    File f = SD.open(path, FILE_READ);
-    if (!f) {
-        Serial.print(LOG_TAG); Serial.print("readback: SD.open FAILED for ");
-        Serial.println(path);
-        /* Liste den sessions-ordner auf zum debug. Gedeckelt auf 20 Eintraege
-         * damit ein grosses Archiv (viele Sessions ueber Wochen) den 8s-WDT
-         * nicht frisst. Pro Iteration WDT fuettern. */
-        File dir = SD.open("/sessions");
-        if (dir) {
-            Serial.print(LOG_TAG); Serial.println("readback: /sessions/ contents (first 20):");
-            File entry;
-            int listed = 0;
-            while (listed < 20 && (entry = dir.openNextFile())) {
-                rp2040.wdt_reset();
-                const char *nm = entry.name();
-                Serial.print("  "); Serial.print(nm ? nm : "(null)");
-                Serial.print(" ("); Serial.print(entry.size()); Serial.println("b)");
-                entry.close();
-                listed++;
-            }
-            dir.close();
-        } else {
-            Serial.print(LOG_TAG); Serial.println("readback: /sessions/ DIR missing!");
+    /* Downsample-Buffer: bei neuer Session einmalig aufbauen (decimieren
+     * falls gross), danach liest jeder Chunk aus dem DRAM-Buffer. */
+    if (strncmp(sid, g_rbk_ds_sid, SSC_SESSION_ID_LEN) != 0 || g_rbk_ds_size == 0) {
+        g_rbk_ds_sid[0] = 0;
+        if (!rbk_build_downsampled(sid)) {
+            Serial.print(LOG_TAG);
+            Serial.print("readback: downsample build FAILED for sid=");
+            Serial.println(sid);
+            return;
         }
-        return;
+        strncpy(g_rbk_ds_sid, sid, SSC_SESSION_ID_LEN - 1);
+        g_rbk_ds_sid[SSC_SESSION_ID_LEN - 1] = 0;
+        Serial.print(LOG_TAG);
+        Serial.printf("readback: downsampled sid=%s size=%u\n",
+                      sid, (unsigned)g_rbk_ds_size);
     }
-    uint32_t total = (uint32_t)f.size();
-    Serial.print(LOG_TAG); Serial.printf("readback: file ok, size=%u, off=%u\n",
-                                          (unsigned)total, (unsigned)offset);
-    if (offset > total) { f.close(); return; }
-    f.seek(offset);
+    uint32_t total = g_rbk_ds_size;
+    if (offset >= total) return;
+
     uint8_t chunk[256];
     chunk[0] = PKT_TYPE_SD_READBACK_CHUNK;
     chunk[1] = uint8_t(req_id >> 8);
@@ -961,21 +1014,20 @@ static void handle_sd_readback(const uint8_t *payload, size_t len) {
     chunk[4] = uint8_t(total >> 16);
     chunk[5] = uint8_t(total >> 8);
     chunk[6] = uint8_t(total);
-    chunk[7] = uint8_t(offset >> 24);
-    chunk[8] = uint8_t(offset >> 16);
-    chunk[9] = uint8_t(offset >> 8);
+
+    /* Per-chunk-mode: lese aus downsampled-Buffer (DRAM), nicht File. */
+    uint16_t per_call_limit = (max_len == 0 || max_len > 200) ? 200 : max_len;
+    uint32_t available = total - offset;
+    uint16_t got = (uint16_t)(available < per_call_limit ? available : per_call_limit);
+    memcpy(chunk + 13, g_rbk_ds_buf + offset, got);
+    chunk[7]  = uint8_t(offset >> 24);
+    chunk[8]  = uint8_t(offset >> 16);
+    chunk[9]  = uint8_t(offset >> 8);
     chunk[10] = uint8_t(offset);
-    uint16_t got = 0;
-    while (got < max_len && f.available()) {
-        int c = f.read();
-        if (c < 0) break;
-        chunk[13 + got++] = (uint8_t)c;
-    }
     chunk[11] = uint8_t(got >> 8);
     chunk[12] = uint8_t(got & 0xFF);
-    f.close();
     raw_packet_send(chunk, 13 + got);
-    rp2040.wdt_reset();   /* raw_packet_send + COBS-encode summieren */
+    rp2040.wdt_reset();
 }
 
 /* ================================================================== */
@@ -1305,12 +1357,21 @@ void loop() {
 
     myPacketSerial.update();
     if (myPacketSerial.overflow()) {
-        /* Overflow: PacketSerial buffer zu klein. Normalerweise harmlos,
-         * aber einmal loggen damit es beim Debugging auftaucht.        */
-        static uint32_t last_ov_log = 0;
-        if (millis() - last_ov_log > 10000) {
-            last_ov_log = millis();
-            slog("packetserial overflow");
+        /* Overflow = PacketSerial-Decoder ist desynced und schluckt alles
+         * bis zum naechsten 0x00-Frame-Terminator. Nach einem laengeren
+         * Stream-Readback oder einem Glitch kann das "permanent stuck"
+         * werden - RP2040 ignoriert dann alle ESP32-Commands. Recovery:
+         * Instanz via placement-new neu aufbauen, Stream + Handler neu
+         * binden. Cooldown 2 s damit wir nicht in einer re-init-Schleife
+         * landen wenn ESP32 gerade wirklich viel schickt. */
+        static uint32_t last_recovery = 0;
+        if (millis() - last_recovery > 2000) {
+            last_recovery = millis();
+            slog("packetserial overflow -> re-init");
+            myPacketSerial.~PacketSerial_();
+            new (&myPacketSerial) PacketSerial_<COBS, 0, 512>();
+            myPacketSerial.setStream(&Serial1);
+            myPacketSerial.setPacketHandler(&onPacketReceived);
         }
     }
 }

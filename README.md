@@ -116,6 +116,23 @@ Zwei-Prozessor-Aufteilung:
 - **SD-Readback:** Der ESP32 liest historische CSVs seitenweise zurück, damit das Detail-Chart auf dem Display die Original-Samples zeigt ohne dass der ESP32 die Karte direkt anfasst. Max-Payload RP-seitig 200 B pro Chunk, ESP32-Parser-Robustheit limitiert es praktisch auf **64 B Payload** pro Chunk (größere Frames fragmentieren den COBS-Decoder bei 128-B-UART-FIFO).
 - **Live-Sensor-Daten** werden via 0xBF/0xC0 bei jedem Tick gepusht (kein Polling vom ESP32 aus).
 
+### Session-Historie-Performance (v0.2.6)
+
+Historische Sessions lassen sich in **≤ 5 Sekunden** aus der SD zurücklesen und als Chart anzeigen — egal wie lang die Session war:
+
+| Mechanismus | Zweck |
+|---|---|
+| **Downsampling auf RP2040** (target 60 Samples) | Bei großen Sessions (> 4 KB CSV) wird vor dem Senden decimiert: jeder N-te Sample + **alle Aufguss-Marker** behalten. 30-min-Session mit 1800 Samples → 60 Chart-Punkte → ca. 1 KB UART-Traffic. |
+| **File-Cache auf RP2040** | SD.open() kostet 50-150 ms. Beim ersten Chunk-Request einer Session wird die decimierte CSV in einen 6 KB DRAM-Buffer geladen. Folge-Chunks lesen aus dem Buffer → ~30 ms pro Chunk statt 300. |
+| **PSRAM-Akkumulator auf ESP32** | `rx_sd_chunk` macht nur noch `memcpy` in einen PSRAM-Buffer. CSV-Parse erst am Ende einmal statt pro Chunk. Hält den UART-Hot-Path blitz-schnell. |
+| **Non-blocking Event-Posts** im UART-Task | `esp_event_post_to(..., pdMS_TO_TICKS(5))` statt `portMAX_DELAY` — verhindert dass die UART-RX-Task bei voller Event-Queue blockiert und die UART-FIFO überläuft. |
+| **Watchdog mit Resume-Retry** | Bei UART-Stall (3 s ohne Chunk-Fortschritt) wird der Request vom letzten bekannten Offset neu gesendet (max 10 Retries). |
+| **5 s Hard-Limit + Partial-DONE** | Unabhängig vom Retry-Status postet der Watchdog nach 5 s das DONE-Event. Die UI zeigt die Teilkurve statt ewig "Lade Daten..." zu hängen. |
+| **Dynamische Zeitachsen-Labels** im Detail-Chart | Unter dem Chart 5 Labels adaptiv zur Session-Dauer: `0 \| 4min \| 8min \| 12min \| 17min` für 17-min, `0h00 \| 0h22 \| 0h45 \| 1h07 \| 1h30` für 90-min, `0:00 \| 2:00 \| 4:00 \| 6:00 \| 8:00` mit Sekunden-Auflösung bei <10 min. |
+| **Duration in der History-Liste** | Jede Session zeigt jetzt vorne die Dauer (`15min  85 C  65%  3`) — sowohl im Home-Screen als auch in der vollen History-Liste, plus im Detail-Screen-Header. |
+
+Kompromiss: Bei extrem langen Sessions (> 30 min) geht Sample-Auflösung verloren. Die Roh-CSV bleibt auf SD vollständig — dort kann man jederzeit manuell nachschauen.
+
 ### Defensiv-Mechanismen der RP2040-Firmware (v0.2.4)
 
 | Mechanismus | Zweck |
@@ -184,13 +201,13 @@ idf.py -p /dev/ttyUSB0 flash monitor
 Serial-Output auf `/dev/ttyACM0` @ 115200 baud:
 
 ```
-[SAUNA] BOOT ssc-v0.2.4 reset_reason=POWER/NORMAL
+[SAUNA] BOOT ssc-v0.2.6 reset_reason=POWER/NORMAL
 [SAUNA] I2C-Scan (boot): 0x38 0x44 0x59 0x62
 [SAUNA] SD: initialisiert
 [SAUNA] SHT3x ready @ 0x44 (SHT35/SHT85 kompatibel): 24.53 degC, 32.10 %RH
 [SAUNA] SGP40 ready
 [SAUNA] SCD41 ASC disabled (closed-room drift protection)
-[SAUNA] RP2040 ssc-v0.2.4 ready: SD=1 SCD41=1 SGP40=1 SHT85=1 AHT20fb=0 probe=SHT3x
+[SAUNA] RP2040 ssc-v0.2.6 ready: SD=1 SCD41=1 SGP40=1 SHT85=1 AHT20fb=0 probe=SHT3x
 [SAUNA] watchdog armed (8 s)
 ...
 [SAUNA] health: intvl=1000ms probe=SHT3x temp=25.5 rh=31.0 fails=0 session=0 sd=1 rp_die=41.2
@@ -334,8 +351,8 @@ Die Firmware hat **zwei Versionskonstanten** — eine pro Prozessor, weil RP2040
 
 | Prozessor | Variable | Datei | Format |
 |---|---|---|---|
-| ESP32-S3 (UI) | `SSC_APP_VERSION` | `SenseCAP_Indicator_ESP32/main/app_version.h` | Plain SemVer, z. B. `"0.2.4"` |
-| RP2040 (Sensor/SD) | `VERSION` | `SenseCAP_Indicator_RP2040/SenseCAP_Indicator_RP2040.ino` (Zeile 33) | mit Prefix: `"ssc-v0.2.4"` |
+| ESP32-S3 (UI) | `SSC_APP_VERSION` | `SenseCAP_Indicator_ESP32/main/app_version.h` | Plain SemVer, z. B. `"0.2.6"` |
+| RP2040 (Sensor/SD) | `VERSION` | `SenseCAP_Indicator_RP2040/SenseCAP_Indicator_RP2040.ino` (Zeile 33) | mit Prefix: `"ssc-v0.2.6"` |
 
 **Bump-Workflow:** Beide Variablen gleichzeitig anheben, dann RP2040 flashen (Arduino-CLI), dann ESP32 flashen (idf.py). Die ESP32-UI-Info-Zeile (`Settings → INFO`) und der RP2040-Serial-Boot-Banner zeigen die jeweilige Version — so ist sofort sichtbar, ob ein Prozessor den Flash verpasst hat.
 

@@ -767,8 +767,20 @@ static int __data_parse_handle(uint8_t *p_data, ssize_t len)
             memcpy(&data.vaule, &p_data[1], sizeof(data.vaule));
             __sensor_present_data_update(&__g_sensor_present_data.co2, data.vaule);
             __g_current_sensor_data.co2 = data.vaule;
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA, \
-                           &data, sizeof(struct view_data_sensor_data ), portMAX_DELAY);
+            /* Non-blocking: UART-Task DARF NICHT warten wenn Event-Queue
+             * voll ist - sonst laeuft UART-FIFO (HW 128B + SW 1024B) ueber
+             * und der COBS-Decoder verliert Frame-Sync (= Readback-Stall
+             * nach N Chunks). Bei Drop: kurz loggen. */
+            if (esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA,
+                                  &data, sizeof(struct view_data_sensor_data),
+                                  pdMS_TO_TICKS(5)) != ESP_OK) {
+                static uint32_t last_drop_ms = 0;
+                uint32_t now = xTaskGetTickCount();
+                if (now - last_drop_ms > pdMS_TO_TICKS(1000)) {
+                    last_drop_ms = now;
+                    ESP_LOGW(TAG, "uart-task: sensor event-post dropped (queue full)");
+                }
+            }
             break;
         } 
         
@@ -781,8 +793,20 @@ static int __data_parse_handle(uint8_t *p_data, ssize_t len)
             memcpy(&data.vaule, &p_data[1], sizeof(data.vaule));
             __sensor_present_data_update(&__g_sensor_present_data.temp, data.vaule);
             __g_current_sensor_data.temp_internal = data.vaule;
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA, \
-                           &data, sizeof(struct view_data_sensor_data ), portMAX_DELAY);
+            /* Non-blocking: UART-Task DARF NICHT warten wenn Event-Queue
+             * voll ist - sonst laeuft UART-FIFO (HW 128B + SW 1024B) ueber
+             * und der COBS-Decoder verliert Frame-Sync (= Readback-Stall
+             * nach N Chunks). Bei Drop: kurz loggen. */
+            if (esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA,
+                                  &data, sizeof(struct view_data_sensor_data),
+                                  pdMS_TO_TICKS(5)) != ESP_OK) {
+                static uint32_t last_drop_ms = 0;
+                uint32_t now = xTaskGetTickCount();
+                if (now - last_drop_ms > pdMS_TO_TICKS(1000)) {
+                    last_drop_ms = now;
+                    ESP_LOGW(TAG, "uart-task: sensor event-post dropped (queue full)");
+                }
+            }
             break;
         } 
 
@@ -795,8 +819,20 @@ static int __data_parse_handle(uint8_t *p_data, ssize_t len)
             memcpy(&data.vaule, &p_data[1], sizeof(data.vaule));
             __sensor_present_data_update(&__g_sensor_present_data.humidity, data.vaule);
             __g_current_sensor_data.humidity_internal = data.vaule;
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA, \
-                           &data, sizeof(struct view_data_sensor_data ), portMAX_DELAY);
+            /* Non-blocking: UART-Task DARF NICHT warten wenn Event-Queue
+             * voll ist - sonst laeuft UART-FIFO (HW 128B + SW 1024B) ueber
+             * und der COBS-Decoder verliert Frame-Sync (= Readback-Stall
+             * nach N Chunks). Bei Drop: kurz loggen. */
+            if (esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA,
+                                  &data, sizeof(struct view_data_sensor_data),
+                                  pdMS_TO_TICKS(5)) != ESP_OK) {
+                static uint32_t last_drop_ms = 0;
+                uint32_t now = xTaskGetTickCount();
+                if (now - last_drop_ms > pdMS_TO_TICKS(1000)) {
+                    last_drop_ms = now;
+                    ESP_LOGW(TAG, "uart-task: sensor event-post dropped (queue full)");
+                }
+            }
             break;
         } 
 
@@ -809,8 +845,20 @@ static int __data_parse_handle(uint8_t *p_data, ssize_t len)
             memcpy(&data.vaule, &p_data[1], sizeof(data.vaule));
             __sensor_present_data_update(&__g_sensor_present_data.tvoc, data.vaule);
             __g_current_sensor_data.tvoc = data.vaule;
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA, \
-                           &data, sizeof(struct view_data_sensor_data ), portMAX_DELAY);
+            /* Non-blocking: UART-Task DARF NICHT warten wenn Event-Queue
+             * voll ist - sonst laeuft UART-FIFO (HW 128B + SW 1024B) ueber
+             * und der COBS-Decoder verliert Frame-Sync (= Readback-Stall
+             * nach N Chunks). Bei Drop: kurz loggen. */
+            if (esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA,
+                                  &data, sizeof(struct view_data_sensor_data),
+                                  pdMS_TO_TICKS(5)) != ESP_OK) {
+                static uint32_t last_drop_ms = 0;
+                uint32_t now = xTaskGetTickCount();
+                if (now - last_drop_ms > pdMS_TO_TICKS(1000)) {
+                    last_drop_ms = now;
+                    ESP_LOGW(TAG, "uart-task: sensor event-post dropped (queue full)");
+                }
+            }
             break;
         }
 
@@ -993,9 +1041,10 @@ static int __data_parse_handle(uint8_t *p_data, ssize_t len)
                 .sensor_type = SENSOR_DATA_SAUNA_TEMP,
                 .vaule       = value,
             };
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
-                              VIEW_EVENT_SENSOR_DATA, &evt, sizeof(evt),
-                              portMAX_DELAY);
+            /* Non-blocking: siehe PKT_TYPE_SENSOR_SCD41_CO2 */
+            (void)esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
+                                    VIEW_EVENT_SENSOR_DATA, &evt, sizeof(evt),
+                                    pdMS_TO_TICKS(5));
             break;
         }
 
@@ -1020,9 +1069,10 @@ static int __data_parse_handle(uint8_t *p_data, ssize_t len)
                 .sensor_type = SENSOR_DATA_SAUNA_RH,
                 .vaule       = value,
             };
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
-                              VIEW_EVENT_SENSOR_DATA, &evt, sizeof(evt),
-                              portMAX_DELAY);
+            /* Non-blocking: siehe PKT_TYPE_SENSOR_SCD41_CO2 */
+            (void)esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
+                                    VIEW_EVENT_SENSOR_DATA, &evt, sizeof(evt),
+                                    pdMS_TO_TICKS(5));
             break;
         }
 
@@ -1041,9 +1091,10 @@ static int __data_parse_handle(uint8_t *p_data, ssize_t len)
                 .probe   = p_data[1],
                 .sd_init = p_data[2],
             };
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
-                              VIEW_EVENT_PROBE_STATE, &ps, sizeof(ps),
-                              portMAX_DELAY);
+            /* Non-blocking: siehe PKT_TYPE_SENSOR_SCD41_CO2 */
+            (void)esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
+                                    VIEW_EVENT_PROBE_STATE, &ps, sizeof(ps),
+                                    pdMS_TO_TICKS(5));
             break;
         }
 

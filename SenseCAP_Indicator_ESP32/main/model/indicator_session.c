@@ -32,6 +32,7 @@
 #include "esp_log.h"
 #include "esp_event.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"    /* esp_timer_get_time() fuer Readback-Instrumentation */
 
 #include "view_data.h"
 #include "indicator_session.h"
@@ -257,6 +258,15 @@ static void rp_send_session_end(void) {
     ESP_LOGI(TAG, "rp2040 -> SESSION_END (uart_bytes=%d)", rc);
 }
 
+/* RBK-INSTRUMENTATION: Start-Zeit + letzter Request, genutzt vom rx-chunk-
+ * Handler um dt zu messen. Wird vom Readback-Flow bewirtschaftet (Start
+ * in on_history_detail_req, Update in rp_request_sd_readback, Auswertung
+ * in indicator_session_rx_sd_chunk). */
+static uint64_t s_rbk_t_start_us  = 0;
+static uint64_t s_rbk_t_last_req_us = 0;
+static uint32_t s_rbk_chunks_rx   = 0;
+static uint32_t s_rbk_bytes_rx    = 0;
+
 static void rp_request_sd_readback(const char *id, uint32_t offset, uint16_t maxlen) {
     uint8_t payload[2 + SSC_SESSION_ID_LEN + 4 + 2] = {0};
     s_readback_req_id++;
@@ -269,9 +279,11 @@ static void rp_request_sd_readback(const char *id, uint32_t offset, uint16_t max
     payload[2 + SSC_SESSION_ID_LEN + 3] = (uint8_t)(offset);
     payload[2 + SSC_SESSION_ID_LEN + 4] = (uint8_t)(maxlen >> 8);
     payload[2 + SSC_SESSION_ID_LEN + 5] = (uint8_t)(maxlen & 0xFF);
+    s_rbk_t_last_req_us = esp_timer_get_time();
+    uint32_t t_ms = (uint32_t)((s_rbk_t_last_req_us - s_rbk_t_start_us) / 1000);
     int rc = indicator_sensor_rp2040_cmd(SSC_CMD_SD_READBACK, payload, sizeof(payload));
-    ESP_LOGI(TAG, "rp2040 -> SD_READBACK id='%s' off=%u len=%u req_id=%u (uart_bytes=%d)",
-             id, (unsigned)offset, (unsigned)maxlen, (unsigned)s_readback_req_id, rc);
+    ESP_LOGW(TAG, "RBK REQ off=%u len=%u t=%ums (uart_bytes=%d)",
+             (unsigned)offset, (unsigned)maxlen, (unsigned)t_ms, rc);
 }
 
 /* ======================================================================= */
@@ -502,30 +514,89 @@ static void on_history_list_req(void) {
 
 static void on_history_detail_req(const char *id) {
     if (!id) return;
-    ESP_LOGI(TAG, "on_history_detail_req id='%s'", id);
+    ESP_LOGW(TAG, "RBK START id='%s' ----------------", id);
+    s_rbk_t_start_us  = esp_timer_get_time();
+    s_rbk_chunks_rx   = 0;
+    s_rbk_bytes_rx    = 0;
     LOCK();
     strncpy(s_readback_sid, id, SSC_SESSION_ID_LEN - 1);
     s_readback_sid[SSC_SESSION_ID_LEN - 1] = 0;
     s_readback_next_off = 0;
     s_readback_active   = true;
     UNLOCK();
-    /* Max-len 200 bytes (RP2040-ceiling). Der ESP32-UART-parser hat
-     * jetzt einen akkumulator-state (siehe indicator_sensor.c), der
-     * packets robust re-assembliert - kein chunk-size-workaround mehr
-     * noetig. 200 B statt 64 B = 3x weniger round-trips pro session,
-     * detail-chart lade-zeit ~2 sek statt ~6 sek.                    */
-    rp_request_sd_readback(s_readback_sid, 0, 200);
+    /* Per-chunk Request-Response mit 64 B chunks. 64 data + 13 header =
+     * 77 bytes < UART-FIFO-128 / < parser-safe-100. Memory-belegt: der
+     * ESP32-UART-Parser in indicator_sensor.c ist nicht robust gegen
+     * packet-fragmentation bei >~100 B. Nach 6 chunks @ 215 bytes zeigte
+     * sich im Log dass chunks verlorengehen - daher Rollback auf 64 B. */
+    rp_request_sd_readback(s_readback_sid, 0, 64);
 }
 
 /* ======================================================================= */
 /* SD-Readback Chunk-Handler                                                */
 /* ======================================================================= */
 
-/* Aus indicator_sensor.c via forward-decl in view_data.h aufgerufen.
- * Payload-Layout: [2B req_id][4B total][4B offset][2B len][data...]  */
+/* Seit v0.2.5: Hot-Path-Architektur fuer Readback.
+ *   rx_sd_chunk macht NUR memcpy in einen PSRAM-Buffer - kein CSV-Parse
+ *   pro Chunk (das hat im ersten Wurf 140 ms pro Chunk gekostet und
+ *   Packet-Loss auf UART-Seite verursacht, weil der RP2040 in der
+ *   Zwischenzeit weitergestreamt hat).
+ *   Erst bei EOF parsen wir den gesamten Buffer einmal und feuern die
+ *   VIEW_EVENT_HISTORY_DETAIL_CHUNK-Events. Buffer kommt aus PSRAM
+ *   (wir haben 8 MB - 50 KB Session passt locker). */
+static uint8_t *s_rbk_buf       = NULL;
+static size_t   s_rbk_buf_size  = 0;
+
+static void parse_and_emit_rbk(const uint8_t *buf, size_t size) {
+    /* Struct ~2 KB (128 samples) - gehoert NICHT auf den Stack,
+     * der UART-comm-Task hat nur 4 KB. static = BSS. */
+    static struct view_data_session_samples_chunk chunk;
+    memset(&chunk, 0, sizeof(chunk));
+    strncpy(chunk.session_id, s_readback_sid, SSC_SESSION_ID_LEN - 1);
+    chunk.offset = 0;
+    chunk.count  = 0;
+    chunk.total  = (uint16_t)((size / 32) & 0xFFFF);
+
+    char linebuf[160];
+    size_t lb = 0;
+    for (size_t i = 0; i < size; i++) {
+        char c = (char)buf[i];
+        if (c == '\n' || c == '\r') {
+            if (lb == 0) continue;
+            linebuf[lb] = 0;
+            if (strncmp(linebuf, "t_elapsed_s", 11) != 0) {
+                unsigned long t_elapsed; float t, rh; char marker[16] = {0};
+                int r = sscanf(linebuf, "%lu,%f,%f,%15s", &t_elapsed, &t, &rh, marker);
+                if (r >= 3) {
+                    struct view_data_session_sample *s = &chunk.samples[chunk.count];
+                    s->t_elapsed_s        = (uint32_t)t_elapsed;
+                    s->temp               = t;
+                    s->rh                 = rh;
+                    s->has_aufguss_marker = (r == 4 && marker[0]) ? 1 : 0;
+                    chunk.count++;
+                    if (chunk.count >= SSC_SAMPLE_CHUNK_MAX) {
+                        esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
+                                          VIEW_EVENT_HISTORY_DETAIL_CHUNK,
+                                          &chunk, sizeof(chunk), portMAX_DELAY);
+                        chunk.offset += chunk.count;
+                        chunk.count = 0;
+                    }
+                }
+            }
+            lb = 0;
+        } else if (lb < sizeof(linebuf) - 1) {
+            linebuf[lb++] = c;
+        }
+    }
+    if (chunk.count > 0) {
+        esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
+                          VIEW_EVENT_HISTORY_DETAIL_CHUNK,
+                          &chunk, sizeof(chunk), portMAX_DELAY);
+    }
+}
+
 void indicator_session_rx_sd_chunk(const uint8_t *payload, size_t n) {
-    ESP_LOGI(TAG, "rx_sd_chunk: %u bytes from rp2040", (unsigned)n);
-    if (n < 12) { ESP_LOGW(TAG, "  -> too short, drop"); return; }
+    if (n < 12) return;
     uint16_t req_id = (uint16_t)(payload[0] << 8) | payload[1];
     uint32_t total  = ((uint32_t)payload[2] << 24) | ((uint32_t)payload[3] << 16)
                     | ((uint32_t)payload[4] << 8)  | payload[5];
@@ -540,75 +611,62 @@ void indicator_session_rx_sd_chunk(const uint8_t *payload, size_t n) {
     UNLOCK();
     if (!match) return;
 
-    /* Rohdaten sind CSV. Der einfachste Weg fuer die View: die
-     * Samples hier parsen und in 128er-Chunks an VIEW_EVENT_
-     * HISTORY_DETAIL_CHUNK-Subscriber schicken. Das halten wir
-     * einfach: wir akkumulieren in einem kleinen Linebuffer und
-     * feuern bei jedem "\n" einen Sample-Eintrag ab.               */
-    static char   linebuf[160];
-    static size_t lb = 0;
-    static struct view_data_session_samples_chunk chunk;
+    /* Erster Chunk: PSRAM-Buffer allokieren. */
     if (offset == 0) {
-        memset(&chunk, 0, sizeof(chunk));
-        strncpy(chunk.session_id, s_readback_sid, SSC_SESSION_ID_LEN - 1);
-        chunk.offset = 0;
-        chunk.count  = 0;
-        lb = 0;
-    }
-    chunk.total = (uint16_t)((total / 32) & 0xFFFF); /* grobe Schaetzung */
-
-    for (uint16_t i = 0; i < dlen; i++) {
-        char c = (char)data[i];
-        if (c == '\n' || c == '\r') {
-            if (lb == 0) continue;
-            linebuf[lb] = 0;
-            /* Skip header-Zeile */
-            if (strncmp(linebuf, "t_elapsed_s", 11) != 0) {
-                unsigned long t_elapsed; float t, rh; char marker[16] = {0};
-                int r = sscanf(linebuf, "%lu,%f,%f,%15s",
-                               &t_elapsed, &t, &rh, marker);
-                if (r >= 3) {
-                    struct view_data_session_sample *s =
-                        &chunk.samples[chunk.count];
-                    s->t_elapsed_s        = (uint32_t)t_elapsed;
-                    s->temp               = t;
-                    s->rh                 = rh;
-                    s->has_aufguss_marker = (r == 4 && marker[0]) ? 1 : 0;
-                    chunk.count++;
-                    if (chunk.count >= SSC_SAMPLE_CHUNK_MAX) {
-                        esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
-                                          VIEW_EVENT_HISTORY_DETAIL_CHUNK,
-                                          &chunk, sizeof(chunk),
-                                          portMAX_DELAY);
-                        chunk.offset += chunk.count;
-                        chunk.count = 0;
-                    }
-                }
-            }
-            lb = 0;
-        } else {
-            if (lb < sizeof(linebuf) - 1) linebuf[lb++] = c;
+        if (s_rbk_buf) { heap_caps_free(s_rbk_buf); s_rbk_buf = NULL; s_rbk_buf_size = 0; }
+        if (total > 0 && total < 1024u * 1024u) {   /* 1 MB Sanity-Limit */
+            s_rbk_buf = (uint8_t *)heap_caps_malloc(total, MALLOC_CAP_SPIRAM);
+            s_rbk_buf_size = total;
+        }
+        if (!s_rbk_buf) {
+            ESP_LOGE(TAG, "RBK PSRAM-alloc %u B fehlgeschlagen", (unsigned)total);
+            s_rbk_buf_size = 0;
         }
     }
+    s_rbk_chunks_rx++;
+    s_rbk_bytes_rx += dlen;
 
-    /* Mehr Daten da? Nachfragen. */
+    /* Instrumentation wieder drin - bei jedem Chunk loggen, damit
+     * wir die STUCK-Position exakt sehen (REQ vs RX divergiert). */
+    uint32_t t_rx_ms = (uint32_t)((esp_timer_get_time() - s_rbk_t_start_us) / 1000);
+    ESP_LOGW(TAG, "RBK RX  #%u off=%u/%u dlen=%u t=%ums buf=%p size=%u",
+             (unsigned)s_rbk_chunks_rx, (unsigned)offset, (unsigned)total,
+             (unsigned)dlen, (unsigned)t_rx_ms,
+             (void *)s_rbk_buf, (unsigned)s_rbk_buf_size);
+
+    /* Pure memcpy - der heisseste Pfad hier, NICHTS anderes. */
+    if (s_rbk_buf && offset + dlen <= s_rbk_buf_size) {
+        memcpy(s_rbk_buf + offset, data, dlen);
+    }
+
+    /* Fortschritts-Tracking: watchdog braucht last-known offset um nach
+     * Stall vom richtigen Stand weiterzumachen. */
+    LOCK();
+    s_readback_next_off = offset + dlen;
+    UNLOCK();
+
+    /* Per-chunk-mode: direkt naechsten Chunk anfragen wenn noch nicht
+     * alles da. Kein Stream, deshalb muss ESP32 das Polling treiben. */
     if (offset + dlen < total) {
-        LOCK();
-        s_readback_next_off = offset + dlen;
-        UNLOCK();
-        rp_request_sd_readback(s_readback_sid, offset + dlen, 200);
-    } else {
-        /* Fertig - Rest-Chunk absenden. */
-        if (chunk.count > 0) {
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
-                              VIEW_EVENT_HISTORY_DETAIL_CHUNK,
-                              &chunk, sizeof(chunk),
-                              portMAX_DELAY);
+        rp_request_sd_readback(s_readback_sid, offset + dlen, 64);
+        return;
+    }
+
+    if (offset + dlen >= total) {
+        uint32_t total_ms = (uint32_t)((esp_timer_get_time() - s_rbk_t_start_us) / 1000);
+        ESP_LOGW(TAG, "RBK DONE sid=%s chunks=%u bytes=%u/%u total=%ums",
+                 s_readback_sid, (unsigned)s_rbk_chunks_rx,
+                 (unsigned)s_rbk_bytes_rx, (unsigned)total, (unsigned)total_ms);
+
+        if (s_rbk_buf && s_rbk_buf_size > 0) {
+            parse_and_emit_rbk(s_rbk_buf, s_rbk_buf_size);
+            heap_caps_free(s_rbk_buf);
+            s_rbk_buf = NULL;
+            s_rbk_buf_size = 0;
         }
-        /* DONE-signal: alle chunks durch, UI kann den chart finalisieren. */
+
         struct view_data_session_detail_done done = {0};
         strncpy(done.session_id, s_readback_sid, SSC_SESSION_ID_LEN - 1);
-        ESP_LOGI(TAG, "readback DONE sid=%s", done.session_id);
         esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
                           VIEW_EVENT_HISTORY_DETAIL_DONE,
                           &done, sizeof(done), portMAX_DELAY);
@@ -665,6 +723,85 @@ static void session_worker(void *arg) {
                      " have_snap=%d",
                      (unsigned long)heartbeat_cnt, (int)st_now,
                      (unsigned long)dt, t, rh, have_snap ? 1 : 0);
+        }
+
+        /* Readback-Watchdog: wenn ein Readback aktiv ist und nach 3 s
+         * noch keine einzige Chunk-Response eingetrudelt ist (RP2040
+         * stuck / PacketSerial-Overflow), den Request nochmal senden.
+         * Maximal 3 Retries, danach aufgeben und DONE-Event posten
+         * damit UI nicht ewig "Lade Daten..." zeigt. */
+        LOCK();
+        bool rbk_active = s_readback_active;
+        uint32_t chunks_rx_now = s_rbk_chunks_rx;
+        char sid_copy[SSC_SESSION_ID_LEN];
+        memcpy(sid_copy, s_readback_sid, SSC_SESSION_ID_LEN);
+        UNLOCK();
+
+        if (rbk_active) {
+            static uint32_t last_chunks = 0;
+            static uint32_t stall_ticks = 0;
+            static uint8_t  retry_count = 0;
+            static uint32_t last_rbk_start_us = 0;
+
+            uint64_t now_us = esp_timer_get_time();
+            if (last_rbk_start_us != s_rbk_t_start_us) {
+                last_rbk_start_us = s_rbk_t_start_us;
+                last_chunks = 0;
+                stall_ticks = 0;
+                retry_count = 0;
+            }
+
+            /* ABSOLUTES Zeit-Limit: 5 s. Garantie fuer den User: er
+             * sieht spaetestens nach 5 s die (teilweise) Kurve. */
+            uint32_t total_ms = (uint32_t)((now_us - s_rbk_t_start_us) / 1000);
+            bool time_up = total_ms > 5000;
+
+            if (chunks_rx_now == last_chunks) {
+                stall_ticks++;
+            } else {
+                stall_ticks = 0;
+                last_chunks = chunks_rx_now;
+                /* retry_count NICHT resetten - sonst gilt das 10er-Limit nicht */
+            }
+
+            if (stall_ticks >= 3 || time_up) {
+                stall_ticks = 0;
+                if (!time_up && retry_count < 10) {
+                    retry_count++;
+                    LOCK();
+                    uint32_t retry_off = s_readback_next_off;
+                    UNLOCK();
+                    ESP_LOGW(TAG, "RBK WATCHDOG: stall, retry %u/10 resume off=%u",
+                             retry_count, (unsigned)retry_off);
+                    rp_request_sd_readback(sid_copy, retry_off, 64);
+                } else {
+                    if (time_up) {
+                        ESP_LOGE(TAG, "RBK WATCHDOG: 5s Zeit-Limit erreicht, partial DONE (%u chunks)",
+                                 (unsigned)chunks_rx_now);
+                    } else {
+                        ESP_LOGE(TAG, "RBK WATCHDOG: 10 retries erschoepft, partial DONE");
+                    }
+                    /* Partial-Parse: was bis hierhin im Buffer ist, der UI
+                     * liefern - sonst bleibt "Lade Daten..." unnoetig. */
+                    if (s_rbk_buf && s_rbk_buf_size > 0 && s_rbk_bytes_rx > 0) {
+                        parse_and_emit_rbk(s_rbk_buf, s_rbk_bytes_rx);
+                    }
+                    if (s_rbk_buf) {
+                        heap_caps_free(s_rbk_buf);
+                        s_rbk_buf = NULL;
+                        s_rbk_buf_size = 0;
+                    }
+                    struct view_data_session_detail_done done = {0};
+                    strncpy(done.session_id, sid_copy, SSC_SESSION_ID_LEN - 1);
+                    esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
+                                      VIEW_EVENT_HISTORY_DETAIL_DONE,
+                                      &done, sizeof(done), portMAX_DELAY);
+                    LOCK();
+                    s_readback_active = false;
+                    UNLOCK();
+                    retry_count = 0;
+                }
+            }
         }
     }
 }

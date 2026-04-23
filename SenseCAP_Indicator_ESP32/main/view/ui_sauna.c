@@ -146,6 +146,12 @@ static uint16_t hist_cache_count;
 static lv_obj_t *detail_title;
 static lv_obj_t *detail_sub;
 static lv_obj_t *detail_chart;
+/* X-Achse: 5 Labels unter dem Detail-Chart, dynamisch befuellt mit
+ * (0, T/4, T/2, 3T/4, T) wo T = Session-Dauer in Sekunden. Gesetzt
+ * in on_history_row_clicked (duration-source) + on_history_detail_done
+ * (text update). */
+static lv_obj_t *detail_x_lbl[5];
+static uint32_t  s_detail_duration_s = 0;
 static lv_obj_t *detail_spinner;      /* loading-indikator */
 static lv_chart_series_t *detail_ser_temp;
 static lv_chart_series_t *detail_ser_rh;
@@ -745,7 +751,19 @@ static void home_update_recent(const struct view_data_session_list *list) {
                  ts,
                  m->operator_tag[0] ? m->operator_tag : "",
                  middle, tn);
-        snprintf(peak, sizeof(peak), "%.0f C  %.0f%%  %u aufg.",
+        /* Session-Dauer: end_ts - start_ts. Fallback falls nicht
+         * gesetzt (alte Sessions vor v0.2.5): leerer String. */
+        char dur[16] = {0};
+        if (m->end_ts > m->start_ts) {
+            long sec = (long)(m->end_ts - m->start_ts);
+            if (sec < 60)      snprintf(dur, sizeof(dur), "%lds", sec);
+            else if (sec < 3600) snprintf(dur, sizeof(dur), "%ldmin", sec / 60);
+            else               snprintf(dur, sizeof(dur), "%ldh%02ld",
+                                        sec / 3600, (sec % 3600) / 60);
+        }
+        snprintf(peak, sizeof(peak), "%s%s%.0f C  %.0f%%  %u aufg.",
+                 dur[0] ? dur : "",
+                 dur[0] ? "  " : "",
                  isnan(m->peak_temp) ? 0.0f : m->peak_temp,
                  isnan(m->peak_rh)   ? 0.0f : m->peak_rh,
                  (unsigned)m->aufguss_count);
@@ -1201,12 +1219,20 @@ static void on_summary_save_clicked(lv_event_t *e) {
          * detail-screen-inhalt.                                         */
         if (detail_title) lv_label_set_text(detail_title, meta.id);
         if (detail_sub) {
-            char sub[96], ts[20];
+            char sub[128], ts[20], dur[16] = {0};
             fmt_datetime_short(ts, sizeof(ts), meta.start_ts);
+            if (meta.end_ts > meta.start_ts) {
+                long s = (long)(meta.end_ts - meta.start_ts);
+                if (s < 60)        snprintf(dur, sizeof(dur), "%lds", s);
+                else if (s < 3600) snprintf(dur, sizeof(dur), "%ldmin", s/60);
+                else               snprintf(dur, sizeof(dur), "%ldh%02ld", s/3600, (s%3600)/60);
+            }
             snprintf(sub, sizeof(sub),
-                     "%s  |  %s  |  Peak %.0f C / %.0f%%  |  %u Aufg.",
+                     "%s  |  %s  |  %s%sPeak %.0f C / %.0f%%  |  %u Aufg.",
                      ts,
                      meta.operator_tag[0] ? meta.operator_tag : "-",
+                     dur[0] ? dur : "",
+                     dur[0] ? "  |  " : "",
                      isnan(meta.peak_temp) ? 0.0f : meta.peak_temp,
                      isnan(meta.peak_rh)   ? 0.0f : meta.peak_rh,
                      (unsigned)meta.aufguss_count);
@@ -1471,6 +1497,9 @@ static void on_history_row_clicked(lv_event_t *e) {
     const struct view_data_session_meta *m = &hist_cached[idx];
     /* Index merken: detail-screen nutzt ihn fuer edit/delete */
     sum_edit_hist_idx = (int)idx;
+    /* Duration fuer X-Achsen-Labels - wird im DETAIL_DONE-Handler benutzt. */
+    s_detail_duration_s = (m->end_ts > m->start_ts)
+                          ? (uint32_t)(m->end_ts - m->start_ts) : 0;
     char sid[SSC_SESSION_ID_LEN];
     strncpy(sid, m->id, SSC_SESSION_ID_LEN - 1);
     sid[SSC_SESSION_ID_LEN - 1] = 0;
@@ -1481,10 +1510,19 @@ static void on_history_row_clicked(lv_event_t *e) {
 
     if (detail_title) lv_label_set_text(detail_title, m->id);
     if (detail_sub) {
-        char sub[96], ts[20]; fmt_datetime_short(ts, sizeof(ts), m->start_ts);
+        char sub[128], ts[20], dur[16] = {0};
+        fmt_datetime_short(ts, sizeof(ts), m->start_ts);
+        if (m->end_ts > m->start_ts) {
+            long s = (long)(m->end_ts - m->start_ts);
+            if (s < 60)        snprintf(dur, sizeof(dur), "%lds", s);
+            else if (s < 3600) snprintf(dur, sizeof(dur), "%ldmin", s/60);
+            else               snprintf(dur, sizeof(dur), "%ldh%02ld", s/3600, (s%3600)/60);
+        }
         snprintf(sub, sizeof(sub),
-                 "%s  |  Peak %.0f C / %.0f%%  |  %u Aufg.",
+                 "%s  |  %s%sPeak %.0f C / %.0f%%  |  %u Aufg.",
                  ts,
+                 dur[0] ? dur : "",
+                 dur[0] ? "  |  " : "",
                  isnan(m->peak_temp) ? 0.0f : m->peak_temp,
                  isnan(m->peak_rh)   ? 0.0f : m->peak_rh,
                  (unsigned)m->aufguss_count);
@@ -1583,8 +1621,18 @@ static void history_apply(const struct view_data_session_list *L) {
         lv_obj_set_style_border_width(row, 1, 0);
 
         lv_obj_t *right = lv_label_create(row);
-        char peak[32];
-        snprintf(peak, sizeof(peak), "%.0f C  %.0f%%   %u",
+        char peak[48];
+        char dur[16] = {0};
+        if (m->end_ts > m->start_ts) {
+            long sec = (long)(m->end_ts - m->start_ts);
+            if (sec < 60)        snprintf(dur, sizeof(dur), "%lds", sec);
+            else if (sec < 3600) snprintf(dur, sizeof(dur), "%ldmin", sec / 60);
+            else                 snprintf(dur, sizeof(dur), "%ldh%02ld",
+                                          sec / 3600, (sec % 3600) / 60);
+        }
+        snprintf(peak, sizeof(peak), "%s%s%.0f C  %.0f%%   %u",
+                 dur[0] ? dur : "",
+                 dur[0] ? "   " : "",
                  isnan(m->peak_temp) ? 0.0f : m->peak_temp,
                  isnan(m->peak_rh)   ? 0.0f : m->peak_rh,
                  (unsigned)m->aufguss_count);
@@ -1841,6 +1889,20 @@ static void build_detail(void) {
     lv_obj_set_style_bg_opa(detail_chart, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_width(detail_chart, 1, LV_PART_MAIN);
     lv_obj_set_style_border_color(detail_chart, SSC_C_BORDER, LV_PART_MAIN);
+
+    /* X-Achsen-Labels: 5 Stueck unter dem Chart. Chart ist 380 px breit
+     * bei x=38..418. Div-lines bei 0, 1/4, 2/4, 3/4, 1 - also an
+     * x-Positionen 38, 133, 228, 323, 418 (relativ zu dchart_wrap). */
+    static const int16_t x_label_pos[5] = { 18, 113, 208, 303, 398 };
+    for (int i = 0; i < 5; i++) {
+        detail_x_lbl[i] = lv_label_create(dchart_wrap);
+        lv_label_set_text(detail_x_lbl[i], "");
+        lv_obj_set_style_text_color(detail_x_lbl[i], SSC_C_TEXT_MUTED, 0);
+        lv_obj_set_style_text_font(detail_x_lbl[i], F_XS, 0);
+        lv_obj_set_style_text_align(detail_x_lbl[i], LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_width(detail_x_lbl[i], 40);
+        lv_obj_set_pos(detail_x_lbl[i], x_label_pos[i], 338);
+    }
 
     detail_ser_temp = lv_chart_add_series(detail_chart, SSC_C_CHART_TEMP,
                                           LV_CHART_AXIS_PRIMARY_Y);
@@ -2475,6 +2537,32 @@ static void on_history_detail_done(const struct view_data_session_detail_done *d
         }
     }
     lv_chart_refresh(detail_chart);
+
+    /* X-Achsen-Labels: 5 Zeitmarken basierend auf der Session-Dauer.
+     * Format adaptiv: <60 s: "Xs", <60 min: "Xmin", sonst "XhYY". */
+    for (int i = 0; i < 5; i++) {
+        if (!detail_x_lbl[i]) continue;
+        char buf[12];
+        uint32_t sec = (uint32_t)((uint64_t)s_detail_duration_s * i / 4);
+        if (s_detail_duration_s == 0) {
+            buf[0] = 0;
+        } else if (s_detail_duration_s < 60) {
+            snprintf(buf, sizeof(buf), "%us", (unsigned)sec);
+        } else if (s_detail_duration_s < 3600) {
+            /* min:sek wenn Dauer <10min, sonst nur min */
+            if (s_detail_duration_s < 600) {
+                snprintf(buf, sizeof(buf), "%u:%02u",
+                         (unsigned)(sec / 60), (unsigned)(sec % 60));
+            } else {
+                snprintf(buf, sizeof(buf), "%umin", (unsigned)(sec / 60));
+            }
+        } else {
+            snprintf(buf, sizeof(buf), "%uh%02u",
+                     (unsigned)(sec / 3600), (unsigned)((sec % 3600) / 60));
+        }
+        lv_label_set_text(detail_x_lbl[i], buf);
+    }
+
     /* Loading-spinner ausblenden */
     if (detail_spinner) lv_obj_add_flag(detail_spinner, LV_OBJ_FLAG_HIDDEN);
 }
