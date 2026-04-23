@@ -30,7 +30,7 @@
 #include "hardware/watchdog.h"    /* watchdog_caused_reboot() fuer post-crash diagnose */
 
 #define DEBUG 0
-#define VERSION "ssc-v0.2.3"
+#define VERSION "ssc-v0.2.4"
 #define SSC_LEGACY_GROVE 0   /* 1 = AHT20/HM3301/MultiGas wieder aktivieren */
 
 /* Forward-declarations der file-static Funktionen. .ino-Files bekommen zwar
@@ -414,9 +414,7 @@ static bool sht85_init(void) {
     Wire.setSCL(21);
     Wire.begin();
     Wire.setClock(50000);
-#ifdef WIRE_HAS_TIMEOUT
-    Wire.setWireTimeout(25000, true);
-#endif
+    Wire.setTimeout(25, true);
 
     /* Soft-Reset + Probe auf 0x44 ODER 0x45 (FS400-Varianten).      */
     if (sht_try_addr(0x44)) return true;
@@ -862,6 +860,7 @@ static void session_end(void) {
  *   [2B req_id][4B total_size][2B offset][2B len][data...]
  */
 static void handle_sd_readback(const uint8_t *payload, size_t len) {
+    rp2040.wdt_reset();   /* SD-seek + COBS-encode kann 100-300 ms fressen */
     Serial.print(LOG_TAG);
     Serial.printf("handle_sd_readback: len=%u sd_init=%d\n", (unsigned)len, sd_init_flag);
     if (!sd_init_flag) { Serial.println("[SAUNA] readback: SD not init, drop"); return; }
@@ -976,6 +975,7 @@ static void handle_sd_readback(const uint8_t *payload, size_t len) {
     chunk[12] = uint8_t(got & 0xFF);
     f.close();
     raw_packet_send(chunk, 13 + got);
+    rp2040.wdt_reset();   /* raw_packet_send + COBS-encode summieren */
 }
 
 /* ================================================================== */
@@ -1092,11 +1092,11 @@ void setup() {
     /* Clock-Stretch-Timeout: SCD41 stretched bis 1.5 ms, SGP40 bis ~12 ms.
      * 25 ms mit reset_on_timeout=true sprengt das 8 s-WDT auch bei 3 retries
      * (3*25 = 75 ms) nicht, fuettert aber nicht-mehr-antwortende Slaves nicht
-     * in einen unbegrenzten busy-loop. Nicht alle arduino-pico-core-Versionen
-     * exportieren setWireTimeout - gatet mit Feature-Makro.                */
-#ifdef WIRE_HAS_TIMEOUT
-    Wire.setWireTimeout(25000, true);
-#endif
+     * in einen unbegrenzten busy-loop. WICHTIG: arduino-pico-API heisst
+     * setTimeout(ms, reset_with_timeout) - NICHT das AVR-`setWireTimeout`
+     * mit us-Einheit. Ohne diesen Call bleibt Stream-Default 1000 ms ohne
+     * Controller-Reset aktiv - reicht bei 2m-SHT85-Kabel fuer WDT-Loop. */
+    Wire.setTimeout(25, true);
 
     /* Serial-Init etwas warten damit USB-CDC enumeriert ist bevor wir
      * die ersten diagnose-messages schicken (sonst weg).             */
