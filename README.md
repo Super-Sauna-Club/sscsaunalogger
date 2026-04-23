@@ -315,11 +315,24 @@ Der `SSC_APP_VERSION`-Header ist bewusst der einzige zentrale Ort für die ESP32
 
 ## Lizenz & Dank
 
-Apache License 2.0. Fork von [Seeed-Studio/SenseCAP_Indicator_ESP32](https://github.com/Seeed-Studio/SenseCAP_Indicator_ESP32) und [Seeed-Studio/SenseCAP_Indicator_RP2040](https://github.com/Seeed-Studio/SenseCAP_Indicator_RP2040).
+Der komplette Code steht unter der **[Apache License 2.0](LICENSE)** — eine freizügige Open-Source-Lizenz.
 
-Sensor-Bibliotheken: Sensirion (SCD4x, SGP40, Gas-Index-Algorithmus), Seeed AHT20, PacketSerial, Arduino SD/SdFat, LVGL v8.x.
+**Was das praktisch heißt:**
 
-Web: [supersauna.club](https://supersauna.club)
+- **Nutzen, Verändern, Weitergeben, auch kommerziell** — alles erlaubt. Keine Copyleft-Pflicht, Änderungen am Code müssen nicht offengelegt werden.
+- **Zwei kleine Auflagen bei Weitergabe:** Die [`LICENSE`](LICENSE)-Datei mitgeben, und Urheber im Copyright-Vermerk nennen (nicht so tun als hätte man's selbst geschrieben).
+- **Patent-Klausel:** Wer den Code benutzt, bekommt auch automatisch die Nutzungsrechte an Patenten, die die Autoren darauf haben. Wer anschließend die Autoren wegen eben dieser Patente verklagt, verliert die Lizenz — Schutz vor Patent-Trollen.
+- **Kein Gewährleistungsanspruch:** Die Firmware wird *"as is"* bereitgestellt. Wenn der Logger deinen Saunaofen nicht absichert oder Messwerte falsch sind, ist das dein Risiko. Wir geben keine Garantien ab, auch keine implizierten.
+
+Kurz: *"Benutz es wie du willst, nenn uns als Autoren, beschwer dich nicht wenn's kaputtgeht."*
+
+Warum Apache 2.0: Der Upstream (Seeed Studio) steht unter dieser Lizenz, Forks müssen dieselbe oder eine kompatible verwenden. Ein Pluspunkt ggü. MIT ist die explizite Patent-Klausel — im Hobby-Kontext unwichtig, bei kommerzieller Nachnutzung aber Gold wert.
+
+**Fork-Basis:** [Seeed-Studio/SenseCAP_Indicator_ESP32](https://github.com/Seeed-Studio/SenseCAP_Indicator_ESP32) und [Seeed-Studio/SenseCAP_Indicator_RP2040](https://github.com/Seeed-Studio/SenseCAP_Indicator_RP2040) (Copyright Seeed Studio, Apache 2.0).
+
+**Sensor-Bibliotheken:** Sensirion (SCD4x, SGP40, VOC-Gas-Index-Algorithm), Seeed AHT20, PacketSerial, Arduino SD/SdFat, LVGL v8.x.
+
+**Web:** [supersauna.club](https://supersauna.club)
 
 ---
 
