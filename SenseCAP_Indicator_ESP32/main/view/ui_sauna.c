@@ -2183,7 +2183,7 @@ static void build_settings(void) {
     lv_obj_set_size(sep_future, 420, 24);
     lv_obj_set_style_bg_opa(sep_future, LV_OPA_TRANSP, 0);
 
-    section_title(body, "ZUKUNFTS-FEATURE: SUPERSAUNA.CLUB API");
+    section_title(body, "ZUKUNFTS-FEATURE:\nSUPERSAUNA.CLUB API");
 
     lv_obj_t *future_hint = lv_label_create(body);
     lv_label_set_long_mode(future_hint, LV_LABEL_LONG_WRAP);
