@@ -36,6 +36,7 @@
 
 #include "view_data.h"
 #include "ui_sauna.h"
+#include "../app_version.h"
 #include "../lv_port.h"
 #include "../ui/theme.h"
 
@@ -2186,10 +2187,11 @@ static void build_settings(void) {
     section_title(body, "INFO");
     lv_obj_t *info = lv_label_create(body);
     lv_label_set_text(info,
-        "sauna logger v0.1\n"
-        "supersauna.club | pernitz\n"
-        "sensecap d1s | esp32-s3 + rp2040\n"
-        "ki-assistierte entwicklung");
+        "Super Sauna Club — Sauna Logger\n"
+        "Version " SSC_APP_VERSION "\n"
+        "supersauna.club · Oberes Piestingtal\n"
+        "SenseCAP D1S | ESP32-S3 + RP2040\n"
+        "KI-assistierte Entwicklung");
     lv_obj_set_style_text_color(info, SSC_C_TEXT_MUTED, 0);
     lv_obj_set_style_text_font(info, F_XS, 0);
 
