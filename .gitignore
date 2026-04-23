@@ -1,0 +1,23 @@
+# Build-Artefakte (Arduino-CLI / ESP-IDF)
+**/build/
+**/managed_components/
+**/.cache/
+**/*.pyc
+**/__pycache__/
+
+# ESP-IDF generierte Files
+sdkconfig.old
+dependencies.lock
+
+# Lokale Referenzkopie des Seeed-Upstream (zur Diff-Erstellung, nicht Teil des Forks)
+SenseCAP_Indicator_ESP32_original/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db

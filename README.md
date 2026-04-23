@@ -1,0 +1,264 @@
+# sscsaunalogger — Sauna-Logger für den SenseCAP Indicator D1/D1S
+
+Ein Zwei-Prozessor-Datenlogger für die finnische Sauna — misst Kabinentemperatur, Luftfeuchte, Aufguss-Spitzen und Vorraumklima im Sekundentakt, schreibt pro Session eine CSV auf SD-Karte und exportiert optional nach MariaDB. Basiert auf dem [SenseCAP Indicator D1/D1S](https://www.seeedstudio.com/SenseCAP-Indicator-D1S-p-5643.html) von Seeed Studio.
+
+Gebaut und betrieben vom **[SuperSaunaClub](https://supersauna.club)**.
+
+---
+
+## Was das Ding macht
+
+- **1 Hz Sample-Rate im Normalbetrieb, 2 Hz während eines Aufgusses** — feine Auflösung für den Temperatur/Feuchte-Peak wenn Wasser auf die Steine kommt.
+- **SHT85 am 2 m Silikonkabel** misst in der Kabine (bis 105 °C spec), interner SCD41 misst CO₂/Temp/RH im Vorraum, SGP40 liefert VOC-Index.
+- **Session-basierte Aufzeichnung**: Start → (mehrere Aufgüsse mit Namen/Notiz) → End. Jede Session bekommt eine CSV auf SD und Metadaten-Eintrag in NVS. UI für Live-Anzeige, History-Liste, Detail-Chart, Bearbeiten, Löschen.
+- **Saunameister-Verwaltung**: Operator-Dropdown mit den Stammgästen, Teilnehmer-Zähler, Notizen-Feld.
+- **Optional MariaDB-Export**: automatischer Push in eine zentrale Datenbank (Default `postl.ai:3308`), damit mehrere Anlagen gemeinsam ausgewertet werden können.
+- **Extrem defensive Firmware**: I²C-Bus-Unlock bei Kabel-Glitch, SD-Recovery-Scan beim Boot, Sensor-Range-Checks nach CRC, Watchdog-Kick-Dichte für 8 s-Budget, Reset-Reason-Logging — das Gerät soll im Saunabetrieb _nie wieder_ abstürzen.
+
+---
+
+## Hardware
+
+| Komponente | Details |
+|---|---|
+| Board | Seeed SenseCAP Indicator D1 oder D1S (ESP32-S3 + RP2040 + 4" 480×480 IPS Touch) |
+| Externer Sauna-Fühler | Sensirion SHT85 am 2 m **Silikon-Kabel** (200 °C rated, PVC taugt nicht bei >80 °C) |
+| Interne Sensoren | SCD41 (CO₂/T/RH @ 0x62), SGP40 (VOC @ 0x59) — auf PCB verbaut |
+| Fallback-Fühler | AHT20 @ 0x38 (optional, wenn kein SHT85 verfügbar) |
+| Speicher | microSD-Karte, **FAT32 formatiert** (exFAT funktioniert nicht, Arduino-SD-Lib kann es nicht) |
+| Stromversorgung | 5 V über USB-C, ≥ 2 A empfohlen |
+
+### Pin-Belegung am RP2040 (fix durchs D1-Board)
+
+| Funktion | Pin |
+|---|---|
+| Wire SDA / SCL | GP20 / GP21 |
+| SPI1 (SD) SCK / MOSI / MISO / CS | GP10 / GP11 / GP12 / GP13 |
+| Serial1 (UART zum ESP32) TX / RX | GP16 / GP17 |
+| Sensor-Power-Enable | GP18 |
+
+### Hinweise zum Aufbau der Sauna-Probe
+
+- **Silikon-Kabel** (4-adrig, geschirmt, 200 °C rated) für den Kabinen-Teil. PVC weicht über Monate bei Sauna-Temperaturen auf.
+- **Drip-Loop** am Kabel-Durchgang durch die Kabinenwand: U-Bogen direkt außerhalb, Tiefpunkt unter dem Stecker. Kondensat tropft ab statt in die Pins zu wandern.
+- I²C-Bus läuft firmware-seitig auf **50 kHz** — das Rise-Time-Budget bei 2 m Kabel + den On-Board-4.7 kΩ-Pullups reicht damit komfortabel. Wer noch robuster fahren will: zusätzliche 2.2 kΩ-Pullups am Sauna-Ende, dann kann die Clock zurück auf 100 kHz.
+- Der SHT85-Sensor-Kopf sollte _nicht_ im Aufgussstrahl sitzen — Flüssigwasser zerstört den Polymer-Feuchtesensor. Montagehöhe typ. 10–20 cm unter der Decke, nicht über den Steinen.
+
+---
+
+## Architektur
+
+Zwei-Prozessor-Aufteilung:
+
+```
+┌─────────────────────┐   UART1 @ 115200, COBS   ┌─────────────────────┐
+│      ESP32-S3       │ ◄──────────────────────► │       RP2040        │
+│                     │                           │                     │
+│ · LVGL-UI 480×480   │                           │ · I²C-Sensoren      │
+│ · Session-Logik     │                           │ · SHT85 @ 2m Kabel  │
+│ · Historie in NVS   │                           │ · SD-Schreiben      │
+│ · WLAN / NTP / HTTP │                           │ · CSV pro Session   │
+│ · MariaDB-Export    │                           │ · Watchdog-gesichert│
+└─────────────────────┘                           └─────────────────────┘
+         │                                                 │
+         │                                         ┌──────────┐
+    ┌─────────┐                                    │ microSD  │
+    │ Display │                                    │ (FAT32)  │
+    └─────────┘                                    └──────────┘
+```
+
+- Der **ESP32** hält das UI, die Session-Metadaten, das WLAN, die MariaDB-Anbindung und kommandiert den RP2040.
+- Der **RP2040** macht die Sensor-Aufnahme, schreibt die Roh-CSV auf SD und reagiert auf Kommandos: `SESSION_START`, `SESSION_AUFGUSS`, `SESSION_END`, `SD_READBACK`, `COLLECT_INTERVAL`.
+- Das **Protokoll** ist COBS-framed über UART1, Pakete der Form `[typ(1B)][payload…]`. Sensor-Daten als 4-Byte-Float, Kommandos mit struktuiertem Payload.
+- Der **SD-Readback** erlaubt dem ESP32, historische CSVs in 200-Byte-Chunks zurückzulesen, damit das Detail-Chart auf dem Display die Original-Samples zeigt ohne dass der ESP32 die Karte direkt anfassen muss.
+
+### Defensiv-Mechanismen der RP2040-Firmware (v0.2.3)
+
+| Mechanismus | Zweck |
+|---|---|
+| **I²C-Bus-Unlock** (9-Clock-Recovery + STOP vor jedem `Wire.begin()`) | Löst SDA-stuck-LOW nach Slave-Brownout. Ohne das gibt es Boot-Loop-Perma-Blockade. |
+| **SD-CS pre-drive HIGH** vor SPI1 | Verhindert Karten-Undefined-State nach WDT-Reset. |
+| **SCD41 1 s-Wake-Delay** (interleaved mit USB-Wait + SD-Init) | Respektiert Datenblatt-Anforderung, verhindert NACK-getriggerten Bus-Lock. |
+| **`Wire.setWireTimeout(25 ms, reset_on_timeout=true)`** | Bricht Slave-Stretch-Hänger ab. |
+| **Concurrent-Access-Guard** im SD-Readback | Verweigert gleichzeitiges Read/Write auf dieselbe CSV → verhindert FAT-Corruption. |
+| **Boot-Recovery-Scan** `/sessions/*.csv < 32 Bytes` löschen | Keine Orphan-Cluster-Akkumulation über Monate. |
+| **SHT85 physical-sanity Range-Check** (−10 … +120 °C / 0 … 105 %RH) nach CRC | CRC-valid-aber-geglitchte Werte fliegen raus. |
+| **SHT85 Heater-Cycle** (0x306D, 33 mW, 1 s) bei RH stuck-at-100 | Löst Polymer-Kondensat nach Aufguss, 10-min-Lockout, nie während Boost. |
+| **SCD41 ASC deaktiviert** | Verhindert dauerhafte CO₂-Kalibrierungs-Drift in geschlossenem Vorraum. |
+| **SGP40 5-min-Warmup** (NaN im VOC bis Baseline-Learning fertig) | Keine Müllwerte in den ersten 5 min nach Boot. |
+| **Watchdog 8 s** + Reset-Reason im Boot-Banner | Bei Crash sofort sichtbar ob WDT oder Brownout. |
+| **RP2040 Die-Temp im Health-Log** | Frühwarnung bei thermal runaway durch ESP32-Nachbarn. |
+
+Alle Änderungen ggü. dem Upstream sind minimal-invasiv und rückwärtskompatibel zum Seeed-Indicator — Kommandoprotokoll zum ESP32 ist unverändert.
+
+---
+
+## Build & Flash
+
+### Voraussetzungen (Fedora / Linux)
+
+Es gibt zwei Setup-Scripts die alles automatisch installieren:
+
+```bash
+./setup-fedora.sh           # ESP-IDF v5.1 + Toolchain
+./setup-arduino-cli.sh      # Arduino-CLI + RP2040-Core + Libraries
+```
+
+**Nicht mit anderen ESP-IDF-Versionen bauen** — die v5.2+-Header haben breaking changes, v5.0 fehlt einiges.
+
+### RP2040 zuerst flashen
+
+```bash
+cd SenseCAP_Indicator_RP2040
+arduino-cli compile --fqbn rp2040:rp2040:rpipico --output-dir ./build .
+```
+
+Wenn der Pico läuft, kann `arduino-cli` direkt ohne BOOTSEL-Taste flashen (nutzt 1200-bps-Magic-Reset):
+
+```bash
+arduino-cli upload --fqbn rp2040:rp2040:rpipico -p /dev/ttyACM0 --input-dir ./build .
+```
+
+Wenn der Pico in einem Boot-Loop steckt: BOOTSEL gedrückt halten beim Einstecken, dann die `build/SenseCAP_Indicator_RP2040.ino.uf2` auf den erscheinenden `RPI-RP2`-Mount ziehen.
+
+### ESP32 danach flashen
+
+```bash
+source ~/esp-idf/export.sh
+cd SenseCAP_Indicator_ESP32
+idf.py set-target esp32s3
+idf.py build
+idf.py -p /dev/ttyUSB0 flash monitor
+```
+
+**PSRAM Octal 120 MHz Patch** einmalig anwenden laut [Seeed-Wiki](https://wiki.seeedstudio.com/SenseCAP_Indicator_ESP32_Flash/) — sonst bleibt das Display dunkel.
+
+### Diagnose am RP2040
+
+Serial-Output auf `/dev/ttyACM0` @ 115200 baud:
+
+```
+[SAUNA] BOOT ssc-v0.2.3 reset_reason=POWER/NORMAL
+[SAUNA] I2C-Scan (boot): 0x38 0x44 0x59 0x62
+[SAUNA] SD: initialisiert
+[SAUNA] SHT3x ready @ 0x44 (SHT35/SHT85 kompatibel): 24.53 degC, 32.10 %RH
+[SAUNA] SGP40 ready
+[SAUNA] SCD41 ASC disabled (closed-room drift protection)
+[SAUNA] RP2040 ssc-v0.2.3 ready: SD=1 SCD41=1 SGP40=1 SHT85=1 AHT20fb=0 probe=SHT3x
+[SAUNA] watchdog armed (8 s)
+...
+[SAUNA] health: intvl=1000ms probe=SHT3x temp=25.5 rh=31.0 fails=0 session=0 sd=1 rp_die=41.2
+```
+
+Der `reset_reason` beim Boot sagt dir bei einem Crash was los war:
+- `WATCHDOG` → Firmware-Problem, Code hat >8 s geblockt. Die letzten Zeilen vor dem Reset zeigen wo.
+- `POWER/NORMAL` → Brownout, ESP32-Reset-Trigger oder normaler Reboot. Netzteil / Kabel / USB-Hub prüfen.
+
+---
+
+## Bedienung
+
+Am Gerät:
+
+1. **HOME-Screen** zeigt Kabine (groß) + Vorraum (kompakt) + Letzte Sessions + START-Button.
+2. **START** → Live-Screen: Status-Pill, 3 Val-Cards + Peak-Card, 3-Min-Chart, Buttons `AUFGUSS` / `STOPPEN` / `ABBRECHEN`.
+3. **AUFGUSS**-Button markiert den Zeitpunkt in der CSV, fordert den Namen des Aufgusses (optionaler Text, z. B. "Eukalyptus"). Automatisch 2 Hz Sample-Rate für 2 Minuten.
+4. **STOPPEN** öffnet die **Summary**-Form: Saunameister aus Dropdown, Teilnehmerzahl, Notizen. `SAVE` legt die Session in NVS an und (falls aktiviert) exportiert sie nach MariaDB / HTTP.
+5. **LETZTE SESSIONS** im Home-Screen → Tap → Detail-Screen mit voller Kurve, Edit-Button, Delete-Button.
+6. **SETTINGS** (Zahnrad): Saunameister-Liste, WLAN, HTTP-Endpunkt, MariaDB-Endpunkt, Info. MariaDB und HTTP sind seit fw_mig=3 **per Default aus** — explizit aktivieren.
+
+### Datenformat der Session-CSV
+
+```
+t_elapsed_s,temp,rh,aufguss
+0,25.50,31.10,
+1,25.51,31.08,
+...
+42,78.20,55.30,Eukalyptus
+43,78.45,62.10,
+...
+```
+
+- `t_elapsed_s`: Sekunden seit SESSION_START
+- `temp`: Kabinentemperatur (°C, SHT85)
+- `rh`: relative Luftfeuchte (%, SHT85)
+- `aufguss`: Name des Aufgusses in der Zeile in der der Marker gesetzt wurde (sonst leer)
+
+### Datenmodell in MariaDB
+
+Die Tabelle wird automatisch angelegt:
+
+```sql
+CREATE TABLE IF NOT EXISTS sauna_sessions (
+    session_id VARCHAR(32) NOT NULL PRIMARY KEY,
+    started_at TIMESTAMP,
+    operator VARCHAR(32),
+    participant_count INT,
+    peak_temp FLOAT,
+    peak_rh FLOAT,
+    aufguss_count INT,
+    notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS sauna_samples (
+    session_id VARCHAR(32) NOT NULL,
+    t_elapsed_s INT,
+    temp FLOAT,
+    rh FLOAT,
+    aufguss_marker VARCHAR(48),
+    INDEX idx_session (session_id, t_elapsed_s)
+);
+```
+
+---
+
+## Projektstruktur
+
+```
+sscsaunalogger/
+├── SenseCAP_Indicator_ESP32/       # ESP-IDF-Projekt für die UI-Seite
+│   ├── main/
+│   │   ├── main.c                  # app_main()
+│   │   ├── model/                  # Sensor, Session, WiFi, NVS, MariaDB, Time
+│   │   ├── view/                   # LVGL-Screens, ui_sauna.c (Haupt-UI)
+│   │   ├── controller/
+│   │   └── util/cobs.c             # COBS-Enkodierung, gemeinsam mit RP2040
+│   ├── components/                 # LVGL, BSP, eingebundene Libs
+│   ├── sdkconfig                   # ESP-IDF-Konfig (WiFi-Credentials NICHT hier, sondern in NVS)
+│   └── partitions.csv
+├── SenseCAP_Indicator_RP2040/      # Arduino-Sketch für den Sensor-Koprozessor
+│   └── SenseCAP_Indicator_RP2040.ino
+├── flash-guide.sh                  # Kurzanleitung Flash-Reihenfolge
+├── setup-fedora.sh
+├── setup-arduino-cli.sh
+└── ssc-logo.svg
+```
+
+---
+
+## Fehlerbilder & Troubleshooting
+
+| Symptom | Wahrscheinliche Ursache | Prüfung |
+|---|---|---|
+| `fails=N` im Health-Log steigt | I²C-CRC-Fehler am 2 m Kabel | Stecker prüfen, Silikon-Kabel statt PVC, ggf. 2.2 kΩ-Pullups am Sauna-Ende |
+| `probe=NONE` nach Boot | SHT85 wird nicht erkannt, AHT20 auch nicht | I²C-Scan im Boot-Log anschauen, welche Adressen gefunden werden |
+| `reset_reason=WATCHDOG` nach Crash | Code blockiert > 8 s | Zeilen vor dem Reset in Serial-Capture ansehen |
+| `reset_reason=POWER/NORMAL` in Schleife | Brownout | Netzteil auf ≥ 2 A wechseln, USB-Hub entfernen, kurzes dickes Kabel |
+| `sd=0` dauerhaft | Karte nicht erkannt oder exFAT | Karte neu in **FAT32** formatieren (Arduino-SD kann kein exFAT) |
+| Touch reagiert nicht | FT6336U Hardware-Problem | Display-Flex neu einstecken, 2+ min stromlos |
+| VOC-Index = NaN in den ersten 5 min | Normal | 5 min warten, Sensirion-Baseline-Learning |
+| RH stuck bei 100 % nach Aufguss | Polymer-Kondensat | Firmware triggert automatisch Heater-Cycle, 10-min-Lockout |
+
+---
+
+## Lizenz & Dank
+
+Apache License 2.0. Fork von [Seeed-Studio/SenseCAP_Indicator_ESP32](https://github.com/Seeed-Studio/SenseCAP_Indicator_ESP32) und [Seeed-Studio/SenseCAP_Indicator_RP2040](https://github.com/Seeed-Studio/SenseCAP_Indicator_RP2040).
+
+Sensor-Bibliotheken: Sensirion (SCD4x, SGP40, Gas-Index-Algorithmus), Seeed AHT20, PacketSerial, Arduino SD/SdFat, LVGL v8.x.
+
+Web: [supersauna.club](https://supersauna.club)
+
+---
+
+*"Das Wasser zischt. Die Kurve springt. Der Logger hält mit."*

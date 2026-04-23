@@ -1,0 +1,9 @@
+# Name,   Type, SubType, Offset,  Size,      Flags
+# NVS von 0x9000 bis 0x29000 = 128 KB (vorher nur 60K, war zu klein fuer
+# sessions-storage und fragmentierte schnell). Factory um 128 K zurueck
+# geschoben; 3.875 MB sind mehr als genug fuer die aktuelle binary (~2.3 MB).
+# Mit dieser partition-change muss beim flash `erase-flash` gemacht werden,
+# sonst matcht die alte NVS-header nicht - wifi/sessions gehen einmalig weg.
+nvs,      data, nvs,     0x9000,  0x20000,
+phy_init, data, phy,     0x29000, 0x1000,
+factory,  app,  factory, 0x30000, 0x3D0000,
