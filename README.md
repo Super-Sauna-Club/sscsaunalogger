@@ -265,6 +265,7 @@ sscsaunalogger/
 ├── SenseCAP_Indicator_ESP32/       # ESP-IDF-Projekt für die UI-Seite
 │   ├── main/
 │   │   ├── main.c                  # app_main()
+│   │   ├── app_version.h           # SSC_APP_VERSION — zentrale ESP32-Version
 │   │   ├── model/                  # Sensor, Session, WiFi, NVS, MariaDB, Time
 │   │   ├── view/                   # LVGL-Screens, ui_sauna.c (Haupt-UI)
 │   │   ├── controller/
@@ -294,6 +295,21 @@ sscsaunalogger/
 | Touch reagiert nicht | FT6336U Hardware-Problem | Display-Flex neu einstecken, 2+ min stromlos |
 | VOC-Index = NaN in den ersten 5 min | Normal | 5 min warten, Sensirion-Baseline-Learning |
 | RH stuck bei 100 % nach Aufguss | Polymer-Kondensat | Firmware triggert automatisch Heater-Cycle, 10-min-Lockout |
+
+---
+
+## Versionierung
+
+Die Firmware hat **zwei Versionskonstanten** — eine pro Prozessor, weil RP2040 und ESP32 separat kompilieren und in der Praxis auch einzeln geflasht werden:
+
+| Prozessor | Variable | Datei | Format |
+|---|---|---|---|
+| ESP32-S3 (UI) | `SSC_APP_VERSION` | `SenseCAP_Indicator_ESP32/main/app_version.h` | Plain SemVer, z. B. `"0.2.4"` |
+| RP2040 (Sensor/SD) | `VERSION` | `SenseCAP_Indicator_RP2040/SenseCAP_Indicator_RP2040.ino` (Zeile 33) | mit Prefix: `"ssc-v0.2.4"` |
+
+**Bump-Workflow:** Beide Variablen gleichzeitig anheben, dann RP2040 flashen (Arduino-CLI), dann ESP32 flashen (idf.py). Die ESP32-UI-Info-Zeile (`Settings → INFO`) und der RP2040-Serial-Boot-Banner zeigen die jeweilige Version — so ist sofort sichtbar, ob ein Prozessor den Flash verpasst hat.
+
+Der `SSC_APP_VERSION`-Header ist bewusst der einzige zentrale Ort für die ESP32-Seite — zukünftig wird der String auch im HTTP-POST-User-Agent und im ESP_LOG-Boot-Banner verwendet, damit jeder Export und jedes Log die Version mitliefert.
 
 ---
 
