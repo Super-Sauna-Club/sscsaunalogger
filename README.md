@@ -2,6 +2,8 @@
 
 Ein Zwei-Prozessor-Datenlogger für die finnische Sauna — misst Kabinentemperatur, Luftfeuchte, Aufguss-Spitzen und Vorraumklima im Sekundentakt, schreibt pro Session eine CSV auf SD-Karte und exportiert optional nach MariaDB. Basiert auf dem [SenseCAP Indicator D1/D1S](https://www.seeedstudio.com/SenseCAP-Indicator-D1S-p-5643.html) von Seeed Studio.
 
+Als Kabinen-Fühler kommt ein **FS400-SHT35** zum Einsatz — das ist der Sensirion **SHT35**-Chip in einem IP68-Edelstahl-Gehäuse mit fest angegossenem **2 m Silikonkabel** (200 °C-rated). Der SHT35 gehört zur SHT3x-Familie (SHT30/SHT31/SHT35/SHT85) und ist I²C-protokollkompatibel, deshalb redet die Firmware intern von „SHT85"-Code-Pfaden — dasselbe Protokoll, dasselbe Datenblatt-Timing.
+
 Gebaut und betrieben vom **[SuperSaunaClub](https://supersauna.club)**.
 
 ---
@@ -9,7 +11,7 @@ Gebaut und betrieben vom **[SuperSaunaClub](https://supersauna.club)**.
 ## Was das Ding macht
 
 - **Sample-Rate:** Basistakt **1 Hz** (alle 1000 ms ein Mess-Tick). Beim `AUFGUSS`-Kommando schaltet der RP2040 für **120 Sekunden** auf **2 Hz** (alle 500 ms) und fällt dann automatisch zurück auf 1 Hz. Der SHT85 in der Kabine wird **jeden Tick** gelesen (1 bzw. 2 Hz); die Vorraum-Sensoren SCD41 und SGP40 nur **jeden zweiten Tick** (0.5 bzw. 1 Hz) — sie messen intern eh nur alle ~5 s neu. Das Basis-Intervall lässt sich via `COLLECT_INTERVAL`-Kommando (0xA0) zur Laufzeit zwischen 250 ms und 60000 ms umstellen.
-- **SHT85 am 2 m Silikonkabel** misst in der Kabine (bis 105 °C spec), interner SCD41 misst CO₂/Temp/RH im Vorraum, SGP40 liefert VOC-Index (nach 5 min Warmup).
+- **FS400-SHT35 am 2 m Silikonkabel** misst in der Kabine (Sensor bis 105 °C spec, Kabel 200 °C rated), interner SCD41 misst CO₂/Temp/RH im Vorraum, SGP40 liefert VOC-Index (nach 5 min Warmup).
 - **Session-basierte Aufzeichnung:** Start → (mehrere Aufgüsse mit Namen/Notiz) → End. Jede Session bekommt eine CSV auf SD und einen Metadaten-Eintrag in NVS. UI für Live-Anzeige, History-Liste, Detail-Chart, Bearbeiten, Löschen.
 - **Saunameister-Verwaltung:** Operator-Dropdown mit den Stammgästen, Teilnehmer-Zähler, Notizen-Feld.
 - **Optional MariaDB-Export:** automatischer Push in eine zentrale Datenbank (Default `postl.ai:3308`), damit mehrere Anlagen gemeinsam ausgewertet werden können. Per Default seit fw_mig=3 **aus** — explizit einschalten.
@@ -22,11 +24,25 @@ Gebaut und betrieben vom **[SuperSaunaClub](https://supersauna.club)**.
 | Komponente | Details |
 |---|---|
 | Board | Seeed SenseCAP Indicator D1 oder D1S (ESP32-S3 + RP2040 + 4" 480×480 IPS Touch) |
-| Externer Sauna-Fühler | Sensirion SHT85 am 2 m **Silikon-Kabel** (200 °C rated, PVC taugt nicht bei >80 °C) |
+| Externer Sauna-Fühler | **FS400-SHT35** — Sensirion SHT35-Chip in IP68-Edelstahl-Hülse mit 2 m Silikon-Kabel (200 °C rated, PVC taugt bei > 80 °C nicht). I²C-Adresse 0x44. |
 | Interne Sensoren | SCD41 (CO₂/T/RH @ 0x62), SGP40 (VOC @ 0x59) — auf PCB verbaut |
-| Fallback-Fühler | AHT20 @ 0x38 (optional, wenn kein SHT85 verfügbar) |
+| Fallback-Fühler | AHT20 @ 0x38 (optional, wenn kein SHT3x verfügbar — nur bis 85 °C!) |
 | Speicher | microSD-Karte, **FAT32 formatiert** (exFAT funktioniert nicht, Arduino-SD-Lib kann es nicht) |
-| Stromversorgung | 5 V über USB-C, ≥ 2 A empfohlen |
+| Stromversorgung | 5 V über USB-C, ≥ 2 A empfohlen (65 W PD Power Bank getestet) |
+
+### Kaufteile & grobe Kosten
+
+Stand 2026-04, ca.-Preise inkl. Versand nach AT/DE:
+
+| Teil | Bezugsquelle (Beispiel) | Richtpreis |
+|---|---|---|
+| SenseCAP Indicator D1S | [Seeed Studio Bazaar](https://www.seeedstudio.com/SenseCAP-Indicator-D1S-p-5643.html) | ~85 € |
+| FS400-SHT35 mit 2 m Silikonkabel | AliExpress-Suche: [FS400-SHT35](https://www.aliexpress.com/w/wholesale-FS400-SHT35.html) | ~25 € |
+| microSD-Karte 32 GB Class 10 | beliebig (SanDisk, Kingston, …) | ~8 € |
+| USB-C-Netzteil ≥ 2 A oder PD Power Bank | beliebig | ~10 € |
+| **Gesamt** | | **~130 €** |
+
+Preise stark zeit- und versandabhängig, Bandbreite ±20 %. Bei mehreren Anlagen im Verein lohnt sich Sammelbestellung.
 
 ### Pin-Belegung am RP2040 (fix durchs D1-Board)
 
@@ -37,12 +53,26 @@ Gebaut und betrieben vom **[SuperSaunaClub](https://supersauna.club)**.
 | Serial1 (UART zum ESP32) TX / RX | GP16 / GP17 |
 | Sensor-Power-Enable | GP18 |
 
-### Hinweise zum Aufbau der Sauna-Probe
+### Verkabelung der Sauna-Probe (FS400-SHT35)
 
-- **Silikon-Kabel** (4-adrig, geschirmt, 200 °C rated) für den Kabinen-Teil. PVC weicht über Monate bei Sauna-Temperaturen auf.
+Der FS400-SHT35 wird typischerweise mit 4 Drähten geliefert. Drahtfarben variieren zwischen Händlern — immer das Datenblatt des gekauften Exemplars prüfen. Die häufigste Belegung:
+
+| FS400-SHT35 Draht | Funktion | Pin am Indicator D1S (RP2040) | Typ. Farbe* |
+|---|---|---|---|
+| VDD | 3.3 V | gespeist über **GP18** (Sensor-Power-Enable, HIGH = on) → 3V3-Pad | rot |
+| GND | Masse | GND-Pad | schwarz |
+| SDA | I²C-Daten | **GP20** (Wire SDA) | gelb oder grün |
+| SCL | I²C-Takt | **GP21** (Wire SCL) | grün oder weiß |
+
+\* Farben NUR als Orientierung — der Händler-Druck auf dem Steckeretikett zählt. Falsch verdrahtet = SHT-Scan findet 0x44 nicht, Log zeigt `SHT3x not found on I2C 0x44 or 0x45`.
+
+### Hinweise zum Aufbau
+
+- **Silikonkabel belassen** wie geliefert (4-adrig, 200 °C rated). Ein Verlängern über Lüsterklemmen/Schraubterminal in der heißen Zone ist schlechte Idee — dort kondensiert Wasser, die Klemmen oxidieren.
 - **Drip-Loop** am Kabel-Durchgang durch die Kabinenwand: U-Bogen direkt außerhalb, Tiefpunkt unter dem Stecker. Kondensat tropft ab statt in die Pins zu wandern.
 - I²C-Bus läuft firmware-seitig auf **50 kHz** — das Rise-Time-Budget bei 2 m Kabel + den On-Board-4.7 kΩ-Pullups reicht damit komfortabel. Wer noch robuster fahren will: zusätzliche 2.2 kΩ-Pullups am Sauna-Ende, dann kann die Clock zurück auf 100 kHz.
-- Der SHT85-Sensor-Kopf sollte _nicht_ im Aufgussstrahl sitzen — Flüssigwasser zerstört den Polymer-Feuchtesensor. Montagehöhe typ. 10–20 cm unter der Decke, nicht über den Steinen.
+- Der FS400-SHT35-Kopf sollte _nicht_ im Aufgussstrahl sitzen — Flüssigwasser zerstört langfristig den Polymer-Feuchtesensor. Montagehöhe typisch 10–20 cm unter der Decke, nicht direkt über den Steinen.
+- Seit Firmware v0.2.4 mit `Wire.setTimeout(25, true)` ist das Setup tolerant gegen Clock-Stretching — auch bei Kabel-Glitchen durch WLAN-Bursts oder Bewegung.
 
 ---
 
@@ -55,7 +85,7 @@ Zwei-Prozessor-Aufteilung:
 │      ESP32-S3       │ ◄──────────────────────► │       RP2040        │
 │                     │                           │                     │
 │ · LVGL-UI 480×480   │                           │ · I²C-Sensoren      │
-│ · Session-Logik     │                           │ · SHT85 @ 2m Kabel  │
+│ · Session-Logik     │                           │ · FS400-SHT35 @ 2m  │
 │ · Historie in NVS   │                           │ · SD-Schreiben      │
 │ · WLAN / NTP / HTTP │                           │ · CSV pro Session   │
 │ · MariaDB-Export    │                           │ · Watchdog-gesichert│
@@ -226,8 +256,8 @@ t_elapsed_s,temp,rh,aufguss
 ```
 
 - `t_elapsed_s`: Sekunden seit SESSION_START
-- `temp`: Kabinentemperatur (°C, SHT85)
-- `rh`: relative Luftfeuchte (%, SHT85)
+- `temp`: Kabinentemperatur (°C, FS400-SHT35)
+- `rh`: relative Luftfeuchte (%, FS400-SHT35)
 - `aufguss`: Name des Aufgusses in der Zeile in der der Marker gesetzt wurde (sonst leer)
 
 ### Datenmodell in MariaDB
@@ -288,7 +318,7 @@ sscsaunalogger/
 | Symptom | Wahrscheinliche Ursache | Prüfung |
 |---|---|---|
 | `fails=N` im Health-Log steigt | I²C-CRC-Fehler am 2 m Kabel | Stecker prüfen, Silikon-Kabel statt PVC, ggf. 2.2 kΩ-Pullups am Sauna-Ende |
-| `probe=NONE` nach Boot | SHT85 wird nicht erkannt, AHT20 auch nicht | I²C-Scan im Boot-Log anschauen, welche Adressen gefunden werden |
+| `probe=NONE` nach Boot | FS400-SHT35 wird nicht erkannt, AHT20 auch nicht | I²C-Scan im Boot-Log anschauen, welche Adressen gefunden werden — 0x44 muss da sein; wenn nicht: Verkabelung SDA/SCL vertauscht? |
 | `reset_reason=WATCHDOG` nach Crash | Code blockiert > 8 s | Zeilen vor dem Reset in Serial-Capture ansehen |
 | `reset_reason=POWER/NORMAL` in Schleife | Brownout | Netzteil auf ≥ 2 A wechseln, USB-Hub entfernen, kurzes dickes Kabel |
 | `sd=0` dauerhaft | Karte nicht erkannt oder exFAT | Karte neu in **FAT32** formatieren (Arduino-SD kann kein exFAT) |
