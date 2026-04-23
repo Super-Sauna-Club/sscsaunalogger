@@ -174,14 +174,44 @@ Der `reset_reason` beim Boot sagt dir bei einem Crash was los war:
 
 ## Bedienung
 
-Am Gerät:
+### Live-Flow (während einer Session)
 
-1. **HOME-Screen** zeigt Kabine (groß) + Vorraum (kompakt) + Letzte Sessions + START-Button.
-2. **START** → Live-Screen: Status-Pill, 3 Val-Cards + Peak-Card, 3-Min-Chart, Buttons `AUFGUSS` / `STOPPEN` / `ABBRECHEN`.
-3. **AUFGUSS**-Button markiert den Zeitpunkt in der CSV, fordert den Namen des Aufgusses (optionaler Text, z. B. "Eukalyptus"). Automatisch 2 Hz Sample-Rate für 2 Minuten.
-4. **STOPPEN** öffnet die **Summary**-Form: Saunameister aus Dropdown, Teilnehmerzahl, Notizen. `SAVE` legt die Session in NVS an und (falls aktiviert) exportiert sie nach MariaDB / HTTP.
-5. **LETZTE SESSIONS** im Home-Screen → Tap → Detail-Screen mit voller Kurve, Edit-Button, Delete-Button.
-6. **SETTINGS** (Zahnrad): Saunameister-Liste, WLAN, HTTP-Endpunkt, MariaDB-Endpunkt, Info. MariaDB und HTTP sind seit fw_mig=3 **per Default aus** — explizit aktivieren.
+1. **HOME-Screen** zeigt Kabine (groß) + Vorraum (kompakt) + die letzten Sessions + den START-Button.
+2. **START** → Live-Screen: Status-Pill oben, Val-Cards für Temp/RH/Peak, 3-Min-Chart, Buttons `AUFGUSS MARKIEREN` / `STOPPEN` / `ABBRECHEN`. Ab diesem Moment legt der RP2040 die CSV an und schreibt jede Sekunde eine Zeile.
+3. **AUFGUSS MARKIEREN** (Button im Live-Screen) — was genau passiert:
+   - setzt einen Zeitstempel-Marker in der **aktuellen** CSV-Zeile (Spalte `aufguss`)
+   - fordert den Namen des Aufgusses (optionaler Text, z. B. "Eukalyptus")
+   - schaltet die Sample-Rate **für 120 s auf 2 Hz** (Boost), dann automatisch zurück auf 1 Hz
+   - der kleine `N Aufg.`-Zähler oben rechts zählt mit
+4. **STOPPEN** öffnet die **Summary**-Form: Saunameister aus Dropdown, Teilnehmerzahl (± Stepper), Notizen-Textfeld. `SAVE` legt die Metadaten in NVS an (Namespace `sauna_sess`) und stößt — falls aktiviert — den MariaDB-/HTTP-Export an.
+5. **ABBRECHEN** verwirft die Session komplett: keine Metadaten, keine CSV (die Teil-CSV wird vom RP2040 gelöscht).
+
+### Nachträglich editieren (History-Flow)
+
+Vom HOME-Screen oder SETTINGS → Detail-Screen einer Session:
+
+- **Detail-Screen** zeigt die volle Kurve aus der CSV (per SD-Readback vom RP2040 zurückgelesen), Aufguss-Marker als Spikes, Peak-Werte, Operator, Notizen.
+- **EDIT** öffnet die Summary-Form im Edit-Mode und erlaubt **nachträglich**:
+  - Saunameister umsetzen
+  - Teilnehmerzahl ändern
+  - Notizen ergänzen / korrigieren
+  - **Aufguss-Zähler** hochstellen (`aufguss_count`-Stepper, nur im Edit-Mode sichtbar) — z. B. wenn während der Session mal vergessen wurde zu drücken
+- **DELETE** löscht die Session (Metadaten in NVS + CSV auf SD).
+
+**Was nachträgliches Editieren _nicht_ kann:**
+- keine neuen Marker in die CSV-Kurve nachsetzen (die Samples auf SD sind fertig geschrieben und werden nicht verändert — nur der Metadaten-Zähler geht hoch)
+- **kein 2-Hz-Boost rückwirkend** — der Boost galt nur live während der Aufnahme. Eine Session die nur mit 1 Hz aufgezeichnet wurde, bleibt bei 1 Hz. Wer den 2-Hz-Peak in der Kurve haben will, muss live den Button drücken.
+- keine Korrektur falscher Sensor-Werte — die CSV ist write-once.
+
+### SETTINGS (Zahnrad-Icon)
+
+- **Saunameister-Liste:** Namen der Stammgäste verwalten (für das Operator-Dropdown in der Summary)
+- **WLAN:** SSID + Passwort, landet in NVS
+- **HTTP-Endpunkt + Token** für den optionalen HTTP-POST-Export
+- **MariaDB-Endpunkt** (Default `postl.ai:3308`) + Credentials
+- **Info:** Versionen, Uptime, freier NVS-Platz
+
+MariaDB und HTTP sind seit `fw_mig=3` **per Default aus** — explizit einschalten. Ohne Endpunkt-Config passiert kein Netzwerk-Traffic.
 
 ### Datenformat der Session-CSV
 
