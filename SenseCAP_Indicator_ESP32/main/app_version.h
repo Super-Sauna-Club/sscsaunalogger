@@ -8,4 +8,4 @@
  * SenseCAP_Indicator_RP2040.ino::VERSION - die sollte beim Release
  * synchron gehalten werden, muss aber nicht byte-identisch sein (sie
  * enthaelt z.B. den "ssc-"-Prefix fuer Serial-Logs). */
-#define SSC_APP_VERSION "0.2.7"
+#define SSC_APP_VERSION "0.2.8"

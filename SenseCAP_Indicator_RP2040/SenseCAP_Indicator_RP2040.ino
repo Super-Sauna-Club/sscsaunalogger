@@ -31,7 +31,7 @@
 #include "hardware/watchdog.h"    /* watchdog_caused_reboot() fuer post-crash diagnose */
 
 #define DEBUG 0
-#define VERSION "ssc-v0.2.7"
+#define VERSION "ssc-v0.2.8"
 /* v0.2.7: EEPROM layout. 256 B reserviert, erste 8B belegt.
  *  [0..3] uint32_t magic = 0x55AA5AA5
  *  [4..7] uint32_t boot_count                                      */
@@ -40,6 +40,26 @@
 #define SSC_EEPROM_OFF_MAGIC 0
 #define SSC_EEPROM_OFF_BC    4
 #define SSC_LEGACY_GROVE 0   /* 1 = AHT20/HM3301/MultiGas wieder aktivieren */
+
+/* v0.2.8: Reset-Reason via watchdog-scratch[0] canary.
+ * RP2040-scratch-register (hardware/structs/watchdog.h, datasheet 2.8.1.1):
+ * 8 x uint32 die WDT-reset und NVIC_SystemReset UEBERLEBEN, aber bei echtem
+ * POR (inkl. brown-out) auf 0 genullt werden. Mit einem magic-canary in
+ * scratch[0] unterscheiden wir damit 3 zustaende beim boot:
+ *   canary != MAGIC             -> POR (oder brown-out)
+ *   canary == MAGIC, was_wdt    -> watchdog reset (hang/missed-feed)
+ *   canary == MAGIC, !was_wdt   -> soft reset (hardfault-handler, NVIC,
+ *                                  external-reset-button etc.)
+ * Ein echter hardfault auf dem M0+ springt in den default-handler der
+ * einen chip-reset macht - das erscheint hier als SOFT, nicht als POR.
+ * Bisher (v0.2.7) wurde beides undifferenziert als "POR" gelogged.     */
+#include "hardware/structs/watchdog.h"
+#define SSC_SCRATCH_CANARY_VAL   0x5A1E4CA7u
+typedef enum {
+    SSC_RST_POR  = 0,
+    SSC_RST_WDT  = 1,
+    SSC_RST_SOFT = 2,
+} ssc_reset_reason_t;
 
 /* Forward-declarations der file-static Funktionen. .ino-Files bekommen zwar
  * von Arduino auto-prototypes, aber fuer `static` mit nicht-trivialer
@@ -162,7 +182,13 @@ static uint32_t g_scd_fails   = 0;
 /* v0.2.7: boot-observability - wird in setup() befuellt, bleibt danach
  * stabil bis zum naechsten reset.                                        */
 static uint32_t g_boot_count    = 0;
-static uint8_t  g_last_reset_reason = 0;  /* 0=POR/normal, 1=watchdog */
+static uint8_t  g_last_reset_reason = 0;  /* ssc_reset_reason_t enum    */
+
+/* v0.2.8: UART packet-health-counter. Laufen pro boot bei 0 los und
+ * wrappen alle 65k events. Im 60-s-health-log sichtbar damit wir beim
+ * naechsten reboot-loop sofort sehen ob UART-traffic beteiligt ist.     */
+static uint16_t g_pkt_rx     = 0;   /* total packets dispatched        */
+static uint16_t g_pkt_rx_unk = 0;   /* unknown cmd-byte (subset of rx) */
 
 /* ------------------------------------------------------------------ */
 /* Senden eines typisierten Float-Pakets                              */
@@ -199,6 +225,24 @@ static uint32_t rp2040_boot_counter_tick_and_get(void) {
      * puffer auf flash nur bei commit(). Wir lassen begin()-state aktiv,
      * das braucht keine weitere Ressource.                              */
     return bc;
+}
+
+/* v0.2.8: 3-state Reset-Reason via watchdog-scratch[0] canary.
+ * Muss SEHR FRUEH im setup() aufgerufen werden - insbesondere bevor der
+ * pico-sdk irgendein scratch-register selbst beschreibt. Setzt den
+ * canary fuer den naechsten boot-check neu.                             */
+static ssc_reset_reason_t rp2040_detect_reset_reason(bool was_wdt) {
+    uint32_t canary = watchdog_hw->scratch[0];
+    ssc_reset_reason_t rr;
+    if (canary != SSC_SCRATCH_CANARY_VAL) {
+        rr = SSC_RST_POR;
+    } else if (was_wdt) {
+        rr = SSC_RST_WDT;
+    } else {
+        rr = SSC_RST_SOFT;
+    }
+    watchdog_hw->scratch[0] = SSC_SCRATCH_CANARY_VAL;
+    return rr;
 }
 
 /* Antwort auf CMD 0xA8: Format [0xC3][boot_count:4B little-endian]
@@ -1089,6 +1133,7 @@ static bool shutdown_flag = false;
 
 static void onPacketReceived(const uint8_t *buffer, size_t size) {
     if (size < 1) return;
+    g_pkt_rx++;   /* v0.2.8: jedes packet das die size-hurde passiert */
 
 #if DEBUG
     Serial.printf("<--- recv len:%u, type=0x%02X\n", (unsigned)size, buffer[0]);
@@ -1153,6 +1198,7 @@ static void onPacketReceived(const uint8_t *buffer, size_t size) {
         break;
 
     default:
+        g_pkt_rx_unk++;   /* v0.2.8: unknown cmd-byte */
         break;
     }
 }
@@ -1214,18 +1260,24 @@ void setup() {
 
     /* v0.2.7: Reset-Reason + Boot-Counter capturen BEVOR wir was
      * anderes machen. EEPROM-tick ist flash-write, schlaegt bei einem
-     * I2C-Crash vorher ohnehin niemals zu, daher frueh hier.          */
-    g_last_reset_reason = was_wdt_reset ? 1 : 0;
+     * I2C-Crash vorher ohnehin niemals zu, daher frueh hier.
+     * v0.2.8: scratch-canary-detection gibt 3-state statt bool.          */
+    g_last_reset_reason = (uint8_t)rp2040_detect_reset_reason(was_wdt_reset);
     g_boot_count        = rp2040_boot_counter_tick_and_get();
+
+    const char *rr_boot_txt =
+        g_last_reset_reason == SSC_RST_POR  ? "POR"  :
+        g_last_reset_reason == SSC_RST_WDT  ? "WDT"  :
+        g_last_reset_reason == SSC_RST_SOFT ? "SOFT" : "???";
 
     /* Sehr frueher Boot-Banner mit explizitem flush() - garantiert dass bei
      * einem Crash-Loop mindestens DIESE Zeile pro Boot durchkommt. Reset-
-     * reason gibt uns die Diagnose: WDT-Reset (code haengt), normal-boot
-     * (crash war Brownout/Power-Verlust/ESP-trigger), o.ae. */
+     * reason gibt uns die Diagnose: WDT (code haengt/missed-feed), SOFT
+     * (hardfault-handler, NVIC_SystemReset, external-reset), POR
+     * (power-loss/brown-out - echter hw-power-cycle).                    */
     Serial.println();
     Serial.print(LOG_TAG); Serial.print("BOOT ");  Serial.print(VERSION);
-    Serial.print(" reset_reason=");
-    Serial.print(was_wdt_reset ? "WATCHDOG" : "POWER/NORMAL");
+    Serial.print(" reset_reason="); Serial.print(rr_boot_txt);
     Serial.print(" boot_count=");
     Serial.println(g_boot_count);
     Serial.flush();
@@ -1417,10 +1469,20 @@ void loop() {
             Serial.print(" sd=");               Serial.print(sd_init_flag);
             Serial.print(" rp_die=");           Serial.print(rp_die_c, 1);
             /* v0.2.7: boot-counter + last-reset-reason jede minute im
-             * health-log. Einfach zu grep'en, sichtbar ohne INFO-screen. */
+             * health-log. Einfach zu grep'en, sichtbar ohne INFO-screen.
+             * v0.2.8: rst zeigt 3-state (POR/WDT/SOFT), plus UART-counter
+             * pkt (total) + unk (unknown cmd-byte). Wenn bei einem
+             * reboot-loop `unk` bei jedem boot hochgeht, ist UART-traffic
+             * die ursache. Wenn unk=0 aber rst=SOFT, war's vermutlich
+             * hardfault aus anderer quelle.                               */
+            const char *rr_h_txt =
+                g_last_reset_reason == SSC_RST_POR  ? "POR"  :
+                g_last_reset_reason == SSC_RST_WDT  ? "WDT"  :
+                g_last_reset_reason == SSC_RST_SOFT ? "SOFT" : "???";
             Serial.print(" boot=");             Serial.print(g_boot_count);
-            Serial.print(" rst=");
-            Serial.println(g_last_reset_reason ? "WDT" : "POR");
+            Serial.print(" rst=");              Serial.print(rr_h_txt);
+            Serial.print(" pkt=");              Serial.print(g_pkt_rx);
+            Serial.print(" unk=");              Serial.println(g_pkt_rx_unk);
             rp2040.wdt_reset();
         }
     }
