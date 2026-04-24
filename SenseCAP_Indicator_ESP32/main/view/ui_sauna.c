@@ -2069,11 +2069,15 @@ static const char *__esp_reset_str(uint8_t r) {
 }
 
 static const char *__rp_reset_str(uint8_t r) {
+    /* v0.2.8: 3-state statt bool. RP2040 benutzt ssc_reset_reason_t:
+     *   0=POR (power-loss/brown-out), 1=WDT (watchdog-reset),
+     *   2=SOFT (hardfault-handler / NVIC_SystemReset / external-reset). */
     switch (r) {
-        case 0: return "POR/NORMAL";
-        case 1: return "WATCHDOG";
+        case 0:    return "POR";
+        case 1:    return "WATCHDOG";
+        case 2:    return "SOFT";
         case 0xFF: return "-";
-        default: return "?";
+        default:   return "?";
     }
 }
 
