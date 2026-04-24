@@ -16,6 +16,8 @@ Gebaut und betrieben vom **[SuperSaunaClub](https://supersauna.club)**.
 - **Saunameister-Verwaltung:** Operator-Dropdown mit den Stammgästen, Teilnehmer-Zähler, Notizen-Feld.
 - **Optional MariaDB-Export:** automatischer Push in eine zentrale Datenbank (Default `postl.ai:3308`), damit mehrere Anlagen gemeinsam ausgewertet werden können. Per Default seit fw_mig=3 **aus** — explizit einschalten.
 - **Extrem defensive Firmware:** I²C-Bus-Unlock bei Kabel-Glitch, I²C-Clock-Stretch-Timeout 25 ms mit Controller-Reset, SD-Recovery-Scan beim Boot, Sensor-Range-Checks nach CRC, Watchdog 8 s mit kurzem Feed-Abstand, Reset-Reason-Logging. Seit v0.2.4 crasht das Gerät im Saunabetrieb nicht mehr.
+- **Zeit-sicher ohne RTC** (v0.2.7): NVS-persistierte Last-Known-Time, NTP-Auto-Retry bei jedem WLAN-Reconnect, Europe/Vienna-Default-TZ, `⚠`-Badge im Home-Header wenn Zeit-Quelle nicht NTP-synced, Session-Start-Gate gegen falsche Timestamps. Manuelles Zeit-Setzen im Settings-Dialog als Fallback.
+- **Live-Crash-Diagnose** (v0.2.7): Boot-Counter + Reset-Reason beider Chips im Settings → `ZEIT + DIAGNOSE` direkt am Gerät sichtbar. Ohne Serial-Capture sofort erkennbar ob ESP32 oder RP2040 zuletzt gecrasht ist und warum (POR, WATCHDOG, PANIC, BROWNOUT, …).
 
 ---
 
@@ -109,9 +111,12 @@ Zwei-Prozessor-Aufteilung:
   | `0xA5` | `SESSION_AUFGUSS` | ≤47 B Aufguss-Name | ESP32 → RP |
   | `0xA6` | `SESSION_END` | — | ESP32 → RP |
   | `0xA7` | `SD_READBACK` | 12 B: req_id(2) + sid(24, NUL-pad) + offset(4) + max_len(2) | ESP32 → RP |
+  | `0xA8` | `GET_RP_STATUS` (v0.2.7) | — | ESP32 → RP |
   | `0xBF` | `SAUNA_TEMP` | 4 B Float (°C) | RP → ESP32 |
   | `0xC0` | `SAUNA_RH` | 4 B Float (%) | RP → ESP32 |
   | `0xC1` | `SD_READBACK_CHUNK` | 13 B Header + Daten | RP → ESP32 |
+  | `0xC2` | `PROBE_STATE` | 2 B: probe_type + sd_init_flag | RP → ESP32 |
+  | `0xC3` | `RP_STATUS` (v0.2.7) | 5 B: boot_count(4 LE) + reset_reason(1) | RP → ESP32 |
 
 - **SD-Readback:** Der ESP32 liest historische CSVs seitenweise zurück, damit das Detail-Chart auf dem Display die Original-Samples zeigt ohne dass der ESP32 die Karte direkt anfasst. Max-Payload RP-seitig 200 B pro Chunk, ESP32-Parser-Robustheit limitiert es praktisch auf **64 B Payload** pro Chunk (größere Frames fragmentieren den COBS-Decoder bei 128-B-UART-FIFO).
 - **Live-Sensor-Daten** werden via 0xBF/0xC0 bei jedem Tick gepusht (kein Polling vom ESP32 aus).
@@ -153,6 +158,39 @@ Kompromiss: Bei extrem langen Sessions (> 30 min) geht Sample-Auflösung verlore
 | **RP2040 Die-Temp** (`analogReadTemp()`) im Health-Log | Frühwarnung bei thermal runaway durch ESP32-Nachbarn. |
 
 Alle Änderungen ggü. dem Upstream sind minimal-invasiv und rückwärtskompatibel zum Seeed-Indicator — Kommandoprotokoll zum ESP32 ist unverändert.
+
+### Zeit-Härtung + Crash-Observability (v0.2.7)
+
+Das SenseCAP D1S hat **keine battery-backed RTC** — ohne Strom ist die Uhrzeit beim Boot weg. Dazu kommt dass zuvor ein NTP-Retry-Loop-Bug Zeit-Sync nach dem ersten WLAN-Connect silent aufgab. Beides ist in v0.2.7 adressiert:
+
+| Mechanismus | Zweck |
+|---|---|
+| **NVS-persistierte Last-Known-Time** (`indicator_time.c`) | Alle 60 s wird die aktuelle Wall-Clock + `time_source_t`-State (NTP_SYNCED / MANUAL) in NVS (Key `time_state`) geschrieben — aber nur wenn die Quelle vertrauenswürdig ist. Beim nächsten Boot ohne WLAN wird `max(NVS+60s, compile_time)` als Start-Zeit gesetzt statt einer Jahr-alten Compile-Zeit. |
+| **NTP-Retry bei jedem WLAN-Reconnect** | Der pre-existing `fist`-Flag-Bug (NTP-Sync nur beim allerersten Connect) ist entfernt. Jetzt triggert **jedes** `is_network=true`-Event einen SNTP-Restart — aber nur wenn die Source stale ist (>10 min oder nicht NTP_SYNCED). Dazu periodischer Watchdog alle 5 min der `sntp_stop+init` macht wenn Source noch nicht NTP ist. |
+| **Timezone-Default Europe/Vienna** (`CET-1CEST,M3.5.0,M10.5.0/3`) | Bevor `indicator_city` via geoIP eine genauere Zone liefert, wird CEST/CET mit DST-Regeln angewendet. Standort ist fix für dieses Projekt (Oberes Piestingtal). Die auto-erkannte Zone wird nach dem Lookup in NVS persistiert — spätere Boots haben die TZ sofort ohne Netzwerk-Delay. |
+| **⚠ Warn-Badge links neben der Uhrzeit** (Home-Screen) | Sichtbar wenn `time_source != NTP_SYNCED` oder letzte Sync > 10 min alt. Signal an den User: "Die Zeit oben könnte falsch sein." |
+| **Session-Start-Gate** | Beim Druck auf `STARTEN` prüft die UI ob die Zeit frisch NTP-synced ist. Wenn nicht, erscheint ein Confirm-Dialog `ZEIT NICHT GEPRÜFT` — User kann explizit abbrechen und zuerst Zeit fixen, oder trotzdem starten. Schützt die History vor Sessions mit falschem Timestamp. |
+| **Manual Time-Set Dialog** (Settings → `ZEIT MANUELL SETZEN`) | LVGL-Modal mit 6 Rollern (Jahr 2024–2099 / Monat / Tag / Std / Min / Sek). Apply setzt `source=MANUAL`, persistiert sofort in NVS. Fallback für Fälle ohne WLAN. |
+| **ESP32-Boot-Counter + Reset-Reason** (`main.c`) | NVS-Key `boot_info` zählt jeden Boot hoch, `esp_reset_reason()` wird sofort in `app_main()` gecaptured. Event `VIEW_EVENT_BOOT_INFO` postet's an die UI. |
+| **RP2040-Boot-Counter in EEPROM** (flash-emuliert, 256 B reserved mit magic 0x55AA5AA5) + **`watchdog_caused_reboot()`** | Boot-Banner zeigt `boot_count=N`, Health-Log jede Minute `boot=N rst=WDT/POR`. |
+| **Neuer UART-Command 0xA8 `GET_RP_STATUS`** / Response 0xC3 | ESP32 fragt den RP2040 alle 60 s nach Boot-Status an, RP2040 antwortet mit `[boot_count:4B LE][reset_reason:1B]`. UI-Event `VIEW_EVENT_RP_BOOT_INFO` zeigt's in Settings → ZEIT + DIAGNOSE. |
+| **Last-Screen-Persist** | Bei jedem Screen-Wechsel schreibt die UI `last_scr` in NVS. Bei unclean Reboot kann man so nachvollziehen auf welchem Screen das Gerät war. |
+
+**Architektur-Entscheidung:** Keine Hardware-RTC (z. B. DS3231) nachrüsten — reine Software-Lösung war dem User lieber, das Silikonkabel ist bereits verlegt und weitere Hardware-Änderungen wurden ausgeschlossen. Die NVS-basierte Persistierung ist nach 1× NTP-Sync praktisch immun gegen Stromausfall (worst case: 60 s Zeit-Drift, für Session-Granularität irrelevant).
+
+**Settings → ZEIT + DIAGNOSE** (neu) zeigt live:
+
+```
+ZEIT-QUELLE: NTP (vor 2min)
+BOOT-COUNTER ESP32: 42   LETZTER RESET: POWERON
+BOOT-COUNTER RP2040: 17  LETZTER RESET: POR/NORMAL
+```
+
+— plus den Button `ZEIT MANUELL SETZEN`. Sichtbar zwischen der „Zukunfts-Feature"-API-Section und der Danger Zone.
+
+### Ping-Handle-Fix (v0.2.7.1)
+
+Latent-Bug im Seeed-Fork entdeckt: `indicator_wifi.c::__ping_start` hat den Return von `esp_ping_new_session` nicht geprüft. Bei Heap-Fragmentation (die sich durch die v0.2.7-Ergänzungen leicht verschoben hat) gab `new_session` einen NULL-Handle zurück, `esp_ping_start(NULL)` hat dann im `xTaskGenericNotify`-Assert einen `PANIC(4)`-Reboot-Loop ausgelöst — direkt nach jedem `WIFI_STA_CONNECTED`. Fix: NULL-Init, Fehler-Check, Fallback `is_network=is_connected` wenn Session-Create scheitert damit NTP/TZ-Lookup trotzdem triggern. Andere Funktionen im Seeed-Fork die Return-Werte ignorieren könnten ähnliche latente Bugs haben — bei zukünftigen Audits mitchecken.
 
 ---
 
@@ -201,16 +239,16 @@ idf.py -p /dev/ttyUSB0 flash monitor
 Serial-Output auf `/dev/ttyACM0` @ 115200 baud:
 
 ```
-[SAUNA] BOOT ssc-v0.2.6 reset_reason=POWER/NORMAL
+[SAUNA] BOOT ssc-v0.2.7 reset_reason=POWER/NORMAL boot_count=42
 [SAUNA] I2C-Scan (boot): 0x38 0x44 0x59 0x62
 [SAUNA] SD: initialisiert
 [SAUNA] SHT3x ready @ 0x44 (SHT35/SHT85 kompatibel): 24.53 degC, 32.10 %RH
 [SAUNA] SGP40 ready
 [SAUNA] SCD41 ASC disabled (closed-room drift protection)
-[SAUNA] RP2040 ssc-v0.2.6 ready: SD=1 SCD41=1 SGP40=1 SHT85=1 AHT20fb=0 probe=SHT3x
+[SAUNA] RP2040 ssc-v0.2.7 ready: SD=1 SCD41=1 SGP40=1 SHT85=1 AHT20fb=0 probe=SHT3x
 [SAUNA] watchdog armed (8 s)
 ...
-[SAUNA] health: intvl=1000ms probe=SHT3x temp=25.5 rh=31.0 fails=0 session=0 sd=1 rp_die=41.2
+[SAUNA] health: intvl=1000ms probe=SHT3x temp=25.5 rh=31.0 fails=0 session=0 sd=1 rp_die=41.2 boot=42 rst=POR
 ```
 
 Der `reset_reason` beim Boot sagt dir bei einem Crash was los war:
@@ -252,13 +290,17 @@ Vom HOME-Screen oder SETTINGS → Detail-Screen einer Session:
 
 ### SETTINGS (Zahnrad-Icon)
 
+In der Reihenfolge von oben nach unten:
+
 - **Saunameister-Liste:** Namen der Stammgäste verwalten (für das Operator-Dropdown in der Summary)
 - **WLAN:** SSID + Passwort, landet in NVS
-- **HTTP-Endpunkt + Token** für den optionalen HTTP-POST-Export
 - **MariaDB-Endpunkt** (Default `postl.ai:3308`) + Credentials
-- **Info:** Versionen, Uptime, freier NVS-Platz
+- **INFO:** Hersteller/Version/Open-Source-Hinweis, statischer Text
+- **ZUKUNFTS-FEATURE: supersauna.club API** (ausgegraut) — Platzhalter für künftigen HTTP-Push der Session-Daten an das Vereins-Dashboard. Server-seitig noch nicht gebaut, UI visuell disabled.
+- **ZEIT + DIAGNOSE** (v0.2.7): Live-Diagnostik-Block zeigt aktuelle Zeit-Quelle (NTP/Manuell/NVS-Fallback/Compile-Time) mit Alter + Boot-Counter beider Chips + letzte Reset-Reason. Darunter Button `ZEIT MANUELL SETZEN` → öffnet Modal mit 6 Rollern für Jahr/Monat/Tag/Stunde/Minute/Sekunde.
+- **DANGER ZONE** (rot, ganz unten): `ALLE SESSIONS LÖSCHEN` wipet sämtliche Metadaten aus NVS. CSV auf SD bleibt, kann aber nicht mehr aus der UI aufgerufen werden. Confirm-Dialog pflicht.
 
-MariaDB und HTTP sind seit `fw_mig=3` **per Default aus** — explizit einschalten. Ohne Endpunkt-Config passiert kein Netzwerk-Traffic.
+MariaDB ist seit `fw_mig=3` **per Default aus** — explizit einschalten. Ohne Endpunkt-Config passiert kein Netzwerk-Traffic. HTTP-Export ist als Zukunfts-Feature gerahmt und aktuell ohne Funktion.
 
 ### Datenformat der Session-CSV
 
@@ -342,6 +384,28 @@ sscsaunalogger/
 | Touch reagiert nicht | FT6336U Hardware-Problem | Display-Flex neu einstecken, 2+ min stromlos |
 | VOC-Index = NaN in den ersten 5 min | Normal | 5 min warten, Sensirion-Baseline-Learning |
 | RH stuck bei 100 % nach Aufguss | Polymer-Kondensat | Firmware triggert automatisch Heater-Cycle, 10-min-Lockout |
+| Uhrzeit beim Start falsch | Strom war weg, kein WLAN seither | `⚠` im Home-Header zeigt „Zeit ungeprüft". Einmal mit WLAN booten → NTP synct. Alternative: `Settings → ZEIT MANUELL SETZEN`. |
+
+### Wenn das Gerät rebootet (v0.2.7+)
+
+Seit v0.2.7 zeigt der **Settings → ZEIT + DIAGNOSE** Block direkt am Gerät:
+
+```
+ZEIT-QUELLE: NTP (vor 2min)
+BOOT-COUNTER ESP32: 42   LETZTER RESET: POWERON
+BOOT-COUNTER RP2040: 17  LETZTER RESET: POR/NORMAL
+```
+
+Steigt der Boot-Counter ohne dass du rebootet hast, ist was faul. Der Last-Reset zeigt welcher Chip:
+- `WATCHDOG` am RP2040 → I²C-Hang oder SD-Stall, siehe Health-Log-Zeilen VOR dem Reboot
+- `PANIC` / `INT_WDT` / `TASK_WDT` am ESP32 → Firmware-Crash, Stack-Trace im Serial-Log nötig
+- `BROWNOUT` → Stromversorgung zu schwach, auf USB-PD mit ≥ 2 A wechseln
+
+Zum Serial-Capture beim nächsten Reboot:
+- ESP32: `cd SenseCAP_Indicator_ESP32 && idf.py -p /dev/ttyUSB0 monitor`
+- RP2040: `arduino-cli monitor -p /dev/ttyACM0 -c baudrate=115200`
+
+Beide Logs parallel capturen (zwei Terminals), mind. 60 s laufen lassen. Der Log enthält Reset-Reason + Boot-Counter in der ersten `BOOT`-Zeile direkt nach dem Wiederanlauf.
 
 ---
 
@@ -351,8 +415,8 @@ Die Firmware hat **zwei Versionskonstanten** — eine pro Prozessor, weil RP2040
 
 | Prozessor | Variable | Datei | Format |
 |---|---|---|---|
-| ESP32-S3 (UI) | `SSC_APP_VERSION` | `SenseCAP_Indicator_ESP32/main/app_version.h` | Plain SemVer, z. B. `"0.2.6"` |
-| RP2040 (Sensor/SD) | `VERSION` | `SenseCAP_Indicator_RP2040/SenseCAP_Indicator_RP2040.ino` (Zeile 33) | mit Prefix: `"ssc-v0.2.6"` |
+| ESP32-S3 (UI) | `SSC_APP_VERSION` | `SenseCAP_Indicator_ESP32/main/app_version.h` | Plain SemVer, z. B. `"0.2.7"` |
+| RP2040 (Sensor/SD) | `VERSION` | `SenseCAP_Indicator_RP2040/SenseCAP_Indicator_RP2040.ino` (Zeile 33) | mit Prefix: `"ssc-v0.2.7"` |
 
 **Bump-Workflow:** Beide Variablen gleichzeitig anheben, dann RP2040 flashen (Arduino-CLI), dann ESP32 flashen (idf.py). Die ESP32-UI-Info-Zeile (`Settings → INFO`) und der RP2040-Serial-Boot-Banner zeigen die jeweilige Version — so ist sofort sichtbar, ob ein Prozessor den Flash verpasst hat.
 

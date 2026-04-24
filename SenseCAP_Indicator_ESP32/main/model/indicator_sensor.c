@@ -66,6 +66,10 @@ enum  pkt_type {
     /* Probe-State: welcher Sauna-Fuehler laeuft, SD-Status.
      * Payload: [1B probe_type][1B sd_init_flag] */
     PKT_TYPE_PROBE_STATE = 0xC2,
+
+    /* v0.2.7: RP2040-Status (boot_count + last_reset_reason).
+     * Payload: [4B boot_count LE][1B reset_reason] */
+    PKT_TYPE_RP_STATUS = 0xC3,
 };
 
 /* Session-Steuerung ESP -> RP (als defines, damit sie ausserhalb des
@@ -75,6 +79,9 @@ enum  pkt_type {
 #define SSC_CMD_SESSION_AUFGUSS  0xA5
 #define SSC_CMD_SESSION_END      0xA6
 #define SSC_CMD_SD_READBACK      0xA7
+/* v0.2.7: anfrage an RP2040 nach boot-status (reset-reason + boot-count).
+ * Antwort kommt als 0xC3 mit 5B payload.                                  */
+#define SSC_CMD_GET_RP_STATUS    0xA8
 
 
 struct sensor_present_data
@@ -1098,6 +1105,22 @@ static int __data_parse_handle(uint8_t *p_data, ssize_t len)
             break;
         }
 
+        case PKT_TYPE_RP_STATUS: {
+            /* v0.2.7: [4B boot_count LE][1B reset_reason]. Antwort auf
+             * SSC_CMD_GET_RP_STATUS (0xA8).                             */
+            if (len < 6) break;
+            struct view_data_rp_boot_info rb;
+            rb.boot_count = (uint32_t)p_data[1]         |
+                            ((uint32_t)p_data[2] << 8)  |
+                            ((uint32_t)p_data[3] << 16) |
+                            ((uint32_t)p_data[4] << 24);
+            rb.reset_reason = p_data[5];
+            (void)esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
+                                    VIEW_EVENT_RP_BOOT_INFO, &rb, sizeof(rb),
+                                    pdMS_TO_TICKS(5));
+            break;
+        }
+
         default:
             break;
     }
@@ -1168,6 +1191,10 @@ static void esp32_rp2040_comm_task(void *arg)
     __cmd_send(PKT_TYPE_CMD_POWER_ON, NULL, 0);
     cobs_decode_result ret;
 
+    /* v0.2.7: timer fuer RP-STATUS-anfrage. Initial nach ~2s (damit RP2040
+     * sicher seinen setup() durch hat), dann alle 60s.                    */
+    int64_t next_rp_status_us = esp_timer_get_time() + 2 * 1000 * 1000;
+
     /* Akkumulator fuer packet-reassembly:
      * Der urspruengliche parser ging davon aus dass jedes COBS-packet
      * komplett in einem uart_read_bytes-aufruf ankommt. Bei packets
@@ -1182,6 +1209,15 @@ static void esp32_rp2040_comm_task(void *arg)
     static size_t  accum_len = 0;
 
     while (1) {
+        /* v0.2.7: RP-STATUS periodisch anfordern. Ergebnis kommt asynchron
+         * als PKT_TYPE_RP_STATUS zurueck und wird an VIEW_EVENT_RP_BOOT_INFO
+         * gepostet.                                                        */
+        int64_t now_us = esp_timer_get_time();
+        if (now_us >= next_rp_status_us) {
+            next_rp_status_us = now_us + (int64_t)60 * 1000 * 1000;
+            __cmd_send(SSC_CMD_GET_RP_STATUS, NULL, 0);
+        }
+
         int n = uart_read_bytes(ESP32_COMM_PORT_NUM, buf, (BUF_SIZE - 1),
                                 1 / portTICK_PERIOD_MS);
         if (n <= 0) continue;

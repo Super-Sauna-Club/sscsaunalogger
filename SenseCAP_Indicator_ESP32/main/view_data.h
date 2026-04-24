@@ -318,6 +318,12 @@ enum {
 
     VIEW_EVENT_PROBE_STATE,             // struct view_data_probe_state
 
+    /* === Zeit-Quality + Crash-Observability (v0.2.7) ================== */
+    VIEW_EVENT_TIME_STATE_UPDATE,       // struct view_data_time_state
+    VIEW_EVENT_TIME_MANUAL_SET,         // struct view_data_time_manual
+    VIEW_EVENT_BOOT_INFO,               // struct view_data_boot_info (ESP32)
+    VIEW_EVENT_RP_BOOT_INFO,            // struct view_data_rp_boot_info (vom RP2040)
+
     VIEW_EVENT_ALL,
 };
 
@@ -325,6 +331,46 @@ enum {
 struct view_data_probe_state {
     uint8_t probe;         /* 0=NONE, 1=SHT85, 2=AHT20, 3=SCD41-PROXY */
     uint8_t sd_init;       /* 0 oder 1 */
+};
+
+/* ======================================================================= */
+/* Zeit-Quality: wie vertrauenswuerdig ist time(NULL) gerade?              */
+/* ======================================================================= */
+typedef enum {
+    TIME_SRC_UNKNOWN       = 0,  /* init-default, sollte nie sichtbar sein */
+    TIME_SRC_COMPILE_TIME  = 1,  /* Firmware-Build-Zeit, schlechtester Fall */
+    TIME_SRC_NVS_FALLBACK  = 2,  /* letzte persistierte Zeit + Sicherheitspuffer */
+    TIME_SRC_MANUAL        = 3,  /* user hat im Settings-Dialog gesetzt */
+    TIME_SRC_NTP_SYNCED    = 4,  /* frisch von NTP (pool.ntp.org) */
+} time_source_t;
+
+struct view_data_time_state {
+    uint8_t source;        /* time_source_t */
+    time_t  last_sync_ts;  /* wann zuletzt NTP oder MANUAL - in UTC */
+};
+
+/* Payload fuer VIEW_EVENT_TIME_MANUAL_SET (UI -> indicator_time) */
+struct view_data_time_manual {
+    int16_t year;   /* 2020..2099 */
+    int8_t  mon;    /* 1..12 */
+    int8_t  day;    /* 1..31 */
+    int8_t  hour;   /* 0..23 */
+    int8_t  minute; /* 0..59 */
+    int8_t  sec;    /* 0..59 */
+};
+
+/* ======================================================================= */
+/* Crash-Observability: reset-reason + boot-counter beim Boot              */
+/* ======================================================================= */
+struct view_data_boot_info {
+    uint32_t boot_count;   /* monoton steigend, persistiert in NVS */
+    uint8_t  reset_reason; /* esp_reset_reason_t als uint8_t */
+};
+
+/* Gleiche struct-form vom RP2040 (via CMD 0xA8 angefordert). */
+struct view_data_rp_boot_info {
+    uint32_t boot_count;
+    uint8_t  reset_reason; /* 0=normal, 1=watchdog, sonst raw */
 };
 
 

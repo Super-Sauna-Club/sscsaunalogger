@@ -22,6 +22,7 @@
 #include <Wire.h>
 #include <SPI.h>
 #include <SD.h>
+#include <EEPROM.h>                 /* v0.2.7: boot-counter in flash-emuliertem EEPROM */
 #include <PacketSerial.h>
 #include <SensirionI2CSgp40.h>
 #include <SensirionI2cScd4x.h>
@@ -30,7 +31,14 @@
 #include "hardware/watchdog.h"    /* watchdog_caused_reboot() fuer post-crash diagnose */
 
 #define DEBUG 0
-#define VERSION "ssc-v0.2.6"
+#define VERSION "ssc-v0.2.7"
+/* v0.2.7: EEPROM layout. 256 B reserviert, erste 8B belegt.
+ *  [0..3] uint32_t magic = 0x55AA5AA5
+ *  [4..7] uint32_t boot_count                                      */
+#define SSC_EEPROM_SIZE     256
+#define SSC_EEPROM_MAGIC    0x55AA5AA5u
+#define SSC_EEPROM_OFF_MAGIC 0
+#define SSC_EEPROM_OFF_BC    4
 #define SSC_LEGACY_GROVE 0   /* 1 = AHT20/HM3301/MultiGas wieder aktivieren */
 
 /* Forward-declarations der file-static Funktionen. .ino-Files bekommen zwar
@@ -99,6 +107,9 @@ static inline void slogf(const char *lbl, float v, int decimals = 2) {
 #define PKT_TYPE_CMD_SESSION_AUFGUSS    0xA5  /* payload: name (<=47B + NUL) */
 #define PKT_TYPE_CMD_SESSION_END        0xA6  /* kein payload */
 #define PKT_TYPE_CMD_SD_READBACK        0xA7  /* payload: [2B req_id][4B byte_offset][2B len] */
+/* v0.2.7: ESP32 fragt RP2040-Bootstatus an, RP antwortet mit 0xC3 */
+#define PKT_TYPE_CMD_GET_RP_STATUS      0xA8  /* kein payload */
+#define PKT_TYPE_RP_STATUS              0xC3  /* 5B: [boot_count:4B][reset_reason:1B] */
 
 /* ------------------------------------------------------------------ */
 /* Geraete-Objekte                                                    */
@@ -148,6 +159,11 @@ static uint32_t g_last_tick_ms = 0;
 static uint32_t g_sht85_fails = 0;
 static uint32_t g_scd_fails   = 0;
 
+/* v0.2.7: boot-observability - wird in setup() befuellt, bleibt danach
+ * stabil bis zum naechsten reset.                                        */
+static uint32_t g_boot_count    = 0;
+static uint8_t  g_last_reset_reason = 0;  /* 0=POR/normal, 1=watchdog */
+
 /* ------------------------------------------------------------------ */
 /* Senden eines typisierten Float-Pakets                              */
 /* ------------------------------------------------------------------ */
@@ -160,6 +176,42 @@ static void sensor_data_send(uint8_t type, float data) {
 
 static void raw_packet_send(const uint8_t *buf, size_t len) {
     myPacketSerial.send(buf, len);
+}
+
+/* ------------------------------------------------------------------ */
+/* v0.2.7: Boot-Counter in EEPROM (flash-emuliert)                    */
+/* ------------------------------------------------------------------ */
+static uint32_t rp2040_boot_counter_tick_and_get(void) {
+    EEPROM.begin(SSC_EEPROM_SIZE);
+    uint32_t magic = 0;
+    uint32_t bc    = 0;
+    EEPROM.get(SSC_EEPROM_OFF_MAGIC, magic);
+    EEPROM.get(SSC_EEPROM_OFF_BC,    bc);
+    if (magic != SSC_EEPROM_MAGIC) {
+        magic = SSC_EEPROM_MAGIC;
+        bc    = 0;
+    }
+    bc++;
+    EEPROM.put(SSC_EEPROM_OFF_MAGIC, magic);
+    EEPROM.put(SSC_EEPROM_OFF_BC,    bc);
+    EEPROM.commit();
+    /* EEPROM.end() ruht die Maschine nicht - die Lib kopiert einen RAM-
+     * puffer auf flash nur bei commit(). Wir lassen begin()-state aktiv,
+     * das braucht keine weitere Ressource.                              */
+    return bc;
+}
+
+/* Antwort auf CMD 0xA8: Format [0xC3][boot_count:4B little-endian]
+ * [reset_reason:1B]. ESP32 parst in view_data_rp_boot_info.            */
+static void rp2040_send_status(void) {
+    uint8_t pkt[6];
+    pkt[0] = PKT_TYPE_RP_STATUS;
+    pkt[1] = (uint8_t)(g_boot_count         & 0xFF);
+    pkt[2] = (uint8_t)((g_boot_count >>  8) & 0xFF);
+    pkt[3] = (uint8_t)((g_boot_count >> 16) & 0xFF);
+    pkt[4] = (uint8_t)((g_boot_count >> 24) & 0xFF);
+    pkt[5] = g_last_reset_reason;
+    raw_packet_send(pkt, sizeof(pkt));
 }
 
 /* ================================================================== */
@@ -1095,6 +1147,11 @@ static void onPacketReceived(const uint8_t *buffer, size_t size) {
         handle_sd_readback(buffer + 1, size - 1);
         break;
 
+    case PKT_TYPE_CMD_GET_RP_STATUS:
+        /* v0.2.7: ESP32 fragt nach Boot-Counter + Reset-Reason */
+        rp2040_send_status();
+        break;
+
     default:
         break;
     }
@@ -1155,6 +1212,12 @@ void setup() {
     uint32_t t0 = millis();
     while (!Serial && millis() - t0 < 2000) { delay(10); }
 
+    /* v0.2.7: Reset-Reason + Boot-Counter capturen BEVOR wir was
+     * anderes machen. EEPROM-tick ist flash-write, schlaegt bei einem
+     * I2C-Crash vorher ohnehin niemals zu, daher frueh hier.          */
+    g_last_reset_reason = was_wdt_reset ? 1 : 0;
+    g_boot_count        = rp2040_boot_counter_tick_and_get();
+
     /* Sehr frueher Boot-Banner mit explizitem flush() - garantiert dass bei
      * einem Crash-Loop mindestens DIESE Zeile pro Boot durchkommt. Reset-
      * reason gibt uns die Diagnose: WDT-Reset (code haengt), normal-boot
@@ -1162,7 +1225,9 @@ void setup() {
     Serial.println();
     Serial.print(LOG_TAG); Serial.print("BOOT ");  Serial.print(VERSION);
     Serial.print(" reset_reason=");
-    Serial.println(was_wdt_reset ? "WATCHDOG" : "POWER/NORMAL");
+    Serial.print(was_wdt_reset ? "WATCHDOG" : "POWER/NORMAL");
+    Serial.print(" boot_count=");
+    Serial.println(g_boot_count);
     Serial.flush();
 
     slog("boot start, I2C-bus klar");
@@ -1350,7 +1415,12 @@ void loop() {
             Serial.print(" fails=");            Serial.print(g_sht85_fails);
             Serial.print(" session=");          Serial.print(g_session_active);
             Serial.print(" sd=");               Serial.print(sd_init_flag);
-            Serial.print(" rp_die=");           Serial.println(rp_die_c, 1);
+            Serial.print(" rp_die=");           Serial.print(rp_die_c, 1);
+            /* v0.2.7: boot-counter + last-reset-reason jede minute im
+             * health-log. Einfach zu grep'en, sichtbar ohne INFO-screen. */
+            Serial.print(" boot=");             Serial.print(g_boot_count);
+            Serial.print(" rst=");
+            Serial.println(g_last_reset_reason ? "WDT" : "POR");
             rp2040.wdt_reset();
         }
     }

@@ -288,10 +288,37 @@ static void __ping_start(void)
         .on_ping_timeout = NULL,
         .on_ping_end = __ping_end
     };
-    esp_ping_handle_t ping;
-    esp_ping_new_session(&config, &cbs, &ping);
+    /* v0.2.7: error-handling fuer esp_ping_new_session. Wenn der heap
+     * fragmentiert ist und die interne ping-task nicht erstellt werden
+     * kann, liefert new_session ESP_ERR_NO_MEM - aber `ping` bleibt
+     * uninitialisiert. esp_ping_start mit garbage-handle → assert in
+     * xTaskGenericNotify → PANIC-reboot-loop. Beobachtet auf v0.2.7 nach
+     * WIFI_EVENT_STA_CONNECTED. Defensiver fix: initialisieren + checken. */
+    esp_ping_handle_t ping = NULL;
+    esp_err_t err = esp_ping_new_session(&config, &cbs, &ping);
+    if (err != ESP_OK || ping == NULL) {
+        ESP_LOGW(TAG, "ping new_session failed: %s - skipping ping",
+                 esp_err_to_name(err));
+        /* Als "Netz-OK" werten auch ohne ping-verify, damit NTP/TZ-lookup
+         * weiterlaufen. Andere-falls haengt der User in is_network=false
+         * fest und bekommt nie eine NTP-Sync.                            */
+        struct view_data_wifi_st st;
+        __wifi_st_get(&st);
+        st.is_network = st.is_connected;
+        __wifi_st_set(&st);
+        esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
+                          VIEW_EVENT_WIFI_ST, &st, sizeof(st),
+                          pdMS_TO_TICKS(100));
+        __g_ping_done = true;
+        return;
+    }
     __g_ping_done = false;
-    esp_ping_start(ping);
+    err = esp_ping_start(ping);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_ping_start failed: %s", esp_err_to_name(err));
+        esp_ping_delete_session(ping);
+        __g_ping_done = true;
+    }
 }
 
 // net check

@@ -92,9 +92,19 @@ static lv_obj_t *home_vorraum_rh_val;
 static lv_obj_t *home_vorraum_co2_val;
 static lv_obj_t *home_tvoc_val;
 static lv_obj_t *home_clock_val;
+static lv_obj_t *home_clock_warn;    /* v0.2.7: "!" wenn zeit nicht NTP-synced */
 static lv_obj_t *home_recent_list;
 static lv_obj_t *home_status_pill;
 static lv_obj_t *home_probe_badge;   /* DEV/AHT20-FB/SD-warn-Hinweis */
+
+/* v0.2.7: Cache des letzten time-state und boot-info, fuers INFO-screen
+ * + home-badge. Aktualisiert durch event-handler.                       */
+static uint8_t  g_ui_time_src        = 0 /*TIME_SRC_UNKNOWN*/;
+static time_t   g_ui_time_last_sync  = 0;
+static uint32_t g_ui_esp_boot_count  = 0;
+static uint8_t  g_ui_esp_reset_rsn   = 0xFF;
+static uint32_t g_ui_rp_boot_count   = 0;
+static uint8_t  g_ui_rp_reset_rsn    = 0xFF;
 
 /* LIVE */
 static lv_obj_t *live_temp_val;
@@ -190,6 +200,8 @@ static lv_obj_t *set_db_database_ta;
 static lv_obj_t *set_db_table_ta;
 static lv_obj_t *set_db_enabled_sw;
 static lv_obj_t *set_operators_ta;   /* 1 kürzel pro zeile */
+/* v0.2.7: dynamisches Diagnose-Label in Settings - zeit-source + boot-info */
+static lv_obj_t *set_diag_label = NULL;
 
 /* ======================================================================= */
 /*   Style-Helper                                                            */
@@ -461,6 +473,20 @@ static void build_home(void) {
     lv_obj_set_style_text_font(home_clock_val, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(home_clock_val, SSC_C_TEXT, 0);
     lv_obj_align(home_clock_val, LV_ALIGN_RIGHT_MID, -44, 0);
+
+    /* v0.2.7: Warn-Badge LINKS neben der Uhrzeit - sichtbar wenn Zeit
+     * nicht frisch NTP-synced. "!" in rot, default hidden.
+     * Explizite rechtsbuendige Positionierung statt lv_obj_align_to(
+     * clock_val, OUT_LEFT_MID) - letzteres snapshotted die Clock-Box
+     * BEVOR sie ihre finale Groesse hat und landet dann visuell
+     * falsch (ueber dem Datum statt daneben). -220px vom rechten
+     * Rand lag vor dem Clock-Label (clock ist ~170 px breit bei -44). */
+    home_clock_warn = lv_label_create(hdr);
+    lv_label_set_text(home_clock_warn, LV_SYMBOL_WARNING);
+    lv_obj_set_style_text_font(home_clock_warn, F_MD, 0);
+    lv_obj_set_style_text_color(home_clock_warn, lv_color_hex(0xff8080), 0);
+    lv_obj_align(home_clock_warn, LV_ALIGN_RIGHT_MID, -220, 0);
+    lv_obj_add_flag(home_clock_warn, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t *btn_settings = lv_btn_create(hdr);
     style_icon_btn(btn_settings);
@@ -811,11 +837,10 @@ static void on_live_aufguss_clicked(lv_event_t *e) {
                       portMAX_DELAY);
 }
 
-static void on_live_start_clicked(lv_event_t *e) {
-    ESP_LOGI(TAG, "on_live_start_clicked: running=%d", live_running);
-    /* Guard gegen doppel-tap - wenn schon running, ignorieren. */
-    if (live_running) return;
-    /* Chart reset */
+/* Gemeinsamer Start-Pfad, aufrufbar auch aus dem Confirm-Callback wenn
+ * die Zeit ungeprueft war und der User trotzdem starten will.         */
+static void __do_session_start_now(void *user_data) {
+    (void)user_data;
     if (live_chart) {
         if (live_ser_temp)
             lv_chart_set_all_value(live_chart, live_ser_temp, LV_CHART_POINT_NONE);
@@ -828,6 +853,34 @@ static void on_live_start_clicked(lv_event_t *e) {
                       VIEW_EVENT_SESSION_START, op, sizeof(op),
                       portMAX_DELAY);
     live_set_running_state();
+}
+
+static void on_live_start_clicked(lv_event_t *e) {
+    ESP_LOGI(TAG, "on_live_start_clicked: running=%d", live_running);
+    /* Guard gegen doppel-tap - wenn schon running, ignorieren. */
+    if (live_running) return;
+
+    /* v0.2.7: Zeit-Gate. Wenn Source nicht NTP_SYNCED ODER letzte sync
+     * laenger als 10 min her, confirm-dialog zeigen damit user nicht
+     * versehentlich mit falschen timestamps loggt.                   */
+    time_t nowt = 0; time(&nowt);
+    bool stale = (g_ui_time_src != TIME_SRC_NTP_SYNCED) ||
+                 (g_ui_time_last_sync == 0) ||
+                 ((nowt - g_ui_time_last_sync) > 600);
+    if (stale) {
+        ESP_LOGW(TAG, "session-start: zeit ungeprueft (src=%u last=%ld now=%ld)",
+                 (unsigned)g_ui_time_src, (long)g_ui_time_last_sync, (long)nowt);
+        show_confirm(
+            "ZEIT NICHT GEPRUEFT",
+            "die uhrzeit wurde seit dem letzten boot nicht per ntp\n"
+            "bestaetigt. session-timestamps koennten falsch sein.\n\n"
+            "trotzdem starten?",
+            "STARTEN",
+            __do_session_start_now,
+            NULL);
+        return;
+    }
+    __do_session_start_now(NULL);
 }
 
 static void on_live_stop_clicked(lv_event_t *e) {
@@ -1812,6 +1865,242 @@ static void show_confirm(const char *title, const char *body,
     lv_obj_add_event_cb(ok, on_confirm_ok, LV_EVENT_CLICKED, NULL);
 }
 
+/* ---- v0.2.7: Zeit-Manuell-Setzen-Modal ------------------------------- */
+
+static lv_obj_t *s_time_overlay  = NULL;
+static lv_obj_t *s_time_roll_y   = NULL;
+static lv_obj_t *s_time_roll_mo  = NULL;
+static lv_obj_t *s_time_roll_d   = NULL;
+static lv_obj_t *s_time_roll_h   = NULL;
+static lv_obj_t *s_time_roll_mi  = NULL;
+static lv_obj_t *s_time_roll_s   = NULL;
+
+static void time_modal_close(void) {
+    if (s_time_overlay) {
+        lv_obj_del(s_time_overlay);
+        s_time_overlay = NULL;
+    }
+    s_time_roll_y = s_time_roll_mo = s_time_roll_d =
+    s_time_roll_h = s_time_roll_mi = s_time_roll_s = NULL;
+}
+
+static void on_time_modal_cancel(lv_event_t *e) { (void)e; time_modal_close(); }
+
+static void on_time_modal_ok(lv_event_t *e) {
+    (void)e;
+    if (!s_time_roll_y) { time_modal_close(); return; }
+    struct view_data_time_manual m = {0};
+    /* Rollers liefern 0-basierte Indizes; mappen auf konkrete Werte. */
+    m.year   = (int16_t)(2024 + lv_roller_get_selected(s_time_roll_y));
+    m.mon    = (int8_t)(1    + lv_roller_get_selected(s_time_roll_mo));
+    m.day    = (int8_t)(1    + lv_roller_get_selected(s_time_roll_d));
+    m.hour   = (int8_t)(        lv_roller_get_selected(s_time_roll_h));
+    m.minute = (int8_t)(        lv_roller_get_selected(s_time_roll_mi));
+    m.sec    = (int8_t)(        lv_roller_get_selected(s_time_roll_s));
+    ESP_LOGI(TAG, "time-manual apply: %04d-%02d-%02d %02d:%02d:%02d",
+             m.year, m.mon, m.day, m.hour, m.minute, m.sec);
+    esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
+                      VIEW_EVENT_TIME_MANUAL_SET, &m, sizeof(m),
+                      portMAX_DELAY);
+    time_modal_close();
+}
+
+/* Baut ein Roller-Feld mit numerischen Optionen von lo..hi inklusive,
+ * zero-padded auf 2 bzw. 4 chars. Gibt das Roller-Objekt zurueck. Rollers
+ * kriegen lv_obj_set_size direkt - Breite steuert die Spaltenbreite.   */
+static lv_obj_t *make_time_roller(lv_obj_t *parent, int lo, int hi,
+                                  int w, int default_idx)
+{
+    /* Worst-case Groesse: (hi-lo+1) Zeilen à 5 chars (1234\n).
+     * 76 Jahre x 5 chars = 380. Sicher mit 512.                     */
+    char opts[512];
+    char *p = opts;
+    for (int v = lo; v <= hi; v++) {
+        int pad = (hi >= 1000) ? 4 : 2;
+        if (p != opts) *p++ = '\n';
+        p += snprintf(p, sizeof(opts) - (p - opts), "%0*d", pad, v);
+    }
+    *p = 0;
+    lv_obj_t *r = lv_roller_create(parent);
+    lv_roller_set_options(r, opts, LV_ROLLER_MODE_NORMAL);
+    lv_roller_set_visible_row_count(r, 3);
+    lv_obj_set_width(r, w);
+    lv_obj_set_style_bg_color(r, SSC_C_ELEVATED, 0);
+    lv_obj_set_style_bg_opa(r,   LV_OPA_COVER, 0);
+    lv_obj_set_style_text_font(r, F_SM, 0);
+    lv_obj_set_style_text_color(r, SSC_C_TEXT, 0);
+    lv_obj_set_style_bg_color(r, SSC_C_ACCENT, LV_PART_SELECTED);
+    lv_obj_set_style_text_color(r, lv_color_hex(0x0a0a0a), LV_PART_SELECTED);
+    lv_roller_set_selected(r, default_idx, LV_ANIM_OFF);
+    return r;
+}
+
+static void show_time_set_modal(void) {
+    if (s_time_overlay) time_modal_close();
+
+    /* Default = aktuelle wall-clock */
+    time_t now = 0; time(&now);
+    struct tm tmv = {0};
+    localtime_r(&now, &tmv);
+    int y_def  = tmv.tm_year + 1900; if (y_def < 2024) y_def = 2026;
+    int mo_def = tmv.tm_mon + 1;
+    int d_def  = tmv.tm_mday;
+    int h_def  = tmv.tm_hour;
+    int mi_def = tmv.tm_min;
+    int s_def  = tmv.tm_sec;
+
+    lv_obj_t *active = lv_scr_act();
+    s_time_overlay = lv_obj_create(active);
+    lv_obj_remove_style_all(s_time_overlay);
+    lv_obj_set_size(s_time_overlay, 480, 480);
+    lv_obj_align(s_time_overlay, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_set_style_bg_color(s_time_overlay, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_time_overlay, 180, 0);
+    lv_obj_clear_flag(s_time_overlay, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *card = lv_obj_create(s_time_overlay);
+    lv_obj_set_size(card, 460, 380);
+    lv_obj_center(card);
+    lv_obj_set_style_bg_color(card, SSC_C_SURFACE, 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_border_color(card, SSC_C_BORDER, 0);
+    lv_obj_set_style_radius(card, SSC_RADIUS_CARD, 0);
+    lv_obj_set_style_pad_all(card, 12, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *t = lv_label_create(card);
+    lv_label_set_text(t, "ZEIT MANUELL SETZEN");
+    lv_obj_set_style_text_color(t, SSC_C_ACCENT, 0);
+    lv_obj_set_style_text_font(t, F_MD, 0);
+    lv_obj_set_style_text_letter_space(t, 2, 0);
+    lv_obj_align(t, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    lv_obj_t *hint = lv_label_create(card);
+    lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(hint,
+        "JAHR   MON   TAG    STD   MIN   SEK\n"
+        "nach apply wird NTP-sync ueberschrieben bis wlan wieder da.");
+    lv_obj_set_style_text_color(hint, SSC_C_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(hint, F_XS, 0);
+    lv_obj_set_width(hint, 420);
+    lv_obj_align(hint, LV_ALIGN_TOP_LEFT, 0, 34);
+
+    /* Roller-Reihe: jahr(72px) / mon(60px) / tag(60px) / std(60px) / min(60px) / sek(60px) */
+    const int ry = 82;  /* Y unterhalb der hint-zeile */
+    int rx = 0;
+    s_time_roll_y = make_time_roller(card, 2024, 2099, 72, y_def - 2024);
+    lv_obj_align(s_time_roll_y, LV_ALIGN_TOP_LEFT, rx, ry); rx += 76;
+    s_time_roll_mo = make_time_roller(card,  1,  12, 60, mo_def - 1);
+    lv_obj_align(s_time_roll_mo, LV_ALIGN_TOP_LEFT, rx, ry); rx += 64;
+    s_time_roll_d  = make_time_roller(card,  1,  31, 60, d_def - 1);
+    lv_obj_align(s_time_roll_d,  LV_ALIGN_TOP_LEFT, rx, ry); rx += 68;
+    s_time_roll_h  = make_time_roller(card,  0,  23, 60, h_def);
+    lv_obj_align(s_time_roll_h,  LV_ALIGN_TOP_LEFT, rx, ry); rx += 64;
+    s_time_roll_mi = make_time_roller(card,  0,  59, 60, mi_def);
+    lv_obj_align(s_time_roll_mi, LV_ALIGN_TOP_LEFT, rx, ry); rx += 64;
+    s_time_roll_s  = make_time_roller(card,  0,  59, 60, s_def);
+    lv_obj_align(s_time_roll_s,  LV_ALIGN_TOP_LEFT, rx, ry);
+
+    /* Cancel / OK */
+    lv_obj_t *cancel = lv_btn_create(card);
+    lv_obj_set_size(cancel, 200, 46);
+    lv_obj_align(cancel, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_style_bg_color(cancel, SSC_C_ELEVATED, 0);
+    lv_obj_set_style_bg_opa(cancel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(cancel, 1, 0);
+    lv_obj_set_style_border_color(cancel, SSC_C_BORDER, 0);
+    lv_obj_set_style_radius(cancel, SSC_RADIUS_BTN, 0);
+    lv_obj_t *cl = lv_label_create(cancel);
+    lv_label_set_text(cl, "ABBRECHEN");
+    lv_obj_set_style_text_color(cl, SSC_C_TEXT, 0);
+    lv_obj_set_style_text_font(cl, F_SM, 0);
+    lv_obj_center(cl);
+    lv_obj_add_event_cb(cancel, on_time_modal_cancel, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *ok = lv_btn_create(card);
+    lv_obj_set_size(ok, 220, 46);
+    lv_obj_align(ok, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+    lv_obj_set_style_bg_color(ok, SSC_C_ACCENT, 0);
+    lv_obj_set_style_bg_opa(ok, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(ok, SSC_RADIUS_BTN, 0);
+    lv_obj_t *okl = lv_label_create(ok);
+    lv_label_set_text(okl, LV_SYMBOL_OK "  ZEIT UEBERNEHMEN");
+    lv_obj_set_style_text_color(okl, lv_color_hex(0x0a0a0a), 0);
+    lv_obj_set_style_text_font(okl, F_SM, 0);
+    lv_obj_center(okl);
+    lv_obj_add_event_cb(ok, on_time_modal_ok, LV_EVENT_CLICKED, NULL);
+}
+
+static void on_settings_time_manual_clicked(lv_event_t *e) {
+    (void)e;
+    show_time_set_modal();
+}
+
+/* Aktualisiert das Diagnose-Label im Settings-Screen basierend auf den
+ * zuletzt empfangenen time-state + boot-info cache-werten. Safe to call
+ * aus event-handlern - greift nur zu wenn Label schon gebaut wurde.   */
+static const char *__time_src_str(uint8_t s) {
+    switch (s) {
+        case TIME_SRC_NTP_SYNCED:   return "NTP";
+        case TIME_SRC_MANUAL:       return "MANUELL";
+        case TIME_SRC_NVS_FALLBACK: return "NVS-FALLBACK";
+        case TIME_SRC_COMPILE_TIME: return "COMPILE-TIME";
+        default:                    return "UNBEKANNT";
+    }
+}
+
+static const char *__esp_reset_str(uint8_t r) {
+    /* esp_reset_reason_t Enum */
+    switch (r) {
+        case 1: return "POWERON";
+        case 2: return "EXT";
+        case 3: return "SW";
+        case 4: return "PANIC";
+        case 5: return "INT_WDT";
+        case 6: return "TASK_WDT";
+        case 7: return "WDT";
+        case 8: return "DEEPSLEEP";
+        case 9: return "BROWNOUT";
+        case 10: return "SDIO";
+        case 0xFF: return "-";
+        default: return "?";
+    }
+}
+
+static const char *__rp_reset_str(uint8_t r) {
+    switch (r) {
+        case 0: return "POR/NORMAL";
+        case 1: return "WATCHDOG";
+        case 0xFF: return "-";
+        default: return "?";
+    }
+}
+
+static void settings_update_diag_label(void) {
+    if (!set_diag_label) return;
+    time_t nowt = 0; time(&nowt);
+    char age_buf[32] = "-";
+    if (g_ui_time_src == TIME_SRC_NTP_SYNCED || g_ui_time_src == TIME_SRC_MANUAL) {
+        if (g_ui_time_last_sync > 0) {
+            long dt = (long)(nowt - g_ui_time_last_sync);
+            if (dt < 0) dt = 0;
+            if (dt < 60) snprintf(age_buf, sizeof(age_buf), "vor %lds", dt);
+            else if (dt < 3600) snprintf(age_buf, sizeof(age_buf), "vor %ldmin", dt/60);
+            else snprintf(age_buf, sizeof(age_buf), "vor %ldh", dt/3600);
+        }
+    }
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+        "ZEIT-QUELLE: %s (%s)\n"
+        "BOOT-COUNTER ESP32: %u   LETZTER RESET: %s\n"
+        "BOOT-COUNTER RP2040: %u  LETZTER RESET: %s",
+        __time_src_str(g_ui_time_src), age_buf,
+        (unsigned)g_ui_esp_boot_count, __esp_reset_str(g_ui_esp_reset_rsn),
+        (unsigned)g_ui_rp_boot_count,  __rp_reset_str(g_ui_rp_reset_rsn));
+    lv_label_set_text(set_diag_label, buf);
+}
+
 static void build_detail(void) {
     scr_detail = lv_obj_create(NULL);
     style_screen(scr_detail);
@@ -2284,6 +2573,36 @@ static void build_settings(void) {
     lv_obj_add_state(http_apply, LV_STATE_DISABLED);
     lv_obj_set_style_opa(http_apply, LV_OPA_40, 0);
 
+    /* ---- v0.2.7: ZEIT + DIAGNOSE --------------------------------- */
+    lv_obj_t *sep_diag = lv_obj_create(body);
+    lv_obj_remove_style_all(sep_diag);
+    lv_obj_set_size(sep_diag, 420, 24);
+    lv_obj_set_style_bg_opa(sep_diag, LV_OPA_TRANSP, 0);
+
+    section_title(body, "ZEIT + DIAGNOSE");
+
+    set_diag_label = lv_label_create(body);
+    lv_label_set_long_mode(set_diag_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(set_diag_label, 420);
+    lv_obj_set_style_text_color(set_diag_label, SSC_C_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(set_diag_label, F_XS, 0);
+    /* initial-text wird gleich von settings_update_diag_label gefuellt */
+    lv_label_set_text(set_diag_label,
+        "ZEIT-QUELLE: ...\n"
+        "BOOT-COUNTER ESP32: -   LETZTER RESET: -\n"
+        "BOOT-COUNTER RP2040: -  LETZTER RESET: -");
+    settings_update_diag_label();
+
+    lv_obj_t *time_set_btn = lv_btn_create(body);
+    style_primary_btn(time_set_btn);
+    lv_obj_set_size(time_set_btn, 420, 42);
+    lv_obj_t *tsl = lv_label_create(time_set_btn);
+    lv_label_set_text(tsl, LV_SYMBOL_EDIT "  ZEIT MANUELL SETZEN");
+    lv_obj_set_style_text_font(tsl, F_SM, 0);
+    lv_obj_center(tsl);
+    lv_obj_add_event_cb(time_set_btn, on_settings_time_manual_clicked,
+                        LV_EVENT_CLICKED, NULL);
+
     /* ---- DANGER ZONE (ganz unten, extra abstand, rot markiert) ---- */
     lv_obj_t *sep_dz = lv_obj_create(body);
     lv_obj_remove_style_all(sep_dz);
@@ -2742,6 +3061,24 @@ static void clock_tick(lv_timer_t *t) {
         (cur == scr_detail)   ? "DETAIL" :
         (cur == scr_settings) ? "SETTINGS" : "LEGACY!!";
     ESP_LOGI(TAG, "heartbeat: scr=%s running=%d", sname, live_running);
+
+    /* v0.2.7: last-active-screen in NVS persistieren (alle 10s - selten
+     * genug, dass flash-wear unproblematisch ist). Bei unclean reboot
+     * kann man damit in Logs / INFO sehen "zuletzt war screen=LIVE".  */
+    static const char *s_last_persisted = NULL;
+    if (sname != s_last_persisted) {
+        s_last_persisted = sname;
+        nvs_handle_t h;
+        if (nvs_open("indicator", NVS_READWRITE, &h) == ESP_OK) {
+            nvs_set_str(h, "last_scr", sname);
+            nvs_commit(h);
+            nvs_close(h);
+        }
+    }
+
+    /* v0.2.7: diagnose-label im settings re-rendern (fuer die "vor X min"
+     * age-anzeige - andere felder aendern sich nur bei events).         */
+    settings_update_diag_label();
 }
 
 /* ======================================================================= */
@@ -2797,6 +3134,44 @@ static void on_view_event(void *arg, esp_event_base_t base,
     case VIEW_EVENT_PROBE_STATE:
         if (ev_data) on_probe_state(ev_data);
         break;
+    case VIEW_EVENT_TIME_STATE_UPDATE:
+        if (ev_data) {
+            const struct view_data_time_state *ts = ev_data;
+            g_ui_time_src       = ts->source;
+            g_ui_time_last_sync = ts->last_sync_ts;
+            /* Badge aktualisieren: sichtbar wenn source nicht NTP_SYNCED
+             * oder wenn letzte sync > 10 min alt.                        */
+            time_t nowt = 0; time(&nowt);
+            bool stale = (ts->source != TIME_SRC_NTP_SYNCED) ||
+                         (ts->last_sync_ts == 0) ||
+                         ((nowt - ts->last_sync_ts) > 600);
+            if (home_clock_warn) {
+                if (stale) lv_obj_clear_flag(home_clock_warn, LV_OBJ_FLAG_HIDDEN);
+                else       lv_obj_add_flag(home_clock_warn,   LV_OBJ_FLAG_HIDDEN);
+            }
+            settings_update_diag_label();
+        }
+        break;
+    case VIEW_EVENT_BOOT_INFO:
+        if (ev_data) {
+            const struct view_data_boot_info *bi = ev_data;
+            g_ui_esp_boot_count = bi->boot_count;
+            g_ui_esp_reset_rsn  = bi->reset_reason;
+            ESP_LOGW(TAG, "esp32 boot_count=%u reset_reason=%u",
+                     (unsigned)bi->boot_count, (unsigned)bi->reset_reason);
+            settings_update_diag_label();
+        }
+        break;
+    case VIEW_EVENT_RP_BOOT_INFO:
+        if (ev_data) {
+            const struct view_data_rp_boot_info *rb = ev_data;
+            g_ui_rp_boot_count = rb->boot_count;
+            g_ui_rp_reset_rsn  = rb->reset_reason;
+            ESP_LOGW(TAG, "rp2040 boot_count=%u reset_reason=%u",
+                     (unsigned)rb->boot_count, (unsigned)rb->reset_reason);
+            settings_update_diag_label();
+        }
+        break;
     case VIEW_EVENT_WIFI_ST:
         if (ev_data && set_wifi_info) {
             const struct view_data_wifi_st *st = ev_data;
@@ -2838,12 +3213,15 @@ static void on_view_event(void *arg, esp_event_base_t base,
 /*   Init                                                                    */
 /* ======================================================================= */
 
-/* Parst __DATE__ "Apr 22 2026" + __TIME__ "15:30:45" in time_t, damit
- * wir bei fehlendem NTP wenigstens ein realistisches Datum haben.  */
-static time_t boot_compile_time(void) {
+/* Parst __DATE__ "Apr 22 2026" + __TIME__ "15:30:45" in time_t. Wird nur
+ * als "harte letzte Linie" genutzt, falls indicator_time_init noch nicht
+ * gelaufen ist, wenn die UI die ersten clock-ticks rendert. Die
+ * eigentliche Zeit-Quality-Logik (NVS-fallback + NTP) lebt in
+ * indicator_time.c - siehe __time_state_load_and_apply_fallback().   */
+static time_t ui_compile_time_fallback(void) {
     static const char *months = "JanFebMarAprMayJunJulAugSepOctNovDec";
-    const char *d = __DATE__;   /* "Mmm DD YYYY" */
-    const char *t = __TIME__;   /* "HH:MM:SS" */
+    const char *d = __DATE__;
+    const char *t = __TIME__;
     struct tm tmv = {0};
     char mon[4] = { d[0], d[1], d[2], 0 };
     const char *p = strstr(months, mon);
@@ -2859,15 +3237,18 @@ static time_t boot_compile_time(void) {
 void ui_sauna_init(void) {
     ESP_LOGI(TAG, "ui_sauna_init (480x480 dark-CI)");
 
-    /* Wenn kein NTP schon gelaufen ist (time=1970), setze compile-time
-     * als fallback. Die Uhr tickt dann ab da - besser als 01.01. 00:00.
-     * Sobald WiFi und NTP greifen, wird von dort ueberschrieben.    */
+    /* v0.2.7: Belt-and-suspenders. indicator_time_init setzt die Zeit
+     * auf max(NVS-persist, compile-time), laeuft aber nach ui_sauna_init.
+     * Damit der erste clock_tick(NULL) am Ende dieser Funktion keine
+     * 1970er-Zeit rendert, setzen wir hier bereits die compile-time als
+     * rueckfall. Das eigentliche quality-tracking uebernimmt indicator_time
+     * anschliessend.                                                     */
     time_t now = 0; time(&now);
     if (now < 1700000000) {
-        time_t ct = boot_compile_time();
+        time_t ct = ui_compile_time_fallback();
         struct timeval tv = { .tv_sec = ct, .tv_usec = 0 };
         settimeofday(&tv, NULL);
-        ESP_LOGI(TAG, "RTC fallback auf compile-time (%ld)", (long)ct);
+        ESP_LOGI(TAG, "UI early compile-time fallback (%ld)", (long)ct);
     }
 
     font_init();
@@ -2908,6 +3289,10 @@ void ui_sauna_init(void) {
         VIEW_EVENT_PROBE_STATE,
         VIEW_EVENT_WIFI_ST,
         VIEW_EVENT_WIFI_CONNECT_RET,
+        /* v0.2.7: zeit-quality + crash-observability */
+        VIEW_EVENT_TIME_STATE_UPDATE,
+        VIEW_EVENT_BOOT_INFO,
+        VIEW_EVENT_RP_BOOT_INFO,
     };
     for (size_t i = 0; i < sizeof(listened)/sizeof(listened[0]); i++) {
         esp_err_t e = esp_event_handler_register_with(
