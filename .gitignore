@@ -6,6 +6,7 @@
 **/__pycache__/
 
 # ESP-IDF generierte Files
+sdkconfig
 sdkconfig.old
 dependencies.lock
 

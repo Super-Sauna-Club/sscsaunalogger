@@ -243,7 +243,11 @@ idf.py -p /dev/cu.usbmodem1101 flash monitor
 
 ### Windows
 
-1. **ESP-IDF v5.1 installieren:** Den [ESP-IDF Tools Installer für Windows](https://dl.espressif.com/dl/esp-idf/) herunterladen, beim Installer die Version **v5.1** wählen (nicht die neueste). Der Installer richtet Python, Git, Toolchain und das Startmenü-Item *„ESP-IDF 5.1 CMD"* ein.
+1. **ESP-IDF v5.1 installieren:** Den **Universal Online Installer** von Espressif herunterladen — direkter Link:
+
+   👉 **[esp-idf-tools-setup-online-2.4.1.exe](https://github.com/espressif/idf-installer/releases/download/online-2.4.1/esp-idf-tools-setup-online-2.4.1.exe)** (4,6 MB, aus dem [offiziellen Espressif-Release](https://github.com/espressif/idf-installer/releases/tag/online-2.4.1))
+
+   Beim Installer-Wizard die ESP-IDF-Version **v5.1** auswählen (nicht die neueste — v5.2+ brechen den Build mit Header-Inkompatibilitäten). Der Installer richtet Python, Git, Toolchain und das Startmenü-Item *„ESP-IDF 5.1 CMD"* ein. Übersicht aller verfügbaren Installer: [dl.espressif.com/dl/esp-idf](https://dl.espressif.com/dl/esp-idf/).
 2. **Arduino-CLI installieren:** Den [Windows-Build](https://arduino.github.io/arduino-cli/latest/installation/) entpacken, `arduino-cli.exe` in einen Ordner im `PATH` legen.
 3. **RP2040-Core einrichten** (in `cmd.exe` oder PowerShell):
 
