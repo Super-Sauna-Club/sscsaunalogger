@@ -126,27 +126,27 @@ Auf der ESP32-Seite sind die Pins ebenfalls vom Board festgelegt — Display, To
 
 ### Anschluss der Sauna-Probe
 
-Der externe Fühler wird mit vier Drähten geliefert. Die übliche Belegung am Pigtail:
+Der externe Fühler wird mit vier Drähten geliefert. In der Praxis verifizierte Belegung am Pigtail:
 
 | Draht | Funktion | Anschluss am D1/D1S |
 |---|---|---|
 | Rot | VDD (3,3 V) | 3V3 |
 | Schwarz | GND | GND |
-| Gelb | SCL (Clock) | GP21 |
-| Grün | SDA (Data) | GP20 |
+| Gelb | SDA (Data) | GP20 |
+| Grün | SCL (Clock) | GP21 |
 
 #### Anschluss über Grove-I²C
 
-Das D1/D1S-Board hat einen Grove-I²C-Connector. Bei Verwendung eines Grove-zu-4-Pin-Kabels ist die Zuordnung gradlinig — der einzige **Überraschungs-Pin** ist SDA: das **grüne** Fühler-Kabel landet am **weißen** Grove-Draht.
+Das D1/D1S-Board hat einen Grove-I²C-Connector. Bei Verwendung eines Grove-zu-4-Pin-Kabels passen die **Datenleitungen nicht nach Farbe** zusammen — beide müssen entgegen der intuitiven Farbzuordnung gekreuzt werden:
 
 | Fühler | Grove I²C | Funktion |
 |---|---|---|
 | Rot | Rot | VCC (3,3 V) |
 | Schwarz | Schwarz | GND |
-| Gelb | Gelb | SCL (Clock) |
-| Grün | **Weiß** | SDA (Data) |
+| Gelb | **Weiß** | SDA (Data) |
+| Grün | **Gelb** | SCL (Clock) |
 
-Wer Grün auf Grün steckt, vertauscht SDA und SCL gegenüber dem Grove-Standard. Symptom: Der I²C-Scan findet keine `0x44`, im Boot-Log erscheint `SHT3x not found on I2C 0x44 or 0x45`.
+Wer nach Farbe steckt (Gelb auf Gelb, Grün auf Grün), vertauscht SDA und SCL gegenüber dem Grove-Standard. Symptom: Der I²C-Scan findet keine `0x44`, im Boot-Log erscheint `SHT3x not found on I2C 0x44 or 0x45`.
 
 #### Aufbau-Hinweise
 
