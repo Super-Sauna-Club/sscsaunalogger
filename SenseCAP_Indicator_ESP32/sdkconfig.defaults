@@ -76,3 +76,13 @@ CONFIG_LV_FONT_MONTSERRAT_42=y
 CONFIG_LV_FONT_MONTSERRAT_44=y
 CONFIG_LV_FONT_MONTSERRAT_46=y
 CONFIG_LV_FONT_MONTSERRAT_48=y
+
+
+# Per-transfer i2c driver-reinstall ist auf diesem Board kontraproduktiv:
+# alle i2c0-devices fahren 400 kHz (bsp_i2c_add_device hardcodet das),
+# dynamic-config bringt 0 Mehrwert und triggert unter knappem internem Heap
+# PSRAM-cache-IllegalInstruction (touchpad-read-pfad und LVGL layout-loads
+# auf widget-trees in PSRAM). Vom user identifiziert vor v0.3.2; jetzt als
+# minimal-fix auf v0.2.8 baseline rausgepickt nachdem der vollstaendige
+# v0.3.2-stash wegen lvgl-mutex-race nicht direkt reapplybar war.
+CONFIG_I2C_BUS_DYNAMIC_CONFIG=n
