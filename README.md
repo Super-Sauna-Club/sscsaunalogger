@@ -16,9 +16,15 @@ Ein autarkes Mess- und Aufzeichnungsgerät, das Kabinentemperatur, Luftfeuchte u
 
 <br/>
 
-<img src="docs/images/sauna-logger-detail.jpg" alt="sscsaunalogger im Einsatz — Home-Screen mit Live-Werten und Session-Liste" width="520" />
+<img src="docs/images/device-with-chart.jpg" alt="sscsaunalogger während einer aktiven Sauna-Session — Kabine 83,7 °C" width="420" />
 
-<sub><i>Home-Screen während des Vorraum-Betriebs: Kabinen- und Vorraumwerte live, Sessions-Liste, START-Button.</i></sub>
+<sub><i>Home-Screen während aktiver Session: Kabinen-Temperatur 83,7 °C, Vorraumwerte und CO₂, vorherige Session „Bernhard · 6 TN" in der History.</i></sub>
+
+<br/><br/>
+
+<img src="docs/images/session-1-bernhard.png" alt="Session 1 — Bernhard G., 27. April 2026" width="780" />
+
+<sub><i>Session 1 von Bernhard G. — Peak 85,3 °C, mittlere Temperatur 82,0 °C, drei Aufgüsse über 15,9 min mit charakteristischem Feuchte-Anstieg auf 31,3 % RH.</i></sub>
 
 </div>
 
@@ -359,14 +365,6 @@ Der ESP32-Teil folgt einem **Model-View-Controller**-Schema: das Modell hält Se
 Der RP2040-Sketch ist bewusst monolithisch — eine einzige `.ino`-Datei mit klarer Funktions-Aufteilung (Sensor-Init, Mess-Tick, SD-Gateway, UART-Dispatch). Diese Kompaktheit erleichtert das Reasoning über die Watchdog-Pfade.
 
 ## Bedienung
-
-<div align="center">
-
-<img src="docs/images/session-chart.svg" alt="Schematischer Session-Verlauf: Aufheizphase, zwei Aufgüsse mit Feuchte-Spike, Plateau" width="780" />
-
-<sub><i>Schematischer Verlauf einer 30-min-Session: Aufheizphase 0–15 min, danach zwei Aufgüsse mit charakteristischem Feuchte-Spike (sage) und kurzem Temperatur-Dip (gold).</i></sub>
-
-</div>
 
 ### Live-Flow
 
