@@ -22,9 +22,15 @@ Ein autarkes Mess- und Aufzeichnungsgerät, das Kabinentemperatur, Luftfeuchte u
 
 <br/><br/>
 
+<img src="docs/images/graph-15min-3aufgusse.jpg" alt="Detail-Chart der Session S20260427 auf dem Gerät — 15 min, Peak 85 °C, 3 Aufgüsse" width="420" />
+
+<sub><i>Detail-Chart auf dem Gerät: 15-min-Session mit Peak 85 °C und drei Aufguss-Spikes — direkt am Display sichtbar mit Buttons für BEARBEITEN, LÖSCHEN und ZURÜCK.</i></sub>
+
+<br/><br/>
+
 <img src="docs/images/session-1-bernhard.png" alt="Session 1 — Bernhard G., 27. April 2026" width="780" />
 
-<sub><i>Session 1 von Bernhard G. — Peak 85,3 °C, mittlere Temperatur 82,0 °C, drei Aufgüsse über 15,9 min mit charakteristischem Feuchte-Anstieg auf 31,3 % RH.</i></sub>
+<sub><i>Dieselben Daten als Web-Visualisierung — Peak 85,3 °C, mittlere Temperatur 82,0 °C, drei Aufgüsse über 15,9 min mit charakteristischem Feuchte-Anstieg auf 31,3 % RH.</i></sub>
 
 </div>
 
