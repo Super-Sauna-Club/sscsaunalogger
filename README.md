@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="ssc-logo.svg" alt="Super Sauna Club" width="220" />
+<img src="ssc-logo.svg" alt="Super Sauna Club" width="200" />
 
 # sscsaunalogger
 
@@ -13,6 +13,12 @@ Ein autarkes Mess- und Aufzeichnungsgerät, das Kabinentemperatur, Luftfeuchte u
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Hardware: SenseCAP D1S](https://img.shields.io/badge/Hardware-SenseCAP%20D1%2FD1S-2c9c7c.svg)](https://www.seeedstudio.com/SenseCAP-Indicator-D1S-p-5643.html)
 [![ESP-IDF: v5.1](https://img.shields.io/badge/ESP--IDF-v5.1-c9a84c.svg)](https://docs.espressif.com/projects/esp-idf/en/v5.1/esp32s3/index.html)
+
+<br/>
+
+<img src="docs/images/sauna-logger-detail.jpg" alt="sscsaunalogger im Einsatz — Home-Screen mit Live-Werten und Session-Liste" width="520" />
+
+<sub><i>Home-Screen während des Vorraum-Betriebs: Kabinen- und Vorraumwerte live, Sessions-Liste, START-Button.</i></sub>
 
 </div>
 
@@ -353,6 +359,14 @@ Der ESP32-Teil folgt einem **Model-View-Controller**-Schema: das Modell hält Se
 Der RP2040-Sketch ist bewusst monolithisch — eine einzige `.ino`-Datei mit klarer Funktions-Aufteilung (Sensor-Init, Mess-Tick, SD-Gateway, UART-Dispatch). Diese Kompaktheit erleichtert das Reasoning über die Watchdog-Pfade.
 
 ## Bedienung
+
+<div align="center">
+
+<img src="docs/images/session-chart.svg" alt="Schematischer Session-Verlauf: Aufheizphase, zwei Aufgüsse mit Feuchte-Spike, Plateau" width="780" />
+
+<sub><i>Schematischer Verlauf einer 30-min-Session: Aufheizphase 0–15 min, danach zwei Aufgüsse mit charakteristischem Feuchte-Spike (sage) und kurzem Temperatur-Dip (gold).</i></sub>
+
+</div>
 
 ### Live-Flow
 
