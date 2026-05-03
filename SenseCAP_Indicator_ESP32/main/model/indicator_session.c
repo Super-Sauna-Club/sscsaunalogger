@@ -751,10 +751,16 @@ static void session_worker(void *arg) {
                 retry_count = 0;
             }
 
-            /* ABSOLUTES Zeit-Limit: 5 s. Garantie fuer den User: er
-             * sieht spaetestens nach 5 s die (teilweise) Kurve. */
+            /* ABSOLUTES Zeit-Limit: 60 s. v0.2.11: 5 s war fuer lange
+             * sessions viel zu knapp - bei 64-byte UART-chunks und
+             * request-response-protokoll braucht eine 30-min-session
+             * realistisch 30-60 s zum vollstaendigen einlesen. Das alte
+             * limit hat regelmaessig "halbe session" beim detail-view
+             * ausgeloest. Der stall-watchdog (3 s ohne progress, max 10
+             * retries) faengt echte haenger ohnehin viel frueher ab -
+             * dieses 60-s-limit ist nur safety-net fuer extrem-faelle. */
             uint32_t total_ms = (uint32_t)((now_us - s_rbk_t_start_us) / 1000);
-            bool time_up = total_ms > 5000;
+            bool time_up = total_ms > 60000;
 
             if (chunks_rx_now == last_chunks) {
                 stall_ticks++;
