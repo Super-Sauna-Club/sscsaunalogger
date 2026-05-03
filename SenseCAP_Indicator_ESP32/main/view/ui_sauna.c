@@ -33,6 +33,8 @@
 #include "nvs.h"
 #include <sys/time.h>
 #include <stdint.h>
+#include <limits.h>
+#include <stdbool.h>
 
 #include "view_data.h"
 #include "ui_sauna.h"
@@ -116,6 +118,11 @@ static lv_obj_t *live_aufguss_count_val;
 static lv_obj_t *live_chart;
 static lv_chart_series_t *live_ser_temp;
 static lv_chart_series_t *live_ser_rh;
+/* v0.2.10: y-achsen-labels fuer den live-chart - werden vom rolling
+ * auto-range im on_session_live geupdated (alle 2 s, nur bei
+ * geaenderter nice-rounded range). */
+static lv_obj_t *live_y_left_lbl[5];
+static lv_obj_t *live_y_right_lbl[5];
 static lv_obj_t *live_aufguss_btn;
 static lv_obj_t *live_start_btn;      /* READY -> session starten */
 static lv_obj_t *live_stop_btn;       /* RUNNING -> session beenden (summary) */
@@ -161,6 +168,14 @@ static lv_obj_t *detail_chart;
  * in on_history_row_clicked (duration-source) + on_history_detail_done
  * (text update). */
 static lv_obj_t *detail_x_lbl[5];
+/* v0.2.10: y-achsen-labels mussten in module-statics ziehen damit der
+ * auto-range sie nach jeder session-load updaten kann. links = °C,
+ * rechts = rh%. Initial werden sie in build_detail() mit fix-werten
+ * (120/90/60/30/0 bzw. 100/75/50/25/0) belegt; on_history_detail_done
+ * berechnet die nice-rounded range aus den geladenen samples und
+ * schreibt neue text-werte rein. */
+static lv_obj_t *detail_y_left_lbl[5];
+static lv_obj_t *detail_y_right_lbl[5];
 static uint32_t  s_detail_duration_s = 0;
 static lv_obj_t *detail_spinner;      /* loading-indikator */
 static lv_chart_series_t *detail_ser_temp;
@@ -181,6 +196,159 @@ static struct {
     uint16_t cap;
     char     sid[SSC_SESSION_ID_LEN];
 } s_detail_buf;
+
+/* ======================================================================= */
+/*   v0.2.10: Auto-Range fuer chart-y-achsen                                */
+/* ======================================================================= */
+/* User-feedback (2026-05-03): die festen 0-120 °C / 0-100 % RH skalen
+ * fressen die kurve. Saunen mit 77-87 °C / 5-35 % rh werden nur in einem
+ * schmalen mittelbereich des charts sichtbar. Loesung: nice-numbers
+ * auto-range pro session. RH-min auf 0 gepinnt (referenz-anker), temp
+ * frei. Step = 5, mindest-spreizung = 10 °C bzw. 20 % RH. Aufguss-marker
+ * (auf der RH-serie) wird auf rh_max statt hartcodiert 100 gesetzt damit
+ * der vertikale spike die ganze chart-hoehe einnimmt.                     */
+
+/* v0.2.10: chart-werte werden mit faktor SSC_CHART_SCALE intern als
+ * int16 codiert. So bekommen wir 0.1 °C / 0.1 % aufloesung in der kurve
+ * (ohne den datentyp auf int32 zu ziehen). Beispiel: 25.6 °C → 256.
+ * Range-werte und mindest-spreizung sind in DERSELBEN domain (also
+ * 5 °C-step = 50). Die display-labels werden vor dem rendern wieder
+ * durch SCALE geteilt und als ganzzahl angezeigt.                    */
+#define SSC_CHART_SCALE           10
+#define SSC_CHART_NICE_STEP       (5 * SSC_CHART_SCALE)
+#define SSC_CHART_TEMP_MIN_SPREAD (10 * SSC_CHART_SCALE)
+#define SSC_CHART_RH_MIN_SPREAD   (20 * SSC_CHART_SCALE)
+
+/* Berechnet nice-rounded min/max aus int16-werten. INT16_MIN ist
+ * NaN-sentinel und wird ignoriert. Wenn pin_min_to_zero=true wird
+ * out_min immer auf 0 gesetzt (fuer rh-achse). out_min/out_max
+ * werden auf step-vielfache gerundet, mit luftpolster von 1 raster-
+ * einheit. Wenn keine validen werte gefunden werden, liefert die
+ * funktion fallback_min/fallback_max zurueck.                       */
+static void compute_nice_range(const int16_t *values, size_t n,
+                               bool pin_min_to_zero,
+                               int step, int min_spread,
+                               int fallback_min, int fallback_max,
+                               int *out_min, int *out_max)
+{
+    int min_v = INT_MAX, max_v = INT_MIN;
+    size_t valid = 0;
+    for (size_t i = 0; i < n; i++) {
+        int16_t v = values[i];
+        if (v == INT16_MIN) continue;  /* NaN-sentinel */
+        if (v < min_v) min_v = v;
+        if (v > max_v) max_v = v;
+        valid++;
+    }
+    if (valid == 0) {
+        *out_min = fallback_min;
+        *out_max = fallback_max;
+        return;
+    }
+    /* +/- 1 grad luftpolster vor der rundung damit datenpunkte nicht
+     * exakt am chart-rand kleben.                                    */
+    int min_raw = min_v - 1;
+    int max_raw = max_v + 1;
+    /* nach unten auf step abrunden, nach oben auf step aufrunden.
+     * floor/ceil-arithmetik fuer negative werte mitgedacht (sauna-
+     * temp ist immer positiv aber pin_min_to_zero erwischt das auch). */
+    int rmin, rmax;
+    if (pin_min_to_zero) {
+        rmin = 0;
+    } else {
+        rmin = (min_raw / step) * step;
+        if (min_raw < 0 && (min_raw % step) != 0) rmin -= step;
+    }
+    rmax = ((max_raw + step - 1) / step) * step;
+    if (max_raw < 0 && (max_raw % step) != 0) rmax = (max_raw / step) * step;
+
+    /* Mindest-spreizung erzwingen damit selbst bei stuck-sensor-werten
+     * (min == max) noch was sichtbar ist.                              */
+    if (rmax - rmin < min_spread) {
+        if (pin_min_to_zero) {
+            rmax = rmin + min_spread;
+        } else {
+            int needed = min_spread - (rmax - rmin);
+            int half   = ((needed + 1) / 2 + step - 1) / step * step;
+            rmin -= half;
+            rmax += half;
+        }
+    }
+    *out_min = rmin;
+    *out_max = rmax;
+}
+
+/* Variante die direkt aus dem LVGL-chart-ringbuffer min/max berechnet.
+ * Fuer den live-chart, wo wir keinen separaten datenpuffer haben.    */
+static void compute_nice_range_from_chart(lv_obj_t *chart,
+                                          lv_chart_series_t *series,
+                                          bool pin_min_to_zero,
+                                          int step, int min_spread,
+                                          int fallback_min, int fallback_max,
+                                          int *out_min, int *out_max)
+{
+    if (!chart || !series) {
+        *out_min = fallback_min;
+        *out_max = fallback_max;
+        return;
+    }
+    uint16_t pcnt = lv_chart_get_point_count(chart);
+    lv_coord_t *arr = lv_chart_get_y_array(chart, series);
+    if (!arr || pcnt == 0) {
+        *out_min = fallback_min;
+        *out_max = fallback_max;
+        return;
+    }
+    int min_v = INT_MAX, max_v = INT_MIN;
+    size_t valid = 0;
+    for (uint16_t i = 0; i < pcnt; i++) {
+        if (arr[i] == LV_CHART_POINT_NONE) continue;
+        if (arr[i] < min_v) min_v = arr[i];
+        if (arr[i] > max_v) max_v = arr[i];
+        valid++;
+    }
+    if (valid == 0) {
+        *out_min = fallback_min;
+        *out_max = fallback_max;
+        return;
+    }
+    int min_raw = min_v - 1;
+    int max_raw = max_v + 1;
+    int rmin, rmax;
+    if (pin_min_to_zero) {
+        rmin = 0;
+    } else {
+        rmin = (min_raw / step) * step;
+        if (min_raw < 0 && (min_raw % step) != 0) rmin -= step;
+    }
+    rmax = ((max_raw + step - 1) / step) * step;
+    if (max_raw < 0 && (max_raw % step) != 0) rmax = (max_raw / step) * step;
+    if (rmax - rmin < min_spread) {
+        if (pin_min_to_zero) {
+            rmax = rmin + min_spread;
+        } else {
+            int needed = min_spread - (rmax - rmin);
+            int half   = ((needed + 1) / 2 + step - 1) / step * step;
+            rmin -= half;
+            rmax += half;
+        }
+    }
+    *out_min = rmin;
+    *out_max = rmax;
+}
+
+/* Fuellt 5 y-labels mit linear interpolierten werten zwischen min/max,
+ * top-to-bottom (also array[0]=max, array[4]=min). Werte sind in der
+ * SSC_CHART_SCALE-domain (also *10) und werden fuer die anzeige
+ * wieder durch SCALE geteilt - so steht "85" statt "850".              */
+static void __set_y_labels(lv_obj_t *labels[5], int axis_min, int axis_max)
+{
+    for (int i = 0; i < 5; i++) {
+        if (!labels[i]) continue;
+        int v = axis_max - i * (axis_max - axis_min) / 4;
+        lv_label_set_text_fmt(labels[i], "%d", v / SSC_CHART_SCALE);
+    }
+}
 
 static lv_obj_t *sum_keyboard;      /* bottom-sliding keyboard fuer Summary */
 static lv_obj_t *set_keyboard;      /* bottom-sliding keyboard fuer Settings */
@@ -1048,34 +1216,31 @@ static void build_live(void) {
     lv_obj_clear_flag(chart_wrap, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(chart_wrap, 0, 0);
 
-    /* Y-Achsenbeschriftungen LINKS (°C, 0-120 in 30er-Schritten).
+    /* Y-Achsenbeschriftungen LINKS (°C, initial 0-120; v0.2.10: werden
+     * vom rolling auto-range im on_session_live geupdated).
      * Chart-hoehe 222 px → labels bei y = 12 + i*222/4 - 7           */
     const int y_left_values[] = {120, 90, 60, 30, 0};
     for (int i = 0; i < 5; i++) {
-        lv_obj_t *l = lv_label_create(chart_wrap);
-        char buf[8];
-        snprintf(buf, sizeof(buf), "%d", y_left_values[i]);
-        lv_label_set_text(l, buf);
-        lv_obj_set_style_text_color(l, SSC_C_CHART_TEMP, 0);
-        lv_obj_set_style_text_font(l, F_XS, 0);
-        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_RIGHT, 0);
+        live_y_left_lbl[i] = lv_label_create(chart_wrap);
+        lv_label_set_text_fmt(live_y_left_lbl[i], "%d", y_left_values[i]);
+        lv_obj_set_style_text_color(live_y_left_lbl[i], SSC_C_CHART_TEMP, 0);
+        lv_obj_set_style_text_font(live_y_left_lbl[i], F_XS, 0);
+        lv_obj_set_style_text_align(live_y_left_lbl[i], LV_TEXT_ALIGN_RIGHT, 0);
         int y_pos = 12 + (i * 222) / 4 - 7;
-        lv_obj_set_pos(l, 4, y_pos);
-        lv_obj_set_size(l, 34, 14);
+        lv_obj_set_pos(live_y_left_lbl[i], 4, y_pos);
+        lv_obj_set_size(live_y_left_lbl[i], 34, 14);
     }
 
-    /* Y-Achsenbeschriftungen RECHTS (%, 0-100 in 25er-Schritten) */
+    /* Y-Achsenbeschriftungen RECHTS (%, initial 0-100; v0.2.10 auto-range) */
     const int y_right_values[] = {100, 75, 50, 25, 0};
     for (int i = 0; i < 5; i++) {
-        lv_obj_t *l = lv_label_create(chart_wrap);
-        char buf[8];
-        snprintf(buf, sizeof(buf), "%d", y_right_values[i]);
-        lv_label_set_text(l, buf);
-        lv_obj_set_style_text_color(l, SSC_C_CHART_RH, 0);
-        lv_obj_set_style_text_font(l, F_XS, 0);
+        live_y_right_lbl[i] = lv_label_create(chart_wrap);
+        lv_label_set_text_fmt(live_y_right_lbl[i], "%d", y_right_values[i]);
+        lv_obj_set_style_text_color(live_y_right_lbl[i], SSC_C_CHART_RH, 0);
+        lv_obj_set_style_text_font(live_y_right_lbl[i], F_XS, 0);
         int y_pos = 12 + (i * 222) / 4 - 7;
-        lv_obj_set_pos(l, 456 - 36, y_pos);
-        lv_obj_set_size(l, 32, 14);
+        lv_obj_set_pos(live_y_right_lbl[i], 456 - 36, y_pos);
+        lv_obj_set_size(live_y_right_lbl[i], 32, 14);
     }
 
     /* Einheiten-Labels oben an Y-Achsen */
@@ -1113,8 +1278,10 @@ static void build_live(void) {
     lv_obj_set_pos(live_chart, 38, 14);
     lv_chart_set_type(live_chart, LV_CHART_TYPE_LINE);
     lv_chart_set_point_count(live_chart, LIVE_CHART_POINTS);
-    lv_chart_set_range(live_chart, LV_CHART_AXIS_PRIMARY_Y, 0, 120);
-    lv_chart_set_range(live_chart, LV_CHART_AXIS_SECONDARY_Y, 0, 100);
+    /* v0.2.10: range in SSC_CHART_SCALE-domain (*10). Initial 0-1200/0-1000,
+     * wird durch rolling auto-range im on_session_live runtergeschraubt. */
+    lv_chart_set_range(live_chart, LV_CHART_AXIS_PRIMARY_Y,   0, 120 * SSC_CHART_SCALE);
+    lv_chart_set_range(live_chart, LV_CHART_AXIS_SECONDARY_Y, 0, 100 * SSC_CHART_SCALE);
     lv_chart_set_div_line_count(live_chart, 5, 5);
     lv_chart_set_update_mode(live_chart, LV_CHART_UPDATE_MODE_SHIFT);
     lv_obj_set_style_pad_all(live_chart, 0, 0);
@@ -2131,30 +2298,28 @@ static void build_detail(void) {
     lv_obj_clear_flag(dchart_wrap, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(dchart_wrap, 0, 0);
 
+    /* v0.2.10: y-labels in module-statics speichern damit auto-range
+     * sie in on_history_detail_done updaten kann.                     */
     const int dyL[] = {120, 90, 60, 30, 0};
     for (int i = 0; i < 5; i++) {
-        lv_obj_t *l = lv_label_create(dchart_wrap);
-        char buf[8];
-        snprintf(buf, sizeof(buf), "%d", dyL[i]);
-        lv_label_set_text(l, buf);
-        lv_obj_set_style_text_color(l, SSC_C_CHART_TEMP, 0);
-        lv_obj_set_style_text_font(l, F_XS, 0);
-        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_RIGHT, 0);
+        detail_y_left_lbl[i] = lv_label_create(dchart_wrap);
+        lv_label_set_text_fmt(detail_y_left_lbl[i], "%d", dyL[i]);
+        lv_obj_set_style_text_color(detail_y_left_lbl[i], SSC_C_CHART_TEMP, 0);
+        lv_obj_set_style_text_font(detail_y_left_lbl[i], F_XS, 0);
+        lv_obj_set_style_text_align(detail_y_left_lbl[i], LV_TEXT_ALIGN_RIGHT, 0);
         int y_pos = 12 + (i * 316) / 4 - 7;
-        lv_obj_set_pos(l, 4, y_pos);
-        lv_obj_set_size(l, 34, 14);
+        lv_obj_set_pos(detail_y_left_lbl[i], 4, y_pos);
+        lv_obj_set_size(detail_y_left_lbl[i], 34, 14);
     }
     const int dyR[] = {100, 75, 50, 25, 0};
     for (int i = 0; i < 5; i++) {
-        lv_obj_t *l = lv_label_create(dchart_wrap);
-        char buf[8];
-        snprintf(buf, sizeof(buf), "%d", dyR[i]);
-        lv_label_set_text(l, buf);
-        lv_obj_set_style_text_color(l, SSC_C_CHART_RH, 0);
-        lv_obj_set_style_text_font(l, F_XS, 0);
+        detail_y_right_lbl[i] = lv_label_create(dchart_wrap);
+        lv_label_set_text_fmt(detail_y_right_lbl[i], "%d", dyR[i]);
+        lv_obj_set_style_text_color(detail_y_right_lbl[i], SSC_C_CHART_RH, 0);
+        lv_obj_set_style_text_font(detail_y_right_lbl[i], F_XS, 0);
         int y_pos = 12 + (i * 316) / 4 - 7;
-        lv_obj_set_pos(l, 456 - 36, y_pos);
-        lv_obj_set_size(l, 32, 14);
+        lv_obj_set_pos(detail_y_right_lbl[i], 456 - 36, y_pos);
+        lv_obj_set_size(detail_y_right_lbl[i], 32, 14);
     }
     lv_obj_t *dlu_c = lv_label_create(dchart_wrap);
     lv_label_set_text(dlu_c, "°C");
@@ -2173,8 +2338,10 @@ static void build_detail(void) {
     lv_chart_set_type(detail_chart, LV_CHART_TYPE_LINE);
     lv_chart_set_update_mode(detail_chart, LV_CHART_UPDATE_MODE_SHIFT);
     lv_chart_set_point_count(detail_chart, DETAIL_CHART_POINTS);
-    lv_chart_set_range(detail_chart, LV_CHART_AXIS_PRIMARY_Y, 0, 120);
-    lv_chart_set_range(detail_chart, LV_CHART_AXIS_SECONDARY_Y, 0, 100);
+    /* v0.2.10: range in SSC_CHART_SCALE-domain (*10). Initial 0-1200/0-1000,
+     * on_history_detail_done berechnet die echten min/max neu.           */
+    lv_chart_set_range(detail_chart, LV_CHART_AXIS_PRIMARY_Y,   0, 120 * SSC_CHART_SCALE);
+    lv_chart_set_range(detail_chart, LV_CHART_AXIS_SECONDARY_Y, 0, 100 * SSC_CHART_SCALE);
     lv_chart_set_div_line_count(detail_chart, 5, 5);
     lv_obj_set_style_pad_all(detail_chart, 0, 0);
     lv_obj_set_style_line_color(detail_chart, SSC_C_CHART_GRID, LV_PART_MAIN);
@@ -2721,14 +2888,57 @@ static void on_session_live(const struct view_data_session_live *L) {
     if (live_aufguss_count_val) lv_label_set_text(live_aufguss_count_val, buf);
 
     /* Push chart-Point jede sekunde - 180 slots * 1 s = 3-min-fenster,
-     * "schoen mitgeschrieben" wie vom user gewuenscht.               */
+     * "schoen mitgeschrieben" wie vom user gewuenscht. v0.2.10: werte
+     * mit SSC_CHART_SCALE codieren fuer 0.1 °C/% aufloesung.          */
     if (live_chart) {
         if (!isnan(L->temp))
             lv_chart_set_next_value(live_chart, live_ser_temp,
-                                    (lv_coord_t)L->temp);
+                                    (lv_coord_t)(L->temp * SSC_CHART_SCALE));
         if (!isnan(L->rh))
             lv_chart_set_next_value(live_chart, live_ser_rh,
-                                    (lv_coord_t)L->rh);
+                                    (lv_coord_t)(L->rh   * SSC_CHART_SCALE));
+    }
+
+    /* v0.2.10: rolling auto-range fuer den live-chart. Wir lesen die
+     * aktuellen werte direkt aus dem LVGL-ringbuffer und runden auf
+     * nice-numbers. set_range wird nur aufgerufen wenn sich die
+     * gerundeten min/max wirklich aendern - das verhindert flackern
+     * und unnoetigen render-aufwand. Throttle: alle 2 s reicht, sensor
+     * ticked nur 1 Hz und range-aenderungen sind viel langsamer.     */
+    if (live_chart && live_ser_temp && live_ser_rh) {
+        static uint32_t last_check_ms = 0;
+        static int last_t_min  = 0, last_t_max  = 120 * SSC_CHART_SCALE;
+        static int last_rh_min = 0, last_rh_max = 100 * SSC_CHART_SCALE;
+        uint32_t now_ms = esp_log_timestamp();
+        if ((now_ms - last_check_ms) > 2000) {
+            int t_min, t_max, rh_min, rh_max;
+            compute_nice_range_from_chart(live_chart, live_ser_temp,
+                                          /*pin_min_to_zero=*/false,
+                                          SSC_CHART_NICE_STEP,
+                                          SSC_CHART_TEMP_MIN_SPREAD,
+                                          0, 120 * SSC_CHART_SCALE,
+                                          &t_min, &t_max);
+            compute_nice_range_from_chart(live_chart, live_ser_rh,
+                                          /*pin_min_to_zero=*/true,
+                                          SSC_CHART_NICE_STEP,
+                                          SSC_CHART_RH_MIN_SPREAD,
+                                          0, 100 * SSC_CHART_SCALE,
+                                          &rh_min, &rh_max);
+            if (t_min != last_t_min || t_max != last_t_max ||
+                rh_min != last_rh_min || rh_max != last_rh_max) {
+                lv_chart_set_range(live_chart, LV_CHART_AXIS_PRIMARY_Y,
+                                   t_min,  t_max);
+                lv_chart_set_range(live_chart, LV_CHART_AXIS_SECONDARY_Y,
+                                   rh_min, rh_max);
+                __set_y_labels(live_y_left_lbl,  t_min,  t_max);
+                __set_y_labels(live_y_right_lbl, rh_min, rh_max);
+                ESP_LOGI(TAG, "live chart range: temp=%d-%d rh=%d-%d",
+                         t_min, t_max, rh_min, rh_max);
+                last_t_min  = t_min;  last_t_max  = t_max;
+                last_rh_min = rh_min; last_rh_max = rh_max;
+            }
+            last_check_ms = now_ms;
+        }
     }
 }
 
@@ -2812,10 +3022,13 @@ static void on_history_detail_chunk(const struct view_data_session_samples_chunk
     }
     for (uint16_t i = 0; i < c->count && s_detail_buf.count < s_detail_buf.cap; i++) {
         const struct view_data_session_sample *s = &c->samples[i];
+        /* v0.2.10: werte mit SSC_CHART_SCALE codieren (zehntel-grad bzw.
+         * zehntel-prozent). 25.6 °C wird zu 256, 31.8 % zu 318. So bleibt
+         * die kurve glatt statt treppenfoermig.                          */
         s_detail_buf.temps[s_detail_buf.count]   =
-            isnan(s->temp) ? INT16_MIN : (int16_t)s->temp;
+            isnan(s->temp) ? INT16_MIN : (int16_t)(s->temp * SSC_CHART_SCALE);
         s_detail_buf.rhs[s_detail_buf.count]     =
-            isnan(s->rh)   ? INT16_MIN : (int16_t)s->rh;
+            isnan(s->rh)   ? INT16_MIN : (int16_t)(s->rh   * SSC_CHART_SCALE);
         if (s_detail_buf.markers) {
             s_detail_buf.markers[s_detail_buf.count] = s->has_aufguss_marker;
         }
@@ -2839,6 +3052,32 @@ static void on_history_detail_done(const struct view_data_session_detail_done *d
     }
     uint16_t n = s_detail_buf.count;
     if (n < 2) n = 2;   /* LVGL braucht >=2 points fuer line-render */
+
+    /* v0.2.10: auto-range aus den geladenen samples berechnen, BEVOR
+     * die werte in den chart geschrieben werden. RH-min auf 0 gepinnt
+     * (referenz-anker), temp frei. Werte sind alle in SSC_CHART_SCALE-
+     * domain (*10). Fallback bei leerer/nan-only session entspricht der
+     * alten 0-120 / 0-100 skala (also 0-1200 / 0-1000 *10).            */
+    int t_min, t_max, rh_min, rh_max;
+    compute_nice_range(s_detail_buf.temps, s_detail_buf.count,
+                       /*pin_min_to_zero=*/false,
+                       SSC_CHART_NICE_STEP, SSC_CHART_TEMP_MIN_SPREAD,
+                       /*fallback_min=*/0,
+                       /*fallback_max=*/120 * SSC_CHART_SCALE,
+                       &t_min, &t_max);
+    compute_nice_range(s_detail_buf.rhs, s_detail_buf.count,
+                       /*pin_min_to_zero=*/true,
+                       SSC_CHART_NICE_STEP, SSC_CHART_RH_MIN_SPREAD,
+                       /*fallback_min=*/0,
+                       /*fallback_max=*/100 * SSC_CHART_SCALE,
+                       &rh_min, &rh_max);
+    lv_chart_set_range(detail_chart, LV_CHART_AXIS_PRIMARY_Y,   t_min,  t_max);
+    lv_chart_set_range(detail_chart, LV_CHART_AXIS_SECONDARY_Y, rh_min, rh_max);
+    __set_y_labels(detail_y_left_lbl,  t_min,  t_max);
+    __set_y_labels(detail_y_right_lbl, rh_min, rh_max);
+    ESP_LOGI(TAG, "detail chart range (scaled): temp=%d-%d rh=%d-%d (n=%u)",
+             t_min, t_max, rh_min, rh_max, (unsigned)s_detail_buf.count);
+
     lv_chart_set_point_count(detail_chart, n);
     lv_chart_set_all_value(detail_chart, detail_ser_temp, LV_CHART_POINT_NONE);
     lv_chart_set_all_value(detail_chart, detail_ser_rh,   LV_CHART_POINT_NONE);
@@ -2851,10 +3090,12 @@ static void on_history_detail_done(const struct view_data_session_detail_done *d
                         ? LV_CHART_POINT_NONE : s_detail_buf.rhs[i];
         lv_chart_set_next_value(detail_chart, detail_ser_temp, t);
         lv_chart_set_next_value(detail_chart, detail_ser_rh, rh);
-        /* Aufguss-marker als spike 0..100 auf RH-skala - zeigt dort wo
-         * ein aufguss war eine deutliche vertikale linie.             */
+        /* v0.2.10: Aufguss-marker als spike rh_min..rh_max auf RH-skala
+         * (frueher hartcodiert auf 100). Damit reicht der spike immer
+         * vom unteren bis oberen rand des charts, egal welche range
+         * die rh-achse aktuell hat.                                    */
         lv_coord_t mk = LV_CHART_POINT_NONE;
-        if (s_detail_buf.markers && s_detail_buf.markers[i]) mk = 100;
+        if (s_detail_buf.markers && s_detail_buf.markers[i]) mk = rh_max;
         if (detail_ser_aufg) {
             lv_chart_set_next_value(detail_chart, detail_ser_aufg, mk);
         }

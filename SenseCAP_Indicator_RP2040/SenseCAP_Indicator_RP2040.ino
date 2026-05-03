@@ -31,7 +31,7 @@
 #include "hardware/watchdog.h"    /* watchdog_caused_reboot() fuer post-crash diagnose */
 
 #define DEBUG 0
-#define VERSION "ssc-v0.2.9"
+#define VERSION "ssc-v0.2.10"
 /* v0.2.7: EEPROM layout. 256 B reserviert, erste 8B belegt.
  *  [0..3] uint32_t magic = 0x55AA5AA5
  *  [4..7] uint32_t boot_count                                      */
