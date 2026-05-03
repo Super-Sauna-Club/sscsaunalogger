@@ -34,6 +34,21 @@ static int s_retry_num = 0;
 static int wifi_retry_max  = 3;
 static bool __g_ping_done = true;
 
+/* v0.2.9: AP-fallback. Wenn STA-reconnect ueber laengere zeit fehlschlaegt
+ * (kein router erreichbar / wifi-flapping), schaltet das geraet automatisch
+ * auf softAP-modus um, damit a) der user weiter zugreifen kann (settings,
+ * webconfig) und b) keine wifi-events mehr im event-loop spammen, was
+ * sonst zu UI-freezes fuehren kann (siehe debug-session 2026-05-03).
+ *
+ * Threshold: __indicator_wifi_task tickt alle 5 s und zaehlt
+ * wifi_reconnect_cnt hoch; bei > 30 (=150 s) wird fallback aktiv. Im
+ * fallback wird is_cfg = false gesetzt, damit der task uns nicht wieder
+ * auf STA umschmeisst. Der flag wird zurueckgesetzt sobald user via UI
+ * eine neue STA-config triggert oder ein STA_GOT_IP event hereinkommt. */
+#define SSC_AP_FALLBACK_THRESHOLD 30
+#define SSC_AP_FALLBACK_SSID      "sscsauna-AP"
+static bool __g_softap_fallback_active = false;
+static esp_netif_t *__g_ap_netif = NULL;
 
 static EventGroupHandle_t __wifi_event_group;
 
@@ -87,12 +102,12 @@ static void __wifi_event_handler(void* arg, esp_event_base_t event_base,
             st.is_connecting = false;
             __wifi_st_set(&st);
             
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_ST, &st, sizeof(struct view_data_wifi_st ), portMAX_DELAY);
+            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_ST, &st, sizeof(struct view_data_wifi_st ), pdMS_TO_TICKS(50));
             
             struct view_data_wifi_connet_ret_msg msg;
             msg.ret = 0;
             strcpy(msg.msg, "Connection successful");
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_CONNECT_RET, &msg, sizeof(msg), portMAX_DELAY);
+            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_CONNECT_RET, &msg, sizeof(msg), pdMS_TO_TICKS(50));
             break;
         }
         case WIFI_EVENT_STA_DISCONNECTED: {
@@ -114,13 +129,13 @@ static void __wifi_event_handler(void* arg, esp_event_base_t event_base,
                 st.is_connecting = false;
                 __wifi_st_set(&st);
 
-                esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_ST, &st, sizeof(struct view_data_wifi_st ), portMAX_DELAY);
+                esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_ST, &st, sizeof(struct view_data_wifi_st ), pdMS_TO_TICKS(50));
                 
                 char *p_str = "";
                 struct view_data_wifi_connet_ret_msg msg;
                 msg.ret = 0;
                 strcpy(msg.msg, "Connection failure");
-                esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_CONNECT_RET, &msg, sizeof(msg), portMAX_DELAY);
+                esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_CONNECT_RET, &msg, sizeof(msg), pdMS_TO_TICKS(50));
             }
             break;
         }
@@ -136,6 +151,14 @@ static void __ip_event_handler(void* arg, esp_event_base_t event_base,
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
         s_retry_num = 0;
+        /* v0.2.9: bug-fix + fallback-clear. wifi_reconnect_cnt wurde frueher
+         * nie zurueckgesetzt, dadurch konnte der STA-reconnect-task im
+         * worst-case staendig retries ausloesen obwohl gerade eine
+         * verbindung steht. Mit AP-fallback in v0.2.9 muss er ZUSAETZLICH
+         * den fallback-flag clearen, damit ein erfolgreicher reconnect
+         * den AP-modus wieder verlaesst. */
+        _g_wifi_model.wifi_reconnect_cnt = 0;
+        __g_softap_fallback_active = false;
 
         //xEventGroupSetBits(__wifi_event_group, WIFI_CONNECTED_BIT);
         xSemaphoreGive(__g_net_check_sem);  //goto check network
@@ -169,6 +192,11 @@ static int __wifi_connect(const char *p_ssid, const char *p_password, int retry_
 {
     wifi_retry_max = retry_num; //todo
     s_retry_num =0;
+
+    /* v0.2.9: user hat ueber UI eine neue STA-config getriggert.
+     * Damit verlassen wir explizit den AP-fallback-modus. */
+    __g_softap_fallback_active = false;
+    _g_wifi_model.wifi_reconnect_cnt = 0;
 
     wifi_config_t wifi_config = {0};
     strlcpy((char *)wifi_config.sta.ssid, p_ssid, sizeof(wifi_config.sta.ssid));
@@ -210,7 +238,7 @@ static void __wifi_cfg_restore(void)
     st.is_network   = false;
     __wifi_st_set(&st);
 
-    esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_ST, &st, sizeof(struct view_data_wifi_st ), portMAX_DELAY);
+    esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_ST, &st, sizeof(struct view_data_wifi_st ), pdMS_TO_TICKS(50));
 
     // restore and stop
     esp_wifi_restore();
@@ -226,7 +254,7 @@ static void __wifi_shutdown(void)
     st.is_network   = false;
     __wifi_st_set(&st);
 
-    esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_ST, &st, sizeof(struct view_data_wifi_st ), portMAX_DELAY);
+    esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_ST, &st, sizeof(struct view_data_wifi_st ), pdMS_TO_TICKS(50));
 
     esp_wifi_stop();
 }
@@ -269,7 +297,7 @@ static void __ping_end(esp_ping_handle_t hdl, void *args)
         st.is_network = false;
         __wifi_st_set(&st);
     }
-    esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_ST, &st, sizeof(struct view_data_wifi_st ), portMAX_DELAY);
+    esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_ST, &st, sizeof(struct view_data_wifi_st ), pdMS_TO_TICKS(50));
     __g_ping_done = true;
 }
 
@@ -321,6 +349,76 @@ static void __ping_start(void)
     }
 }
 
+/* v0.2.9: STA -> softAP fallback. Wechselt das WIFI-subsystem in den
+ * AP-modus mit fixer SSID. Wird vom __indicator_wifi_task gerufen, wenn
+ * STA-reconnects ueber laengere zeit fehlschlagen (siehe Threshold).
+ *
+ * Race-anmerkung: laeuft im wifi-task-context, nicht im event-handler.
+ * Die esp_wifi_*-aufrufe sind blocking, aber das ist ok hier - der
+ * task hat nur diese eine arbeit. Wichtig: vor dem AP-modus-wechsel
+ * den default-AP-netif anlegen, falls noch nicht geschehen (init macht
+ * nur den STA-netif).
+ *
+ * Sicherheit: AP ist OPEN ohne password. Akzeptabel weil fallback-szenario
+ * (wenn user den hotspot wirklich nutzen will, kann er WLAN-config
+ * eingeben). Keine offene services dahinter ausser dem ESP32-DHCP-server. */
+static void __wifi_softap_start_fallback(void)
+{
+    ESP_LOGW(TAG, "STA-connect failed for >%us — switching to softAP fallback (%s)",
+             SSC_AP_FALLBACK_THRESHOLD * 5, SSC_AP_FALLBACK_SSID);
+
+    esp_wifi_stop();
+
+    if (__g_ap_netif == NULL) {
+        __g_ap_netif = esp_netif_create_default_wifi_ap();
+    }
+
+    wifi_config_t ap_cfg = {0};
+    strlcpy((char *)ap_cfg.ap.ssid, SSC_AP_FALLBACK_SSID, sizeof(ap_cfg.ap.ssid));
+    ap_cfg.ap.ssid_len      = strlen(SSC_AP_FALLBACK_SSID);
+    ap_cfg.ap.channel       = 6;
+    ap_cfg.ap.max_connection = 2;
+    ap_cfg.ap.authmode      = WIFI_AUTH_OPEN;
+    ap_cfg.ap.pmf_cfg.required = false;
+
+    esp_err_t err = esp_wifi_set_mode(WIFI_MODE_AP);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "set_mode(AP) failed: %s", esp_err_to_name(err));
+        return;
+    }
+    err = esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "set_config(AP) failed: %s", esp_err_to_name(err));
+        return;
+    }
+    err = esp_wifi_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "wifi_start(AP) failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+    __g_softap_fallback_active = true;
+    /* is_cfg=false verhindert dass der periodische STA-reconnect-task
+     * uns wieder zurueckschmeisst. Wenn der user spaeter im UI ein
+     * neues WIFI konfiguriert, ruft __view_event_handler::VIEW_EVENT_WIFI_CONNECT
+     * → __wifi_connect, das setzt is_cfg=true und schaltet zurueck auf STA. */
+    _g_wifi_model.is_cfg = false;
+
+    /* UI mitteilen dass wir im AP-modus sind: SSID-feld zeigt den AP-namen
+     * damit user das im wifi-status-screen sieht. */
+    struct view_data_wifi_st st;
+    __wifi_st_get(&st);
+    st.is_connected  = false;
+    st.is_network    = false;
+    st.is_connecting = false;
+    strlcpy(st.ssid, SSC_AP_FALLBACK_SSID, sizeof(st.ssid));
+    __wifi_st_set(&st);
+    /* timeout statt portMAX_DELAY: wenn die queue grad voll ist, lieber
+     * den status-update droppen als hier blocken. */
+    esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_ST,
+                      &st, sizeof(st), pdMS_TO_TICKS(50));
+}
+
 // net check
 static void __indicator_wifi_task(void *p_arg)
 {
@@ -353,7 +451,19 @@ static void __indicator_wifi_task(void *p_arg)
         } else if(  _g_wifi_model.is_cfg && !st.is_connecting) {
             // Periodically check the wifi connection status
 
-            // 5min retry connect 
+            /* v0.2.9: AP-fallback wenn STA-reconnect zu lange fehlschlaegt.
+             * Die alte logik hat nach >5 ticks (~25s) den STA-stack neu
+             * gestartet, das war aber reine wiederholung mit dem gleichen
+             * router der nicht erreichbar ist. Jetzt: nach
+             * SSC_AP_FALLBACK_THRESHOLD ticks (~150s) auf softAP umstellen. */
+            if (!__g_softap_fallback_active &&
+                _g_wifi_model.wifi_reconnect_cnt > SSC_AP_FALLBACK_THRESHOLD) {
+                __wifi_softap_start_fallback();
+                _g_wifi_model.wifi_reconnect_cnt = 0;
+                continue;
+            }
+
+            // 5min retry connect
             if( _g_wifi_model.wifi_reconnect_cnt > 5 ) {
                 ESP_LOGI(TAG, " Wifi reconnect...");
                 _g_wifi_model.wifi_reconnect_cnt =0;
@@ -424,7 +534,7 @@ static void __view_event_handler(void* handler_args, esp_event_base_t base, int3
                 }
             }
             list.cnt = list_cnt;
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_LIST, &list, sizeof(struct view_data_wifi_list ), portMAX_DELAY);
+            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_LIST, &list, sizeof(struct view_data_wifi_list ), pdMS_TO_TICKS(50));
 
             break;
         }
@@ -523,7 +633,7 @@ int indicator_wifi_init(void)
         uint8_t screen = SCREEN_WIFI_CONFIG;
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
         ESP_ERROR_CHECK(esp_wifi_start());
-        esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SCREEN_START, &screen, sizeof(screen), portMAX_DELAY);
+        esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SCREEN_START, &screen, sizeof(screen), pdMS_TO_TICKS(50));
     }
 
     return 0;

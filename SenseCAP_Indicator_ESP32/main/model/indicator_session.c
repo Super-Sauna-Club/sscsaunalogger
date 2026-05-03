@@ -423,7 +423,7 @@ static void on_session_end_request(void) {
      * strikt UI->session gerichtet.                                   */
     esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
                       VIEW_EVENT_SESSION_SUMMARY_READY, &preview,
-                      sizeof(preview), portMAX_DELAY);
+                      sizeof(preview), pdMS_TO_TICKS(100));
 }
 
 static void on_session_save(const struct view_data_session_meta *m_in) {
@@ -509,7 +509,7 @@ static void on_history_list_req(void) {
              (unsigned)list.count, (unsigned)list.total, list.items);
     esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
                       VIEW_EVENT_HISTORY_LIST, &list, sizeof(list),
-                      portMAX_DELAY);
+                      pdMS_TO_TICKS(100));
 }
 
 static void on_history_detail_req(const char *id) {
@@ -577,7 +577,7 @@ static void parse_and_emit_rbk(const uint8_t *buf, size_t size) {
                     if (chunk.count >= SSC_SAMPLE_CHUNK_MAX) {
                         esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
                                           VIEW_EVENT_HISTORY_DETAIL_CHUNK,
-                                          &chunk, sizeof(chunk), portMAX_DELAY);
+                                          &chunk, sizeof(chunk), pdMS_TO_TICKS(100));
                         chunk.offset += chunk.count;
                         chunk.count = 0;
                     }
@@ -591,7 +591,7 @@ static void parse_and_emit_rbk(const uint8_t *buf, size_t size) {
     if (chunk.count > 0) {
         esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
                           VIEW_EVENT_HISTORY_DETAIL_CHUNK,
-                          &chunk, sizeof(chunk), portMAX_DELAY);
+                          &chunk, sizeof(chunk), pdMS_TO_TICKS(100));
     }
 }
 
@@ -669,7 +669,7 @@ void indicator_session_rx_sd_chunk(const uint8_t *payload, size_t n) {
         strncpy(done.session_id, s_readback_sid, SSC_SESSION_ID_LEN - 1);
         esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
                           VIEW_EVENT_HISTORY_DETAIL_DONE,
-                          &done, sizeof(done), portMAX_DELAY);
+                          &done, sizeof(done), pdMS_TO_TICKS(100));
         LOCK();
         s_readback_active = false;
         UNLOCK();
@@ -795,7 +795,7 @@ static void session_worker(void *arg) {
                     strncpy(done.session_id, sid_copy, SSC_SESSION_ID_LEN - 1);
                     esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
                                       VIEW_EVENT_HISTORY_DETAIL_DONE,
-                                      &done, sizeof(done), portMAX_DELAY);
+                                      &done, sizeof(done), pdMS_TO_TICKS(100));
                     LOCK();
                     s_readback_active = false;
                     UNLOCK();
@@ -964,6 +964,6 @@ int indicator_session_init(void) {
      * manuellen history-klick oder save.                               */
     esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
                       VIEW_EVENT_HISTORY_LIST_REQ, NULL, 0,
-                      portMAX_DELAY);
+                      pdMS_TO_TICKS(100));
     return 0;
 }

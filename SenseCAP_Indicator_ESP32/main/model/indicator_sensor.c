@@ -1278,7 +1278,7 @@ static void __view_event_handler(void* handler_args, esp_event_base_t base, int3
             __sensor_history_data_get( &__g_sensor_history_data.temp,  &__g_history_event_buf);
             __g_history_event_buf.sensor_type = SENSOR_DATA_TEMP;
             __g_history_event_buf.resolution  = 1;
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), portMAX_DELAY);
+            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), pdMS_TO_TICKS(100));
             break;
         }
 
@@ -1287,7 +1287,7 @@ static void __view_event_handler(void* handler_args, esp_event_base_t base, int3
             __sensor_history_data_get( &__g_sensor_history_data.humidity,  &__g_history_event_buf);
             __g_history_event_buf.sensor_type = SENSOR_DATA_HUMIDITY;
             __g_history_event_buf.resolution  = 0;
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), portMAX_DELAY);
+            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), pdMS_TO_TICKS(100));
             break;
         }
         case VIEW_EVENT_SENSOR_CO2_HISTORY: {
@@ -1295,7 +1295,7 @@ static void __view_event_handler(void* handler_args, esp_event_base_t base, int3
             __sensor_history_data_get( &__g_sensor_history_data.co2,  &__g_history_event_buf);
             __g_history_event_buf.sensor_type = SENSOR_DATA_CO2;
             __g_history_event_buf.resolution  = 0;
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), portMAX_DELAY);
+            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), pdMS_TO_TICKS(100));
             break;
         }
         case VIEW_EVENT_SENSOR_TVOC_HISTORY: {
@@ -1303,7 +1303,7 @@ static void __view_event_handler(void* handler_args, esp_event_base_t base, int3
             __sensor_history_data_get( &__g_sensor_history_data.tvoc,  &__g_history_event_buf);
             __g_history_event_buf.sensor_type = SENSOR_DATA_TVOC;
             __g_history_event_buf.resolution  = 0;
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), portMAX_DELAY);
+            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), pdMS_TO_TICKS(100));
             break;
         }
 
@@ -1313,7 +1313,7 @@ static void __view_event_handler(void* handler_args, esp_event_base_t base, int3
             __sensor_history_data_get( &__g_sensor_history_data.temp_ext,  &__g_history_event_buf);
             __g_history_event_buf.sensor_type = SENSOR_DATA_TEMP_EXT;
             __g_history_event_buf.resolution  = 1;
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), portMAX_DELAY);
+            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), pdMS_TO_TICKS(100));
             break;
         }
         case VIEW_EVENT_SENSOR_HUMIDITY_EXT_HISTORY: {
@@ -1321,7 +1321,7 @@ static void __view_event_handler(void* handler_args, esp_event_base_t base, int3
             __sensor_history_data_get( &__g_sensor_history_data.humidity_ext,  &__g_history_event_buf);
             __g_history_event_buf.sensor_type = SENSOR_DATA_HUMIDITY_EXT;
             __g_history_event_buf.resolution  = 0;
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), portMAX_DELAY);
+            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), pdMS_TO_TICKS(100));
             break;
         }
         case VIEW_EVENT_SENSOR_PM1_0_HISTORY: {
@@ -1329,7 +1329,7 @@ static void __view_event_handler(void* handler_args, esp_event_base_t base, int3
             __sensor_history_data_get( &__g_sensor_history_data.pm1_0,  &__g_history_event_buf);
             __g_history_event_buf.sensor_type = SENSOR_DATA_PM1_0;
             __g_history_event_buf.resolution  = 1;
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), portMAX_DELAY);
+            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), pdMS_TO_TICKS(100));
             break;
         }
         case VIEW_EVENT_SENSOR_PM2_5_HISTORY: {
@@ -1337,7 +1337,7 @@ static void __view_event_handler(void* handler_args, esp_event_base_t base, int3
             __sensor_history_data_get( &__g_sensor_history_data.pm2_5,  &__g_history_event_buf);
             __g_history_event_buf.sensor_type = SENSOR_DATA_PM2_5;
             __g_history_event_buf.resolution  = 1;
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), portMAX_DELAY);
+            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), pdMS_TO_TICKS(100));
             break;
         }
         case VIEW_EVENT_SENSOR_PM10_HISTORY: {
@@ -1345,7 +1345,7 @@ static void __view_event_handler(void* handler_args, esp_event_base_t base, int3
             __sensor_history_data_get( &__g_sensor_history_data.pm10,  &__g_history_event_buf);
             __g_history_event_buf.sensor_type = SENSOR_DATA_PM10;
             __g_history_event_buf.resolution  = 1;
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), portMAX_DELAY);
+            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), pdMS_TO_TICKS(100));
             break;
         }
         case VIEW_EVENT_SENSOR_NO2_HISTORY: {
@@ -1353,7 +1353,7 @@ static void __view_event_handler(void* handler_args, esp_event_base_t base, int3
             __sensor_history_data_get( &__g_sensor_history_data.no2,  &__g_history_event_buf);
             __g_history_event_buf.sensor_type = SENSOR_DATA_NO2;
             __g_history_event_buf.resolution  = 2;
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), portMAX_DELAY);
+            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), pdMS_TO_TICKS(100));
             break;
         }
         case VIEW_EVENT_SENSOR_C2H5OH_HISTORY: {
@@ -1361,7 +1361,7 @@ static void __view_event_handler(void* handler_args, esp_event_base_t base, int3
             __sensor_history_data_get( &__g_sensor_history_data.c2h5oh,  &__g_history_event_buf);
             __g_history_event_buf.sensor_type = SENSOR_DATA_C2H5OH;
             __g_history_event_buf.resolution  = 2;
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), portMAX_DELAY);
+            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), pdMS_TO_TICKS(100));
             break;
         }
         case VIEW_EVENT_SENSOR_VOC_HISTORY: {
@@ -1369,7 +1369,7 @@ static void __view_event_handler(void* handler_args, esp_event_base_t base, int3
             __sensor_history_data_get( &__g_sensor_history_data.voc,  &__g_history_event_buf);
             __g_history_event_buf.sensor_type = SENSOR_DATA_VOC;
             __g_history_event_buf.resolution  = 2;
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), portMAX_DELAY);
+            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), pdMS_TO_TICKS(100));
             break;
         }
         case VIEW_EVENT_SENSOR_CO_HISTORY: {
@@ -1377,7 +1377,7 @@ static void __view_event_handler(void* handler_args, esp_event_base_t base, int3
             __sensor_history_data_get( &__g_sensor_history_data.co,  &__g_history_event_buf);
             __g_history_event_buf.sensor_type = SENSOR_DATA_CO;
             __g_history_event_buf.resolution  = 2;
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), portMAX_DELAY);
+            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), pdMS_TO_TICKS(100));
             break;
         }
 
@@ -1436,7 +1436,7 @@ static void __view_event_handler(void* handler_args, esp_event_base_t base, int3
             data.week_max = max;
             data.week_min = min;
 
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), portMAX_DELAY);
+            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), pdMS_TO_TICKS(100));
             break;
         }
         case VIEW_EVENT_SENSOR_HUMIDITY_HISTORY: {
@@ -1483,7 +1483,7 @@ static void __view_event_handler(void* handler_args, esp_event_base_t base, int3
             }
             data.week_max = max;
             data.week_min = min;
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), portMAX_DELAY);
+            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), pdMS_TO_TICKS(100));
             break;
         }
         case VIEW_EVENT_SENSOR_TVOC_HISTORY: {
@@ -1530,7 +1530,7 @@ static void __view_event_handler(void* handler_args, esp_event_base_t base, int3
             }
             data.week_max = max;
             data.week_min = min;
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), portMAX_DELAY);
+            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), pdMS_TO_TICKS(100));
             break;
         }
         case VIEW_EVENT_SENSOR_CO2_HISTORY: {
@@ -1577,7 +1577,7 @@ static void __view_event_handler(void* handler_args, esp_event_base_t base, int3
             }
             data.week_max = max;
             data.week_min = min;
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), portMAX_DELAY);
+            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA_HISTORY, &__g_history_event_buf, sizeof(struct view_data_sensor_history_data ), pdMS_TO_TICKS(100));
             break;
         }
 #endif
