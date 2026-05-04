@@ -1599,7 +1599,13 @@ int indicator_sensor_init(void)
 
     xTaskCreate(esp32_rp2040_comm_task, "esp32_rp2040_comm_task", ESP32_RP2040_COMM_TASK_STACK_SIZE, NULL, 2, NULL);
 
-    xTaskCreate(sensor_history_data_updata_task, "sensor_history_data_updata_task", 1024*8, NULL, 6, NULL);
+    /* v0.2.12: legacy sensor_history_data-task disabled. Schrieb periodisch
+     * in den NVS-namespace 'sensor_data' fuer die alten luftqualitaets-
+     * screens, die mit dem sauna-fork seit v0.2.0 nicht mehr gerendert
+     * werden. Ohne reader = nur flash-wear + race-quelle. Hat am
+     * 2026-05-04 mit dem clock_tick-write zur NVS-page-corruption
+     * beigetragen die einen 1185+ reboot bootloop ausgeloest hat.         */
+    /* xTaskCreate(sensor_history_data_updata_task, "sensor_history_data_updata_task", 1024*8, NULL, 6, NULL); */
 
     ESP_ERROR_CHECK(esp_event_handler_instance_register_with(view_event_handle, 
                                                             VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_TEMP_HISTORY, 

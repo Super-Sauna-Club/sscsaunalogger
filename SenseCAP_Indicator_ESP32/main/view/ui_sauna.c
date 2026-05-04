@@ -3307,12 +3307,19 @@ static void clock_tick(lv_timer_t *t) {
         (cur == scr_settings) ? "SETTINGS" : "LEGACY!!";
     ESP_LOGI(TAG, "heartbeat: scr=%s running=%d", sname, live_running);
 
-    /* v0.2.7: last-active-screen in NVS persistieren (alle 10s - selten
-     * genug, dass flash-wear unproblematisch ist). Bei unclean reboot
-     * kann man damit in Logs / INFO sehen "zuletzt war screen=LIVE".  */
+    /* v0.2.7: last-active-screen in NVS persistieren. v0.2.12: zusaetzlich
+     * mit 5-min hard-cap throttling weil bei haeufigem screen-wechsel
+     * (debugging, demo) der NVS-write storm + das raceflug mit dem
+     * legacy-sensor-history-write der NVS-page-corruption am 2026-05-04
+     * mit beigetragen haben. 5min reicht fuer "zuletzt war screen=LIVE"-
+     * post-mortem-info, aber bremst flash-wear deutlich.                  */
     static const char *s_last_persisted = NULL;
-    if (sname != s_last_persisted) {
+    static int64_t s_last_persist_us = 0;
+    const int64_t now_us = esp_timer_get_time();
+    if (sname != s_last_persisted &&
+        (s_last_persist_us == 0 || (now_us - s_last_persist_us) > 300000000LL)) {
         s_last_persisted = sname;
+        s_last_persist_us = now_us;
         nvs_handle_t h;
         if (nvs_open("indicator", NVS_READWRITE, &h) == ESP_OK) {
             nvs_set_str(h, "last_scr", sname);

@@ -1,0 +1,2489 @@
+uru Meditation Error: Core  0 panic'ed (Cache disabled but cache     : 0x3fcb3574  A4      : 0x00000000  A5      : 0x00000000  
+A6      : 0x00000000  A7      : 0x00000000  A8      : 0x82022277  A9      : 0x3fcb3578  
+A10     : 0x3fcc7744  A11     : 0x00000000  A12     : 0x3fcb3574  A13     : 0x00000000  
+A14     : 0x42027178  A15     : 0xb33fffff  SAR     : 0x00000018  EXCCAUSE: 0x00000007  
+EXCVADDR: 0x00000000  LBEG    : 0x40056f5c  LEND    : 0x40056f72  LCOUNT  : 0xffffffff  
+
+
+Backtrace: 0x42022b85:0x3fccb660 0x4203abeb:0x3fccb6b0 0x4200b393:0x3fccb6e0
+
+
+
+
+ELF file SHA256: 5bae7ab1f84acf35
+
+Rebooting...
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x3 (RTC_SW_SYS_RST),boot:0x8 (SPI_FAST_FLASH_BOOT)
+Saved PC:0x40375ebb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3818,len:0x19ac
+load:0x403c9700,len:0x4
+load:0x403c9704,len:0xdd4
+load:0x403cc700,len:0x31c8
+entry 0x403c9938
+[0;32mI (31) boot: ESP-IDF v5.1.6-1594-gb0f5707906 2nd stage bootloader[0m
+[0;32mI (31) boot: compile time Apr 21 2026 19:51:30[0m
+[0;32mI (32) boot: Multicore bootloader[0m
+[0;32mI (36) boot: chip revision: v0.2[0m
+[0;32mI (40) boot: efuse block revision: v1.3[0m
+[0;32mI (44) qio_mode: Enabling QIO for flash chip WinBond[0m
+[0;32mI (50) boot.esp32s3: Boot SPI Speed : 80MHz[0m
+[0;32mI (55) boot.esp32s3: SPI Mode       : QIO[0m
+[0;32mI (59) boot.esp32s3: SPI Flash Size : 8MB[0m
+[0;32mI (64) boot: Enabling RNG early entropy source...[0m
+[0;32mI (69) boot: Partition Table:[0m
+[0;32mI (73) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (80) boot:  0 nvs              WiFi data        01 02 00009000 00020000[0m
+[0;32mI (88) boot:  1 phy_init         RF data          01 01 00029000 00001000[0m
+[0;32mI (95) boot:  2 factory          factory app      00 00 00030000 003d0000[0m
+[0;32mI (103) boot: End of partition table[0m
+[0;32mI (107) esp_image: segment 0: paddr=00030020 vaddr=3c100020 size=12d808h (1234952) map[0m
+[0;32mI (307) esp_image: segment 1: paddr=0015d830 vaddr=3fc9d200 size=027e8h ( 10216) load[0m
+[0;32mI (309) esp_image: segment 2: paddr=00160020 vaddr=42000020 size=f6b1ch (1010460) map[0m
+[0;32mI (469) esp_image: segment 3: paddr=00256b44 vaddr=3fc9f9e8 size=02b9ch ( 11164) load[0m
+[0;32mI (471) esp_image: segment 4: paddr=002596e8 vaddr=40374000 size=1917ch (102780) load[0m
+[0;32mI (505) boot: Loaded app from partition at offset 0x30000[0m
+[0;32mI (505) boot: Disabling RNG early entropy source...[0m
+[0;32mI (517) cpu_start: Multicore app[0m
+[0;33mW (517) flash HPM: HPM mode is optional feature that depends on flash model. Read Docs First![0m
+[0;33mW (519) flash HPM: HPM mode with DC adjustment is disabled. Some flash models may not be supported. Read Docs First![0m
+[0;33mW (530) flash HPM: High performance mode of this flash model hasn't been supported.[0m
+[0;32mI (539) MSPI Timing: Flash timing tuning index: 3[0m
+[0;32mI (544) octal_psram: vendor id    : 0x0d (AP)[0m
+[0;32mI (549) octal_psram: dev id       : 0x02 (generation 3)[0m
+[0;32mI (555) octal_psram: density      : 0x03 (64 Mbit)[0m
+[0;32mI (560) octal_psram: good-die     : 0x01 (Pass)[0m
+[0;32mI (565) octal_psram: Latency      : 0x01 (Fixed)[0m
+[0;32mI (570) octal_psram: VCC          : 0x01 (3V)[0m
+[0;32mI (576) octal_psram: SRF          : 0x01 (Fast Refresh)[0m
+[0;32mI (581) octal_psram: BurstType    : 0x01 (Hybrid Wrap)[0m
+[0;32mI (587) octal_psram: BurstLen     : 0x01 (32 Byte)[0m
+[0;32mI (593) octal_psram: Readlatency  : 0x02 (10 cycles@Fixed)[0m
+[0;32mI (599) octal_psram: DriveStrength: 0x00 (1/1)[0m
+[0;32mI (610) MSPI Timing: PSRAM timing tuning index: 2[0m
+[0;32mI (610) esp_psram: Found 8MB PSRAM device[0m
+[0;32mI (614) esp_psram: Speed: 120MHz[0m
+[0;32mI (680) mmu_psram: Instructions copied and mapped to SPIRAM[0m
+[0;32mI (746) mmu_psram: Read only data copied and mapped to SPIRAM[0m
+[0;32mI (746) cpu_start: Pro cpu up.[0m
+[0;32mI (746) cpu_start: Starting app cpu, entry point is 0x403759b0[0m
+[0;32mI (0) cpu_start: App cpu up.[0m
+[0;32mI (970) esp_psram: SPI SRAM memory test OK[0m
+[0;32mI (979) cpu_start: Pro cpu start user code[0m
+[0;32mI (979) cpu_start: cpu freq: 240000000 Hz[0m
+[0;32mI (979) cpu_start: Application information:[0m
+[0;32mI (982) cpu_start: Project name:     indicator_basis[0m
+[0;32mI (988) cpu_start: App version:      v0.2.6-13-g2799d10-dirty[0m
+[0;32mI (994) cpu_start: Compile time:     May  3 2026 19:22:22[0m
+[0;32mI (1000) cpu_start: ELF file SHA256:  5bae7ab1f84acf35...[0m
+[0;32mI (1006) cpu_start: ESP-IDF:          v5.1.6-1594-gb0f5707906[0m
+[0;32mI (1013) cpu_start: Min chip rev:     v0.0[0m
+[0;32mI (1018) cpu_start: Max chip rev:     v0.99 [0m
+[0;32mI (1023) cpu_start: Chip rev:         v0.2[0m
+[0;32mI (1027) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (1035) heap_init: At 3FCB79C8 len 00031D48 (199 KiB): DRAM[0m
+[0;32mI (1041) heap_init: At 3FCE9710 len 00005724 (21 KiB): STACK/DRAM[0m
+[0;32mI (1048) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM[0m
+[0;32mI (1054) heap_init: At 600FE010 len 00001FD8 (7 KiB): RTCRAM[0m
+[0;32mI (1060) esp_psram: Adding pool of 5952K of PSRAM memory to heap allocator[0m
+[0;32mI (1068) spi_flash: detected chip: winbond[0m
+[0;32mI (1073) spi_flash: flash io: qio[0m
+[0;33mW (1077) ADC: legacy driver is deprecated, please migrate to `esp_adc/adc_oneshot.h`[0m
+[0;32mI (1085) sleep: Configure to isolate all GPIO pins in sleep state[0m
+[0;32mI (1092) sleep: Enable automatic switching of GPIO sleep configuration[0m
+[0;32mI (1099) app_start: Starting scheduler on CPU0[0m
+[0;32mI (1104) app_start: Starting scheduler on CPU1[0m
+[0;32mI (1104) main_task: Started on CPU0[0m
+[0;32mI (1114) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations[0m
+[0;32mI (1122) main_task: Calling app_main()[0m
+[0;32mI (1127) : 
+   _____                      _________    ____         
+  / ___/___  ____  ________  / ____/   |  / __ \       
+  \__ \/ _ \/ __ \/ ___/ _ \/ /   / /| | / /_/ /   
+ ___/ /  __/ / / (__  )  __/ /___/ ___ |/ ____/         
+/____/\___/_/ /_/____/\___/\____/_/  |_/_/           
+--------------------------------------------------------
+ Version: v1.0.0 May  3 2026 19:22:23
+--------------------------------------------------------
+[0m
+[0;33mW (1178) BOOT: SSC v0.2.11 | reset=PANIC(4) boot_count=1177[0m
+[0;32mI (1179) i2c_bus: i2c0 bus inited[0m
+[0;32mI (1179) bsp boards: detecting board SenseCAP_Indicator[0m
+[0;32mI (1184) bsp boards: Detected board: [SenseCAP_Indicator][0m
+[0;32mI (1195) gpio: GPIO[38]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:0 [0m
+[0;32mI (1219) gpio: GPIO[45]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1234) gpio: GPIO[41]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1234) gpio: GPIO[48]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1644) lvgl_port: Add TP input device to LVGL[0m
+[0;32mI (1774) view: Sensor screen: 11 panels in 4 rows, balanced layout[0m
+[0;32mI (1776) view: Database settings button added to settings screen[0m
+[0;32mI (1778) UI_SAUNA: ui_sauna_init (480x480 dark-CI)[0m
+[0;32mI (1782) UI_SAUNA: detail-buffer alloziert: cap=3600 slots in PSRAM[0m
+[0;32mI (1990) UI_SAUNA: heartbeat: scr=LEGACY!! running=0[0m
+[0;32mI (2034) sensor-model: sensor history data read successful[0m
+[0;32mI (2034) sensor-model: encode status:0, len:2[0m
+0x2 0xa4 
+[0;32mI (2036) pp: pp rom version: e7ae62f[0m
+[0;32mI (2039) net80211: net80211 rom version: e7ae62f[0m
+I (2046) wifi:wifi driver task: 3fcf77f8, prio:23, stack:6656, core=0
+I (2058) wifi:wifi firmware version: 3e11197
+I (2058) wifi:wifi certification version: v7.0
+I (2059) wifi:config NVS flash: enabled
+I (2062) wifi:config nano formating: disabled
+I (2066) wifi:Init data frame dynamic rx buffer num: 32
+I (2071) wifi:Init static rx mgmt buffer num: 5
+I (2076) wifi:Init management short buffer num: 32
+I (2080) wifi:Init dynamic tx buffer num: 32
+I (2084) wifi:Init static tx FG buffer num: 2
+I (2088) wifi:Init static rx buffer size: 1600
+I (2092) wifi:Init static rx buffer num: 10
+I (2096) wifi:Init dynamic rx buffer num: 32
+[0;32mI (2101) wifi_init: rx ba win: 6[0m
+[0;32mI (2104) wifi_init: tcpip mbox: 32[0m
+[0;32mI (2108) wifi_init: udp mbox: 6[0m
+[0;32mI (2112) wifi_init: tcp mbox: 6[0m
+[0;32mI (2116) wifi_init: tcp tx win: 5760[0m
+[0;32mI (2120) wifi_init: tcp rx win: 5760[0m
+[0;32mI (2124) wifi_init: tcp mss: 1440[0m
+[0;32mI (2128) wifi_init: WiFi IRAM OP enabled[0m
+[0;32mI (2133) wifi_init: WiFi RX IRAM OP enabled[0m
+[0;32mI (2138) wifi-model: last config ssid: Tommy[0m
+[0;32mI (2143) phy_init: phy_version 711,97bcf0a2,Aug 25 2025,19:04:10[0m
+I (2179) wifi:mode : sta (d8:3b:da:a3:d8:f8)
+I (2180) wifi:enable tsf
+[0;32mI (2180) wifi-model: wifi event: WIFI_EVENT_STA_START[0m
+[0;32mI (2181) time: cfg not find[0m
+[0;33mW (2184) time: boot fallback: source=COMPILE_TIME, applied=2026-05-04 14:59:57 (ts=1777906797)[0m
+[0;33mW (2194) time: Auto timezone: net_zone leer, default Europe/Vienna[0m
+[0;32mI (2200) time: Applying TZ environment variable: CET-1CEST,M3.5.0,M10.5.0/3[0m
+[0;32mI (2209) display: cfg not find[0m
+[0;32mI (2212) mariadb: No saved config, using defaults[0m
+[0;31mE (2217) mariadb: Failed to create DB task[0m
+[0;32mI (2222) SSTORE: NVS: used=1215 free=2817 total=4032 (ns-cnt=13)[0m
+[0;32mI (2228) SSTORE: session store ready, 3 entries[0m
+[0;32mI (2234) SESSION: pre-worker heap: internal=4559 psram=5108544[0m
+[0;32mI (2240) SESSION: session_worker task started, period=1000ms[0m
+[0;32mI (2246) SESSION: session_worker task erstellt, handle=0x3fcc364c[0m
+[0;32mI (2253) SESSION: indicator_session initialised (cap=3600 samples)[0m
+[0;32mI (2261) SESSION: history_list -> UI: count=3 total=3 items=0x3fcabd90[0m
+[0;32mI (2267) UI_SAUNA: on_history_list: count=3 total=3 items=0x3fcabd90[0m
+I (2283) wifi:new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+I (2283) wifi:state: init -> auth (b0)
+I (2297) wifi:state: auth -> init (1c0)
+I (2299) wifi:new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+[0;32mI (2300) wifi-model: wifi event: WIFI_EVENT_STA_DISCONNECTED[0m
+[0;32mI (2303) wifi-model: retry to connect to the AP[0m
+[0;32mI (3208) time: need update time view[0m
+[0;32mI (3208) time: Mon May  4 16:59:58 2026[0m
+[0;32mI (3240) SESSION: worker hb=1 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+[0;32mI (4036) sensor-model: encode status:0, len:2[0m
+0x2 0xa8 
+[0;32mI (4240) SESSION: worker hb=2 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x4 0xc3 0x9c 0x4 0x1 0x1 0x1 0x0 
+[0;32mI (4593) sensor-model: decode status:0, len:6, type:0xc3[0m
+decode: 0xc3 0x9c 0x4 0x0 0x0 0x0 
+[0;33mW (4595) UI_SAUNA: rp2040 boot_count=1180 reset_reason=0[0m
+[0;32mI (4707) wifi-model: wifi event: WIFI_EVENT_STA_DISCONNECTED[0m
+[0;32mI (4708) wifi-model: retry to connect to the AP[0m
+I (4713) wifi:new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+I (4714) wifi:state: init -> auth (b0)
+I (4723) wifi:state: auth -> assoc (0)
+I (4754) wifi:state: assoc -> run (10)
+I (4773) wifi:connected with Tommy, aid = 8, channel 1, BW20, bssid = 8e:5b:3b:8a:53:70
+I (4773) wifi:security: WPA2-PSK, phy: bgn, rssi: -56
+I (4775) wifi:pm start, type: 1
+
+I (4777) wifi:dp: 1, bi: 102400, li: 3, scale listen interval from 307200 us to 307200 us
+I (4785) wifi:set rx beacon pti, rx_bcn_pti: 0, bcn_timeout: 25000, mt_pti: 0, mt_time: 10000
+[0;32mI (4794) wifi-model: wifi event: WIFI_EVENT_STA_CONNECTED[0m
+[0;32mI (4800) time: event: VIEW_EVENT_WIFI_ST[0m
+[0;32mI (4804) city: event: VIEW_EVENT_WIFI_ST[0m
+I (4815) wifi:<ba-add>idx:0 (ifx:0, 8e:5b:3b:8a:53:70), tid:0, ssn:1, winSize:64
+I (4843) wifi:dp: 2, bi: 102400, li: 4, scale listen interval from 307200 us to 409600 us
+I (4843) wifi:AP's beacon interval = 102400 us, DTIM period = 2
+[0;32mI (5208) time: need update time view[0m
+[0;32mI (5208) time: Mon May  4 17:00:00 2026[0m
+[0;32mI (5240) SESSION: worker hb=3 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x6 0xbf 0xcb 0x20 0x99 0x42 0x0 0x6 0xc0 0xf4 0x56 0xf4 0x40 0x0 
+[0;32mI (5604) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0xcb 0x20 0x99 0x42 
+[0;32mI (5609) sensor-model: Sauna temp: 76.6 C[0m
+[0;32mI (5613) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0xf4 0x56 0xf4 0x40 
+[0;32mI (5622) sensor-model: Sauna RH: 7.6 %[0m
+recv:  0x2 0xb5 0x1 0x3 0xc0 0x7f 0x0 
+[0;32mI (5641) sensor-model: decode status:0, len:5, type:0xb5[0m
+decode: 0xb5 0x0 0x0 0xc0 0x7f 
+[0;32mI (5794) esp_netif_handlers: sta ip: 10.18.55.96, mask: 255.255.255.0, gw: 10.18.55.77[0m
+[0;32mI (5794) wifi-model: got ip:10.18.55.96[0m
+[0;32mI (5796) wifi-model: Last network exception, check network...[0m
+[0;31mE (5803) ping_sock: esp_ping_new_session(254): create ping task failed[0m
+[0;33mW (5810) wifi-model: ping new_session failed: ESP_ERR_NO_MEM - skipping ping[0m
+[0;32mI (5818) time: event: VIEW_EVENT_WIFI_ST[0m
+[0;33mW (5822) time: WIFI_ST: network up, NTP stale (src=1) - retry sntp[0m
+[0;32mI (5829) city: event: VIEW_EVENT_WIFI_ST[0m
+[0;32mI (6240) SESSION: worker hb=4 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x6 0xbf 0xab 0x36 0x99 0x42 0x0 0x6 0xc0 0x75 0x5d 0xf5 0x40 0x0 
+[0;32mI (6604) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0xab 0x36 0x99 0x42 
+[0;32mI (6609) sensor-model: Sauna temp: 76.6 C[0m
+[0;32mI (6614) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0x75 0x5d 0xf5 0x40 
+[0;32mI (6623) sensor-model: Sauna RH: 7.7 %[0m
+[0;32mI (7240) SESSION: worker hb=5 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x6 0xbf 0x81 0x3d 0x99 0x42 0x0 0x6 0xc0 0x75 0x5d 0xf5 0x40 0x0 
+[0;32mI (7604) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x81 0x3d 0x99 0x42 
+[0;32mI (7609) sensor-model: Sauna temp: 76.6 C[0m
+[0;32mI (7614) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0x75 0x5d 0xf5 0x40 
+[0;32mI (7623) sensor-model: Sauna RH: 7.7 %[0m
+recv:  0x2 0xb5 0x1 0x3 0xc0 0x7f 0x0 
+[0;32mI (7639) sensor-model: decode status:0, len:5, type:0xb5[0m
+decode: 0xb5 0x0 0x0 0xc0 0x7f 
+recv:  0x6 0xbf 0x2d 0x4b 0x99 0x42 0x0 0x6 0xc0 0xf4 0x56 0xf4 0x40 0x0 
+[0;32mI (8604) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x2d 0x4b 0x99 0x42 
+[0;32mI (8609) sensor-model: Sauna temp: 76.6 C[0m
+[0;32mI (8614) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0xf4 0x56 0xf4 0x40 
+[0;32mI (8623) sensor-model: Sauna RH: 7.6 %[0m
+[0;32mI (9351) ntp: Notification of a time synchronization event[0m
+recv:  0x6 0xbf 0x37 0x5a 0x99 0x42 0x0 0x6 0xc0 0xf4 0xc0 0xf3 0x40 0x0 
+[0;32mI (9604) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x37 0x5a 0x99 0x42 
+[0;32mI (9609) sensor-model: Sauna temp: 76.7 C[0m
+[0;32mI (9614) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0xf4 0xc0 0xf3 0x40 
+[0;32mI (9623) sensor-model: Sauna RH: 7.6 %[0m
+recv:  0x2 0xb2 0x4 0x80 0x5b 0x44 0x0 0x6 0xb3 0x5 0x98 0xad 0x41 0x0 0x3 0xb4 0x28 0x3 0x8 0x42 0x0 
+[0;32mI (9637) sensor-model: decode status:0, len:5, type:0xb2[0m
+decode: 0xb2 0x0 0x80 0x5b 0x44 
+[0;32mI (9645) sensor-model: decode status:0, len:5, type:0xb3[0m
+decode: 0xb3 0x5 0x98 0xad 0x41 
+[0;32mI (9654) sensor-model: decode status:0, len:5, type:0xb4[0m
+decode: 0xb4 0x28 0x0 0x8 0x42 
+recv:  0x2 0xb5 0x1 0x3 0xc0 0x7f 0x0 
+[0;32mI (9667) sensor-model: decode status:0, len:5, type:0xb5[0m
+decode: 0xb5 0x0 0x0 0xc0 0x7f 
+[0;32mI (10208) time: need update time view[0m
+[0;32mI (10208) time: Mon May  4 16:59:21 2026[0m
+recv:  0x6 0xbf 0x17 0x70 0x99 0x42 0x0 0x6 0xc0 0x74 0x37 0xf3 0x40 0x0 
+[0;32mI (10604) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x17 0x70 0x99 0x42 
+[0;32mI (10609) sensor-model: Sauna temp: 76.7 C[0m
+[0;32mI (10614) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0x74 0x37 0xf3 0x40 
+[0;32mI (10623) sensor-model: Sauna RH: 7.6 %[0m
+recv:  0x6 0xbf 0x17 0x70 0x99 0x42 0x0 0x6 0xc0 0xf4 0xc0 0xf3 0x40 0x0 
+[0;32mI (11604) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x17 0x70 0x99 0x42 
+[0;32mI (11609) sensor-model: Sauna temp: 76.7 C[0m
+[0;32mI (11614) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0xf4 0xc0 0xf3 0x40 
+[0;32mI (11623) sensor-model: Sauna RH: 7.6 %[0m
+recv:  0x2 0xb5 0x1 0x3 0xc0 0x7f 0x0 
+[0;32mI (11641) sensor-model: decode status:0, len:5, type:0xb5[0m
+decode: 0xb5 0x0 0x0 0xc0 0x7f 
+[0;32mI (12034) sensor-model: __sensor_history_data_update_check: Mon May  4 16:59:23 2026 (interval=67)[0m
+[0;32mI (12034) sensor-model: Temp index:1, data:27, time:1777820400[0m
+[0;32mI (12039) sensor-model: Temp index:2, data:25, time:1777821300[0m
+[0;32mI (12046) sensor-model: Temp index:3, data:25, time:1777822200[0m
+[0;32mI (12052) sensor-model: Temp index:4, data:25, time:1777823100[0m
+[0;32mI (12059) sensor-model: Temp index:5, data:25, time:1777824000[0m
+[0;32mI (12065) sensor-model: Temp index:6, data:25, time:1777824900[0m
+[0;32mI (12072) sensor-model: Temp index:7, data:25, time:1777825800[0m
+[0;32mI (12078) sensor-model: Temp index:8, data:26, time:1777826700[0m
+[0;32mI (12085) sensor-model: Temp index:9, data:25, time:1777827600[0m
+[0;32mI (12091) sensor-model: Temp index:10, data:25, time:1777828500[0m
+[0;32mI (12097) UI_SAUNA: heartbeat: scr=HOME running=0[0m
+[0;32mI (12098) sensor-model: Temp index:18, data:16, time:1777835700[0m
+[0;32mI (12110) sensor-model: Temp History day data valid[0m
+[0;32mI (12115) sensor-model: Temp, index:6, min:16, max:16, time:1777766400[0m
+[0;32mI (12123) sensor-model: Temp History week data valid[0m
+[0;32mI (12128) sensor-model: Humidity index:1, data:29, time:1777820400[0m
+[0;32mI (12135) sensor-model: Humidity index:2, data:30, time:1777821300[0m
+[0;32mI (12142) sensor-model: Humidity index:3, data:29, time:1777822200[0m
+[0;32mI (12149) sensor-model: Humidity index:4, data:30, time:1777823100[0m
+[0;32mI (12156) sensor-model: Humidity index:5, data:29, time:1777824000[0m
+[0;32mI (12162) sensor-model: Humidity index:6, data:30, time:1777824900[0m
+[0;32mI (12169) sensor-model: Humidity index:7, data:30, time:1777825800[0m
+[0;32mI (12176) sensor-model: Humidity index:8, data:27, time:1777826700[0m
+[0;32mI (12183) sensor-model: Humidity index:9, data:30, time:1777827600[0m
+[0;32mI (12190) sensor-model: Humidity index:10, data:30, time:1777828500[0m
+[0;32mI (12197) sensor-model: Humidity index:18, data:42, time:1777835700[0m
+[0;32mI (12204) sensor-model: Humidity History day data valid[0m
+[0;32mI (12210) sensor-model: Humidity, index:6, min:40, max:43, time:1777766400[0m
+[0;32mI (12217) sensor-model: Humidity History week data valid[0m
+[0;32mI (12223) sensor-model: CO2 index:1, data:575, time:1777820400[0m
+[0;32mI (12230) sensor-model: CO2 index:2, data:626, time:1777821300[0m
+[0;32mI (12236) sensor-model: CO2 index:3, data:578, time:1777822200[0m
+[0;32mI (12240) SESSION: worker hb=10 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+[0;32mI (12243) sensor-model: CO2 index:4, data:585, time:1777823100[0m
+[0;32mI (12257) sensor-model: CO2 index:5, data:578, time:1777824000[0m
+[0;32mI (12263) sensor-model: CO2 index:6, data:575, time:1777824900[0m
+[0;32mI (12270) sensor-model: CO2 index:7, data:554, time:1777825800[0m
+[0;32mI (12276) sensor-model: CO2 index:8, data:582, time:1777826700[0m
+[0;32mI (12283) sensor-model: CO2 index:9, data:648, time:1777827600[0m
+[0;32mI (12289) sensor-model: CO2 index:10, data:714, time:1777828500[0m
+[0;32mI (12296) sensor-model: CO2 index:18, data:593, time:1777835700[0m
+[0;32mI (12302) sensor-model: CO2 History day data valid[0m
+[0;32mI (12308) sensor-model: CO2, index:6, min:585, max:596, time:1777766400[0m
+[0;32mI (12315) sensor-model: CO2 History week data valid[0m
+[0;32mI (12321) sensor-model: TVOC index:1, data:nan, time:1777820400[0m
+[0;32mI (12327) sensor-model: TVOC index:2, data:106, time:1777821300[0m
+[0;32mI (12334) sensor-model: TVOC index:3, data:nan, time:1777822200[0m
+[0;32mI (12340) sensor-model: TVOC index:4, data:104, time:1777823100[0m
+[0;32mI (12347) sensor-model: TVOC index:5, data:110, time:1777824000[0m
+[0;32mI (12354) sensor-model: TVOC index:6, data:104, time:1777824900[0m
+[0;32mI (12360) sensor-model: TVOC index:7, data:97, time:1777825800[0m
+[0;32mI (12367) sensor-model: TVOC index:8, data:nan, time:1777826700[0m
+[0;32mI (12373) sensor-model: TVOC index:9, data:nan, time:1777827600[0m
+[0;32mI (12380) sensor-model: TVOC index:10, data:nan, time:1777828500[0m
+[0;32mI (12387) sensor-model: TVOC index:18, data:nan, time:1777835700[0m
+[0;32mI (12393) sensor-model: TVOC History day data valid[0m
+[0;32mI (12399) sensor-model: TVOC, index:6, min:nan, max:nan, time:1777766400[0m
+[0;32mI (12406) sensor-model: TVOC History week data valid[0m
+[0;32mI (12412) sensor-model: TempExt History day data valid[0m
+[0;32mI (12418) sensor-model: TempExt History week data valid[0m
+[0;32mI (12424) sensor-model: HumExt History day data valid[0m
+[0;32mI (12429) sensor-model: HumExt History week data valid[0m
+[0;32mI (12435) sensor-model: PM1.0 History day data valid[0m
+[0;32mI (12441) sensor-model: PM1.0 History week data valid[0m
+[0;32mI (12447) sensor-model: PM2.5 History day data valid[0m
+[0;32mI (12452) sensor-model: PM2.5 History week data valid[0m
+[0;32mI (12458) sensor-model: PM10 History day data valid[0m
+[0;32mI (12463) sensor-model: PM10 History week data valid[0m
+[0;32mI (12469) sensor-model: NO2 History day data valid[0m
+[0;32mI (12475) sensor-model: NO2 History week data valid[0m
+[0;32mI (12480) sensor-model: C2H5OH History day data valid[0m
+[0;32mI (12486) sensor-model: C2H5OH History week data valid[0m
+[0;32mI (12492) sensor-model: VOC History day data valid[0m
+[0;32mI (12497) sensor-model: VOC History week data valid[0m
+[0;32mI (12503) sensor-model: CO History day data valid[0m
+[0;32mI (12508) sensor-model: CO History week data valid[0m
+[0;32mI (12514) sensor-model: Storing sensor data (15-min interval)[0m
+recv:  0x6 0xbf 0x4b 0x78 0x99 0x42 0x0 0x6 0xc0 0x72 0x8e 0xf1 0x40 0x0 
+[0;32mI (12604) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x4b 0x78 0x99 0x42 
+[0;32mI (12609) sensor-model: Sauna temp: 76.7 C[0m
+[0;32mI (12916) sensor-model: sensor history data save err:-1[0m
+Guru Meditation Error: Core  0 panic'ed (LoadProhibited). Exception was unhandled.
+
+Core  0 register dump:
+PC      : 0x420f0217  PS      : 0x00060930  A0      : 0x82064214  A1      : 0x3fcf2e40  
+A2      : 0x00000001  A3      : 0x3fcc5034  A4      : 0x00000005  A5      : 0x00000002  
+A6      : 0x00000060  A7      : 0xffffffff  A8      : 0x00000006  A9      : 0xfaaaaaaa  
+A10     : 0x3fcc4568  A11     : 0x0001d000  A12     : 0x3fcf2e40  A13     : 0x00000004  
+A14     : 0x3c218188  A15     : 0xfaaaaac2  SAR     : 0x00000004  EXCCAUSE: 0x0000001c  
+EXCVADDR: 0xfaaaaac2  LBEG    : 0x40056f5c  LEND    : 0x40056f72  LCOUNT  : 0xffffffff  
+
+
+Backtrace: 0x420f0214:0x3fcf2e40 0x42064211:0x3fcf2e80 0x420643b1:0x3fcf2ea0 0x42062b6d:0x3fcf2f10 0x42063122:0x3fcf2f90 0x42063865:0x3fcf3020 0x4206221a:0x3fcf3040 0x4201041d:0x3fcf3070 0x4200c171:0x3fcf30a0 0x4200c353:0x3fcf30c0 0x4200cbaa:0x3fcf30e0
+
+
+
+
+ELF file SHA256: 5bae7ab1f84acf35
+
+Rebooting...
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x3 (RTC_SW_SYS_RST),boot:0x8 (SPI_FAST_FLASH_BOOT)
+Saved PC:0x40375ebb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3818,len:0x19ac
+load:0x403c9700,len:0x4
+load:0x403c9704,len:0xdd4
+load:0x403cc700,len:0x31c8
+entry 0x403c9938
+[0;32mI (31) boot: ESP-IDF v5.1.6-1594-gb0f5707906 2nd stage bootloader[0m
+[0;32mI (31) boot: compile time Apr 21 2026 19:51:30[0m
+[0;32mI (32) boot: Multicore bootloader[0m
+[0;32mI (36) boot: chip revision: v0.2[0m
+[0;32mI (40) boot: efuse block revision: v1.3[0m
+[0;32mI (44) qio_mode: Enabling QIO for flash chip WinBond[0m
+[0;32mI (50) boot.esp32s3: Boot SPI Speed : 80MHz[0m
+[0;32mI (55) boot.esp32s3: SPI Mode       : QIO[0m
+[0;32mI (59) boot.esp32s3: SPI Flash Size : 8MB[0m
+[0;32mI (64) boot: Enabling RNG early entropy source...[0m
+[0;32mI (69) boot: Partition Table:[0m
+[0;32mI (73) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (80) boot:  0 nvs              WiFi data        01 02 00009000 00020000[0m
+[0;32mI (88) boot:  1 phy_init         RF data          01 01 00029000 00001000[0m
+[0;32mI (95) boot:  2 factory          factory app      00 00 00030000 003d0000[0m
+[0;32mI (103) boot: End of partition table[0m
+[0;32mI (107) esp_image: segment 0: paddr=00030020 vaddr=3c100020 size=12d808h (1234952) map[0m
+[0;32mI (307) esp_image: segment 1: paddr=0015d830 vaddr=3fc9d200 size=027e8h ( 10216) load[0m
+[0;32mI (309) esp_image: segment 2: paddr=00160020 vaddr=42000020 size=f6b1ch (1010460) map[0m
+[0;32mI (469) esp_image: segment 3: paddr=00256b44 vaddr=3fc9f9e8 size=02b9ch ( 11164) load[0m
+[0;32mI (471) esp_image: segment 4: paddr=002596e8 vaddr=40374000 size=1917ch (102780) load[0m
+[0;32mI (505) boot: Loaded app from partition at offset 0x30000[0m
+[0;32mI (505) boot: Disabling RNG early entropy source...[0m
+[0;32mI (517) cpu_start: Multicore app[0m
+[0;33mW (517) flash HPM: HPM mode is optional feature that depends on flash model. Read Docs First![0m
+[0;33mW (519) flash HPM: HPM mode with DC adjustment is disabled. Some flash models may not be supported. Read Docs First![0m
+[0;33mW (530) flash HPM: High performance mode of this flash model hasn't been supported.[0m
+[0;32mI (539) MSPI Timing: Flash timing tuning index: 3[0m
+[0;32mI (544) octal_psram: vendor id    : 0x0d (AP)[0m
+[0;32mI (549) octal_psram: dev id       : 0x02 (generation 3)[0m
+[0;32mI (555) octal_psram: density      : 0x03 (64 Mbit)[0m
+[0;32mI (560) octal_psram: good-die     : 0x01 (Pass)[0m
+[0;32mI (565) octal_psram: Latency      : 0x01 (Fixed)[0m
+[0;32mI (570) octal_psram: VCC          : 0x01 (3V)[0m
+[0;32mI (576) octal_psram: SRF          : 0x01 (Fast Refresh)[0m
+[0;32mI (581) octal_psram: BurstType    : 0x01 (Hybrid Wrap)[0m
+[0;32mI (587) octal_psram: BurstLen     : 0x01 (32 Byte)[0m
+[0;32mI (593) octal_psram: Readlatency  : 0x02 (10 cycles@Fixed)[0m
+[0;32mI (599) octal_psram: DriveStrength: 0x00 (1/1)[0m
+[0;32mI (610) MSPI Timing: PSRAM timing tuning index: 2[0m
+[0;32mI (610) esp_psram: Found 8MB PSRAM device[0m
+[0;32mI (614) esp_psram: Speed: 120MHz[0m
+[0;32mI (680) mmu_psram: Instructions copied and mapped to SPIRAM[0m
+[0;32mI (746) mmu_psram: Read only data copied and mapped to SPIRAM[0m
+[0;32mI (746) cpu_start: Pro cpu up.[0m
+[0;32mI (746) cpu_start: Starting app cpu, entry point is 0x403759b0[0m
+[0;32mI (0) cpu_start: App cpu up.[0m
+[0;32mI (970) esp_psram: SPI SRAM memory test OK[0m
+[0;32mI (979) cpu_start: Pro cpu start user code[0m
+[0;32mI (979) cpu_start: cpu freq: 240000000 Hz[0m
+[0;32mI (979) cpu_start: Application information:[0m
+[0;32mI (982) cpu_start: Project name:     indicator_basis[0m
+[0;32mI (988) cpu_start: App version:      v0.2.6-13-g2799d10-dirty[0m
+[0;32mI (994) cpu_start: Compile time:     May  3 2026 19:22:22[0m
+[0;32mI (1000) cpu_start: ELF file SHA256:  5bae7ab1f84acf35...[0m
+[0;32mI (1006) cpu_start: ESP-IDF:          v5.1.6-1594-gb0f5707906[0m
+[0;32mI (1013) cpu_start: Min chip rev:     v0.0[0m
+[0;32mI (1018) cpu_start: Max chip rev:     v0.99 [0m
+[0;32mI (1023) cpu_start: Chip rev:         v0.2[0m
+[0;32mI (1027) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (1035) heap_init: At 3FCB79C8 len 00031D48 (199 KiB): DRAM[0m
+[0;32mI (1041) heap_init: At 3FCE9710 len 00005724 (21 KiB): STACK/DRAM[0m
+[0;32mI (1048) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM[0m
+[0;32mI (1054) heap_init: At 600FE010 len 00001FD8 (7 KiB): RTCRAM[0m
+[0;32mI (1060) esp_psram: Adding pool of 5952K of PSRAM memory to heap allocator[0m
+[0;32mI (1068) spi_flash: detected chip: winbond[0m
+[0;32mI (1073) spi_flash: flash io: qio[0m
+[0;33mW (1077) ADC: legacy driver is deprecated, please migrate to `esp_adc/adc_oneshot.h`[0m
+[0;32mI (1085) sleep: Configure to isolate all GPIO pins in sleep state[0m
+[0;32mI (1092) sleep: Enable automatic switching of GPIO sleep configuration[0m
+[0;32mI (1099) app_start: Starting scheduler on CPU0[0m
+[0;32mI (1104) app_start: Starting scheduler on CPU1[0m
+[0;32mI (1104) main_task: Started on CPU0[0m
+[0;32mI (1114) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations[0m
+[0;32mI (1122) main_task: Calling app_main()[0m
+[0;32mI (1127) : 
+   _____                      _________    ____         
+  / ___/___  ____  ________  / ____/   |  / __ \       
+  \__ \/ _ \/ __ \/ ___/ _ \/ /   / /| | / /_/ /   
+ ___/ /  __/ / / (__  )  __/ /___/ ___ |/ ____/         
+/____/\___/_/ /_/____/\___/\____/_/  |_/_/           
+--------------------------------------------------------
+ Version: v1.0.0 May  3 2026 19:22:23
+--------------------------------------------------------
+[0m
+[0;33mW (1260) BOOT: SSC v0.2.11 | reset=PANIC(4) boot_count=1178[0m
+[0;32mI (1261) i2c_bus: i2c0 bus inited[0m
+[0;32mI (1261) bsp boards: detecting board SenseCAP_Indicator[0m
+[0;32mI (1266) bsp boards: Detected board: [SenseCAP_Indicator][0m
+[0;32mI (1277) gpio: GPIO[38]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:0 [0m
+[0;32mI (1301) gpio: GPIO[45]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1316) gpio: GPIO[41]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1316) gpio: GPIO[48]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1726) lvgl_port: Add TP input device to LVGL[0m
+[0;32mI (1856) view: Sensor screen: 11 panels in 4 rows, balanced layout[0m
+[0;32mI (1857) view: Database settings button added to settings screen[0m
+[0;32mI (1860) UI_SAUNA: ui_sauna_init (480x480 dark-CI)[0m
+[0;32mI (1864) UI_SAUNA: detail-buffer alloziert: cap=3600 slots in PSRAM[0m
+[0;32mI (2071) UI_SAUNA: heartbeat: scr=LEGACY!! running=0[0m
+[0;32mI (2178) sensor-model: sensor history data read successful[0m
+[0;32mI (2179) sensor-model: encode status:0, len:2[0m
+0x2 0xa4 
+[0;32mI (2181) pp: pp rom version: e7ae62f[0m
+[0;32mI (2184) net80211: net80211 rom version: e7ae62f[0m
+I (2190) wifi:wifi driver task: 3fcf6a00, prio:23, stack:6656, core=0
+I (2202) wifi:wifi firmware version: 3e11197
+I (2202) wifi:wifi certification version: v7.0
+I (2203) wifi:config NVS flash: enabled
+I (2207) wifi:config nano formating: disabled
+I (2211) wifi:Init data frame dynamic rx buffer num: 32
+I (2216) wifi:Init static rx mgmt buffer num: 5
+I (2220) wifi:Init management short buffer num: 32
+I (2225) wifi:Init dynamic tx buffer num: 32
+I (2229) wifi:Init static tx FG buffer num: 2
+I (2233) wifi:Init static rx buffer size: 1600
+I (2237) wifi:Init static rx buffer num: 10
+I (2241) wifi:Init dynamic rx buffer num: 32
+[0;32mI (2245) wifi_init: rx ba win: 6[0m
+[0;32mI (2249) wifi_init: tcpip mbox: 32[0m
+[0;32mI (2253) wifi_init: udp mbox: 6[0m
+[0;32mI (2257) wifi_init: tcp mbox: 6[0m
+[0;32mI (2261) wifi_init: tcp tx win: 5760[0m
+[0;32mI (2265) wifi_init: tcp rx win: 5760[0m
+[0;32mI (2269) wifi_init: tcp mss: 1440[0m
+[0;32mI (2273) wifi_init: WiFi IRAM OP enabled[0m
+[0;32mI (2278) wifi_init: WiFi RX IRAM OP enabled[0m
+[0;32mI (2283) wifi-model: last config ssid: Tommy[0m
+[0;32mI (2288) phy_init: phy_version 711,97bcf0a2,Aug 25 2025,19:04:10[0m
+I (2324) wifi:mode : sta (d8:3b:da:a3:d8:f8)
+I (2324) wifi:enable tsf
+[0;32mI (2325) wifi-model: wifi event: WIFI_EVENT_STA_START[0m
+[0;32mI (2326) time: cfg not find[0m
+[0;33mW (2329) time: boot fallback: source=NVS_FALLBACK, applied=2026-05-04 15:00:20 (ts=1777906820)[0m
+I (2331) wifi:new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+I (2344) wifi:state: init -> auth (b0)
+[0;33mW (2348) time: Auto timezone: net_zone leer, default Europe/Vienna[0m
+[0;32mI (2354) time: Applying TZ environment variable: CET-1CEST,M3.5.0,M10.5.0/3[0m
+I (2360) wifi:state: auth -> init (1c0)
+I (2366) wifi:new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+[0;32mI (2371) wifi-model: wifi event: WIFI_EVENT_STA_DISCONNECTED[0m
+[0;32mI (2378) wifi-model: retry to connect to the AP[0m
+[0;32mI (2384) display: cfg not find[0m
+[0;32mI (2388) mariadb: No saved config, using defaults[0m
+[0;31mE (2392) mariadb: Failed to create DB task[0m
+[0;32mI (2397) SSTORE: NVS: used=1215 free=2817 total=4032 (ns-cnt=13)[0m
+[0;32mI (2403) SSTORE: session store ready, 3 entries[0m
+[0;32mI (2409) SESSION: pre-worker heap: internal=4503 psram=5108544[0m
+[0;32mI (2415) SESSION: session_worker task started, period=1000ms[0m
+[0;32mI (2421) SESSION: session_worker task erstellt, handle=0x3fcc3cc0[0m
+[0;32mI (2428) SESSION: indicator_session initialised (cap=3600 samples)[0m
+[0;32mI (2436) SESSION: history_list -> UI: count=3 total=3 items=0x3fcabd90[0m
+[0;32mI (2442) UI_SAUNA: on_history_list: count=3 total=3 items=0x3fcabd90[0m
+[0;32mI (3383) time: need update time view[0m
+[0;32mI (3383) time: Mon May  4 17:00:21 2026[0m
+[0;32mI (3415) SESSION: worker hb=1 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+[0;32mI (4180) sensor-model: encode status:0, len:2[0m
+0x2 0xa8 
+[0;32mI (4415) SESSION: worker hb=2 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x4 0xc3 0x9d 0x4 0x1 0x1 0x1 0x0 
+[0;32mI (4676) sensor-model: decode status:0, len:6, type:0xc3[0m
+decode: 0xc3 0x9d 0x4 0x0 0x0 0x0 
+[0;33mW (4678) UI_SAUNA: rp2040 boot_count=1181 reset_reason=0[0m
+[0;32mI (4783) wifi-model: wifi event: WIFI_EVENT_STA_DISCONNECTED[0m
+[0;32mI (4783) wifi-model: retry to connect to the AP[0m
+I (4788) wifi:new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+I (4789) wifi:state: init -> auth (b0)
+I (4880) wifi:state: auth -> assoc (0)
+I (4924) wifi:state: assoc -> run (10)
+I (4946) wifi:connected with Tommy, aid = 9, channel 1, BW20, bssid = 8e:5b:3b:8a:53:70
+I (4946) wifi:security: WPA2-PSK, phy: bgn, rssi: -57
+I (4948) wifi:pm start, type: 1
+
+I (4950) wifi:dp: 1, bi: 102400, li: 3, scale listen interval from 307200 us to 307200 us
+I (4958) wifi:set rx beacon pti, rx_bcn_pti: 0, bcn_timeout: 25000, mt_pti: 0, mt_time: 10000
+[0;32mI (4967) wifi-model: wifi event: WIFI_EVENT_STA_CONNECTED[0m
+[0;32mI (4973) time: event: VIEW_EVENT_WIFI_ST[0m
+[0;32mI (4977) city: event: VIEW_EVENT_WIFI_ST[0m
+I (5005) wifi:<ba-add>idx:0 (ifx:0, 8e:5b:3b:8a:53:70), tid:0, ssn:1, winSize:64
+I (5039) wifi:dp: 2, bi: 102400, li: 4, scale listen interval from 307200 us to 409600 us
+I (5039) wifi:AP's beacon interval = 102400 us, DTIM period = 2
+[0;32mI (5415) SESSION: worker hb=3 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x6 0xbf 0x6d 0xce 0x99 0x42 0x0 0x6 0xc0 0xf1 0x4 0xf1 0x40 0x0 
+[0;32mI (5686) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x6d 0xce 0x99 0x42 
+[0;32mI (5690) sensor-model: Sauna temp: 76.9 C[0m
+[0;32mI (5695) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0xf1 0x4 0xf1 0x40 
+[0;32mI (5705) sensor-model: Sauna RH: 7.5 %[0m
+recv:  0x2 0xb5 0x1 0x3 0xc0 0x7f 0x0 
+[0;32mI (5720) sensor-model: decode status:0, len:5, type:0xb5[0m
+decode: 0xb5 0x0 0x0 0xc0 0x7f 
+[0;32mI (5967) esp_netif_handlers: sta ip: 10.18.55.96, mask: 255.255.255.0, gw: 10.18.55.77[0m
+[0;32mI (5967) wifi-model: got ip:10.18.55.96[0m
+[0;32mI (5969) wifi-model: Last network exception, check network...[0m
+[0;31mE (5975) ping_sock: esp_ping_new_session(254): create ping task failed[0m
+[0;33mW (5983) wifi-model: ping new_session failed: ESP_ERR_NO_MEM - skipping ping[0m
+[0;32mI (5991) time: event: VIEW_EVENT_WIFI_ST[0m
+[0;33mW (5995) time: WIFI_ST: network up, NTP stale (src=2) - retry sntp[0m
+[0;32mI (6002) city: event: VIEW_EVENT_WIFI_ST[0m
+[0;32mI (6415) SESSION: worker hb=4 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x6 0xbf 0x43 0xd5 0x99 0x42 0x0 0x6 0xc0 0xf1 0x4 0xf1 0x40 0x0 
+[0;32mI (6686) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x43 0xd5 0x99 0x42 
+[0;32mI (6690) sensor-model: Sauna temp: 76.9 C[0m
+[0;32mI (6695) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0xf1 0x4 0xf1 0x40 
+[0;32mI (6704) sensor-model: Sauna RH: 7.5 %[0m
+[0;32mI (7415) SESSION: worker hb=5 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x6 0xbf 0x4d 0xe4 0x99 0x42 0x0 0x6 0xc0 0x72 0xba 0xf2 0x40 0x0 
+[0;32mI (7686) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x4d 0xe4 0x99 0x42 
+[0;32mI (7690) sensor-model: Sauna temp: 76.9 C[0m
+[0;32mI (7695) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0x72 0xba 0xf2 0x40 
+[0;32mI (7705) sensor-model: Sauna RH: 7.6 %[0m
+recv:  0x2 0xb5 0x1 0x3 0xc0 0x7f 0x0 
+[0;32mI (7720) sensor-model: decode status:0, len:5, type:0xb5[0m
+decode: 0xb5 0x0 0x0 0xc0 0x7f 
+recv:  0x6 0xbf 0x3 0x1 0x9a 0x42 0x0 0x6 0xc0 0xf2 0x9a 0xf1 0x40 0x0 
+[0;32mI (8686) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x3 0x1 0x9a 0x42 
+[0;32mI (8690) sensor-model: Sauna temp: 77.0 C[0m
+[0;32mI (8695) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0xf2 0x9a 0xf1 0x40 
+[0;32mI (8704) sensor-model: Sauna RH: 7.6 %[0m
+[0;32mI (8803) ntp: Notification of a time synchronization event[0m
+[0;32mI (9383) time: need update time view[0m
+[0;32mI (9383) time: Mon May  4 16:59:34 2026[0m
+recv:  0x6 0xbf 0xd9 0x7 0x9a 0x42 0x0 0x6 0xc0 0xf1 0x4 0xf1 0x40 0x0 
+[0;32mI (9686) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0xd9 0x7 0x9a 0x42 
+[0;32mI (9690) sensor-model: Sauna temp: 77.0 C[0m
+[0;32mI (9695) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0xf1 0x4 0xf1 0x40 
+[0;32mI (9704) sensor-model: Sauna RH: 7.5 %[0m
+recv:  0x2 0xb2 0x1 0x3 0x52 0x44 0x0 0x6 0xb3 0xd7 0x16 0xaf 0x41 0x0 0x6 0xb4 0xd7 0xd8 0x6 0x42 0x0 
+[0;32mI (9717) sensor-model: decode status:0, len:5, type:0xb2[0m
+decode: 0xb2 0x0 0x0 0x52 0x44 
+[0;32mI (9726) sensor-model: decode status:0, len:5, type:0xb3[0m
+decode: 0xb3 0xd7 0x16 0xaf 0x41 
+[0;32mI (9735) sensor-model: decode status:0, len:5, type:0xb4[0m
+decode: 0xb4 0xd7 0xd8 0x6 0x42 
+recv:  0x2 0xb5 0x1 0x3 0xc0 0x7f 0x0 
+[0;32mI (9748) sensor-model: decode status:0, len:5, type:0xb5[0m
+decode: 0xb5 0x0 0x0 0xc0 0x7f 
+Guru Meditation Error: Core  0 panic'ed (IllegalInstruction). Exception was unhandled.
+Memory dump at 0x420245e4: 3f2503ad 00b01dff 21004136
+Core  0 register dump:
+PC      : 0x420245e9  PS      : 0x00060b30  A0      : 0x820edff8  A1      : 0x3fccb3c0  
+A2      : 0x00000000  A3      : 0x00000000  A4      : 0x3fcdbdc8  A5      : 0x00000000  
+A6      : 0x00000000  A7      : 0x00000001  A8      : 0x8202453a  A9      : 0x3fccb3a0  
+A10     : 0x00000000  A11     : 0x00000000  A12     : 0x00000006  A13     : 0x00000000  
+A14     : 0x00000009  A15     : 0x00ff0000  SAR     : 0x00000020  EXCCAUSE: 0x00000000  
+EXCVADDR: 0x00000000  LBEG    : 0x4203a6f8  LEND    : 0x4203a71f  LCOUNT  : 0x00000000  
+
+
+Backtrace: 0x420245e6:0x3fccb3c0 0x420edff5:0x3fccb3f0 0x420425cf:0x3fccb410 0x420edff5:0x3fccb480 0x420218c5:0x3fccb4a0 0x42021a27:0x3fccb4c0 0x42026692:0x3fccb500 0x4202672c:0x3fccb580 0x42026716:0x3fccb5a0 0x42026716:0x3fccb5c0 0x42026716:0x3fccb5e0 0x42026716:0x3fccb600 0x42026716:0x3fccb620 0x42026d28:0x3fccb640 0x4202a6a4:0x3fccb660 0x4203abeb:0x3fccb6c0 0x4200b393:0x3fccb6f0
+
+
+
+
+ELF file SHA256: 5bae7ab1f84acf35
+
+Rebooting...
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x3 (RTC_SW_SYS_RST),boot:0x8 (SPI_FAST_FLASH_BOOT)
+Saved PC:0x40375ebb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3818,len:0x19ac
+load:0x403c9700,len:0x4
+load:0x403c9704,len:0xdd4
+load:0x403cc700,len:0x31c8
+entry 0x403c9938
+[0;32mI (31) boot: ESP-IDF v5.1.6-1594-gb0f5707906 2nd stage bootloader[0m
+[0;32mI (31) boot: compile time Apr 21 2026 19:51:30[0m
+[0;32mI (32) boot: Multicore bootloader[0m
+[0;32mI (36) boot: chip revision: v0.2[0m
+[0;32mI (40) boot: efuse block revision: v1.3[0m
+[0;32mI (44) qio_mode: Enabling QIO for flash chip WinBond[0m
+[0;32mI (50) boot.esp32s3: Boot SPI Speed : 80MHz[0m
+[0;32mI (55) boot.esp32s3: SPI Mode       : QIO[0m
+[0;32mI (59) boot.esp32s3: SPI Flash Size : 8MB[0m
+[0;32mI (64) boot: Enabling RNG early entropy source...[0m
+[0;32mI (69) boot: Partition Table:[0m
+[0;32mI (73) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (80) boot:  0 nvs              WiFi data        01 02 00009000 00020000[0m
+[0;32mI (88) boot:  1 phy_init         RF data          01 01 00029000 00001000[0m
+[0;32mI (95) boot:  2 factory          factory app      00 00 00030000 003d0000[0m
+[0;32mI (103) boot: End of partition table[0m
+[0;32mI (107) esp_image: segment 0: paddr=00030020 vaddr=3c100020 size=12d808h (1234952) map[0m
+[0;32mI (307) esp_image: segment 1: paddr=0015d830 vaddr=3fc9d200 size=027e8h ( 10216) load[0m
+[0;32mI (309) esp_image: segment 2: paddr=00160020 vaddr=42000020 size=f6b1ch (1010460) map[0m
+[0;32mI (469) esp_image: segment 3: paddr=00256b44 vaddr=3fc9f9e8 size=02b9ch ( 11164) load[0m
+[0;32mI (471) esp_image: segment 4: paddr=002596e8 vaddr=40374000 size=1917ch (102780) load[0m
+[0;32mI (505) boot: Loaded app from partition at offset 0x30000[0m
+[0;32mI (505) boot: Disabling RNG early entropy source...[0m
+[0;32mI (517) cpu_start: Multicore app[0m
+[0;33mW (517) flash HPM: HPM mode is optional feature that depends on flash model. Read Docs First![0m
+[0;33mW (519) flash HPM: HPM mode with DC adjustment is disabled. Some flash models may not be supported. Read Docs First![0m
+[0;33mW (530) flash HPM: High performance mode of this flash model hasn't been supported.[0m
+[0;32mI (539) MSPI Timing: Flash timing tuning index: 3[0m
+[0;32mI (544) octal_psram: vendor id    : 0x0d (AP)[0m
+[0;32mI (549) octal_psram: dev id       : 0x02 (generation 3)[0m
+[0;32mI (555) octal_psram: density      : 0x03 (64 Mbit)[0m
+[0;32mI (560) octal_psram: good-die     : 0x01 (Pass)[0m
+[0;32mI (565) octal_psram: Latency      : 0x01 (Fixed)[0m
+[0;32mI (570) octal_psram: VCC          : 0x01 (3V)[0m
+[0;32mI (576) octal_psram: SRF          : 0x01 (Fast Refresh)[0m
+[0;32mI (581) octal_psram: BurstType    : 0x01 (Hybrid Wrap)[0m
+[0;32mI (587) octal_psram: BurstLen     : 0x01 (32 Byte)[0m
+[0;32mI (593) octal_psram: Readlatency  : 0x02 (10 cycles@Fixed)[0m
+[0;32mI (599) octal_psram: DriveStrength: 0x00 (1/1)[0m
+[0;32mI (610) MSPI Timing: PSRAM timing tuning index: 2[0m
+[0;32mI (610) esp_psram: Found 8MB PSRAM device[0m
+[0;32mI (614) esp_psram: Speed: 120MHz[0m
+[0;32mI (680) mmu_psram: Instructions copied and mapped to SPIRAM[0m
+[0;32mI (746) mmu_psram: Read only data copied and mapped to SPIRAM[0m
+[0;32mI (746) cpu_start: Pro cpu up.[0m
+[0;32mI (746) cpu_start: Starting app cpu, entry point is 0x403759b0[0m
+[0;32mI (0) cpu_start: App cpu up.[0m
+[0;32mI (970) esp_psram: SPI SRAM memory test OK[0m
+[0;32mI (979) cpu_start: Pro cpu start user code[0m
+[0;32mI (979) cpu_start: cpu freq: 240000000 Hz[0m
+[0;32mI (979) cpu_start: Application information:[0m
+[0;32mI (982) cpu_start: Project name:     indicator_basis[0m
+[0;32mI (988) cpu_start: App version:      v0.2.6-13-g2799d10-dirty[0m
+[0;32mI (994) cpu_start: Compile time:     May  3 2026 19:22:22[0m
+[0;32mI (1000) cpu_start: ELF file SHA256:  5bae7ab1f84acf35...[0m
+[0;32mI (1006) cpu_start: ESP-IDF:          v5.1.6-1594-gb0f5707906[0m
+[0;32mI (1013) cpu_start: Min chip rev:     v0.0[0m
+[0;32mI (1018) cpu_start: Max chip rev:     v0.99 [0m
+[0;32mI (1023) cpu_start: Chip rev:         v0.2[0m
+[0;32mI (1027) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (1035) heap_init: At 3FCB79C8 len 00031D48 (199 KiB): DRAM[0m
+[0;32mI (1041) heap_init: At 3FCE9710 len 00005724 (21 KiB): STACK/DRAM[0m
+[0;32mI (1048) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM[0m
+[0;32mI (1054) heap_init: At 600FE010 len 00001FD8 (7 KiB): RTCRAM[0m
+[0;32mI (1060) esp_psram: Adding pool of 5952K of PSRAM memory to heap allocator[0m
+[0;32mI (1068) spi_flash: detected chip: winbond[0m
+[0;32mI (1073) spi_flash: flash io: qio[0m
+[0;33mW (1077) ADC: legacy driver is deprecated, please migrate to `esp_adc/adc_oneshot.h`[0m
+[0;32mI (1085) sleep: Configure to isolate all GPIO pins in sleep state[0m
+[0;32mI (1092) sleep: Enable automatic switching of GPIO sleep configuration[0m
+[0;32mI (1099) app_start: Starting scheduler on CPU0[0m
+[0;32mI (1104) app_start: Starting scheduler on CPU1[0m
+[0;32mI (1104) main_task: Started on CPU0[0m
+[0;32mI (1114) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations[0m
+[0;32mI (1122) main_task: Calling app_main()[0m
+[0;32mI (1127) : 
+   _____                      _________    ____         
+  / ___/___  ____  ________  / ____/   |  / __ \       
+  \__ \/ _ \/ __ \/ ___/ _ \/ /   / /| | / /_/ /   
+ ___/ /  __/ / / (__  )  __/ /___/ ___ |/ ____/         
+/____/\___/_/ /_/____/\___/\____/_/  |_/_/           
+--------------------------------------------------------
+ Version: v1.0.0 May  3 2026 19:22:23
+--------------------------------------------------------
+[0m
+[0;33mW (1178) BOOT: SSC v0.2.11 | reset=PANIC(4) boot_count=1179[0m
+[0;32mI (1179) i2c_bus: i2c0 bus inited[0m
+[0;32mI (1179) bsp boards: detecting board SenseCAP_Indicator[0m
+[0;32mI (1184) bsp boards: Detected board: [SenseCAP_Indicator][0m
+[0;32mI (1195) gpio: GPIO[38]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:0 [0m
+[0;32mI (1219) gpio: GPIO[45]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1234) gpio: GPIO[41]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1234) gpio: GPIO[48]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1644) lvgl_port: Add TP input device to LVGL[0m
+[0;32mI (1774) view: Sensor screen: 11 panels in 4 rows, balanced layout[0m
+[0;32mI (1775) view: Database settings button added to settings screen[0m
+[0;32mI (1778) UI_SAUNA: ui_sauna_init (480x480 dark-CI)[0m
+[0;32mI (1782) UI_SAUNA: detail-buffer alloziert: cap=3600 slots in PSRAM[0m
+[0;32mI (1989) UI_SAUNA: heartbeat: scr=LEGACY!! running=0[0m
+[0;32mI (2033) sensor-model: sensor history data read successful[0m
+[0;32mI (2034) sensor-model: encode status:0, len:2[0m
+0x2 0xa4 
+[0;32mI (2036) pp: pp rom version: e7ae62f[0m
+[0;32mI (2039) net80211: net80211 rom version: e7ae62f[0m
+I (2045) wifi:wifi driver task: 3fcf77f8, prio:23, stack:6656, core=0
+I (2058) wifi:wifi firmware version: 3e11197
+I (2058) wifi:wifi certification version: v7.0
+I (2059) wifi:config NVS flash: enabled
+I (2062) wifi:config nano formating: disabled
+I (2066) wifi:Init data frame dynamic rx buffer num: 32
+I (2071) wifi:Init static rx mgmt buffer num: 5
+I (2075) wifi:Init management short buffer num: 32
+I (2080) wifi:Init dynamic tx buffer num: 32
+I (2084) wifi:Init static tx FG buffer num: 2
+I (2088) wifi:Init static rx buffer size: 1600
+I (2092) wifi:Init static rx buffer num: 10
+I (2096) wifi:Init dynamic rx buffer num: 32
+[0;32mI (2100) wifi_init: rx ba win: 6[0m
+[0;32mI (2104) wifi_init: tcpip mbox: 32[0m
+[0;32mI (2108) wifi_init: udp mbox: 6[0m
+[0;32mI (2112) wifi_init: tcp mbox: 6[0m
+[0;32mI (2116) wifi_init: tcp tx win: 5760[0m
+[0;32mI (2120) wifi_init: tcp rx win: 5760[0m
+[0;32mI (2124) wifi_init: tcp mss: 1440[0m
+[0;32mI (2128) wifi_init: WiFi IRAM OP enabled[0m
+[0;32mI (2133) wifi_init: WiFi RX IRAM OP enabled[0m
+[0;32mI (2138) wifi-model: last config ssid: Tommy[0m
+[0;32mI (2143) phy_init: phy_version 711,97bcf0a2,Aug 25 2025,19:04:10[0m
+I (2179) wifi:mode : sta (d8:3b:da:a3:d8:f8)
+I (2179) wifi:enable tsf
+[0;32mI (2180) wifi-model: wifi event: WIFI_EVENT_STA_START[0m
+[0;32mI (2181) time: cfg not find[0m
+[0;33mW (2184) time: boot fallback: source=NVS_FALLBACK, applied=2026-05-04 15:00:33 (ts=1777906833)[0m
+I (2185) wifi:new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+I (2199) wifi:state: init -> auth (b0)
+[0;33mW (2203) time: Auto timezone: net_zone leer, default Europe/Vienna[0m
+[0;32mI (2209) time: Applying TZ environment variable: CET-1CEST,M3.5.0,M10.5.0/3[0m
+I (2210) wifi:state: auth -> init (1c0)
+I (2222) wifi:new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+[0;32mI (2226) wifi-model: wifi event: WIFI_EVENT_STA_DISCONNECTED[0m
+[0;32mI (2233) wifi-model: retry to connect to the AP[0m
+[0;32mI (2238) display: cfg not find[0m
+[0;32mI (2242) mariadb: No saved config, using defaults[0m
+[0;31mE (2247) mariadb: Failed to create DB task[0m
+[0;32mI (2252) SSTORE: NVS: used=1215 free=2817 total=4032 (ns-cnt=13)[0m
+[0;32mI (2258) SSTORE: session store ready, 3 entries[0m
+[0;32mI (2264) SESSION: pre-worker heap: internal=4487 psram=5108544[0m
+[0;32mI (2270) SESSION: session_worker task started, period=1000ms[0m
+[0;32mI (2276) SESSION: session_worker task erstellt, handle=0x3fcc364c[0m
+[0;32mI (2283) SESSION: indicator_session initialised (cap=3600 samples)[0m
+[0;32mI (2291) SESSION: history_list -> UI: count=3 total=3 items=0x3fcabd90[0m
+[0;32mI (2297) UI_SAUNA: on_history_list: count=3 total=3 items=0x3fcabd90[0m
+[0;32mI (3221) time: need update time view[0m
+[0;32mI (3221) time: Mon May  4 17:00:34 2026[0m
+[0;32mI (3270) SESSION: worker hb=1 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+[0;32mI (4036) sensor-model: encode status:0, len:2[0m
+0x2 0xa8 
+[0;32mI (4270) SESSION: worker hb=2 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x4 0xc3 0x9e 0x4 0x1 0x1 0x1 0x0 
+[0;32mI (4592) sensor-model: decode status:0, len:6, type:0xc3[0m
+decode: 0xc3 0x9e 0x4 0x0 0x0 0x0 
+[0;33mW (4594) UI_SAUNA: rp2040 boot_count=1182 reset_reason=0[0m
+[0;32mI (4638) wifi-model: wifi event: WIFI_EVENT_STA_DISCONNECTED[0m
+[0;32mI (4638) wifi-model: retry to connect to the AP[0m
+I (4650) wifi:new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+I (4650) wifi:state: init -> auth (b0)
+I (4656) wifi:state: auth -> assoc (0)
+I (4699) wifi:state: assoc -> run (10)
+I (4720) wifi:connected with Tommy, aid = 10, channel 1, BW20, bssid = 8e:5b:3b:8a:53:70
+I (4721) wifi:security: WPA2-PSK, phy: bgn, rssi: -65
+I (4723) wifi:pm start, type: 1
+
+I (4725) wifi:dp: 1, bi: 102400, li: 3, scale listen interval from 307200 us to 307200 us
+I (4733) wifi:set rx beacon pti, rx_bcn_pti: 0, bcn_timeout: 25000, mt_pti: 0, mt_time: 10000
+[0;32mI (4742) wifi-model: wifi event: WIFI_EVENT_STA_CONNECTED[0m
+[0;32mI (4748) time: event: VIEW_EVENT_WIFI_ST[0m
+I (4752) wifi:[0;32mI (4752) city: event: VIEW_EVENT_WIFI_ST[0m
+dp: 2, bi: 102400, li: 4, scale listen interval from 307200 us to 409600 us
+I (4764) wifi:AP's beacon interval = 102400 us, DTIM period = 2
+I (4771) wifi:<ba-add>idx:0 (ifx:0, 8e:5b:3b:8a:53:70), tid:0, ssn:1, winSize:64
+[0;32mI (5270) SESSION: worker hb=3 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x6 0xbf 0x85 0x58 0x9a 0x42 0x0 0x6 0xc0 0x71 0xfe 0xef 0x40 0x0 
+[0;32mI (5603) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x85 0x58 0x9a 0x42 
+[0;32mI (5607) sensor-model: Sauna temp: 77.2 C[0m
+[0;32mI (5612) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0x71 0xfe 0xef 0x40 
+[0;32mI (5621) sensor-model: Sauna RH: 7.5 %[0m
+recv:  0x2 0xb5 0x1 0x3 0xc0 0x7f 0x0 
+[0;32mI (5637) sensor-model: decode status:0, len:5, type:0xb5[0m
+decode: 0xb5 0x0 0x0 0xc0 0x7f 
+[0;32mI (5742) esp_netif_handlers: sta ip: 10.18.55.96, mask: 255.255.255.0, gw: 10.18.55.77[0m
+[0;32mI (5742) wifi-model: got ip:10.18.55.96[0m
+[0;32mI (5744) wifi-model: Last network exception, check network...[0m
+[0;31mE (5751) ping_sock: esp_ping_new_session(254): create ping task failed[0m
+[0;33mW (5758) wifi-model: ping new_session failed: ESP_ERR_NO_MEM - skipping ping[0m
+[0;32mI (5766) time: event: VIEW_EVENT_WIFI_ST[0m
+[0;33mW (5770) time: WIFI_ST: network up, NTP stale (src=2) - retry sntp[0m
+[0;32mI (5777) city: event: VIEW_EVENT_WIFI_ST[0m
+[0;32mI (6270) SESSION: worker hb=4 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+[0;32mI (6576) ntp: Notification of a time synchronization event[0m
+recv:  0x6 0xbf 0x85 0x58 0x9a 0x42 0x0 0x6 0xc0 0x6f 0x68 0xef 0x40 0x0 
+[0;32mI (6603) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x85 0x58 0x9a 0x42 
+[0;32mI (6607) sensor-model: Sauna temp: 77.2 C[0m
+[0;32mI (6612) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0x6f 0x68 0xef 0x40 
+[0;32mI (6622) sensor-model: Sauna RH: 7.5 %[0m
+[0;32mI (7221) time: need update time view[0m
+[0;32mI (7221) time: Mon May  4 16:59:42 2026[0m
+[0;32mI (7270) SESSION: worker hb=5 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x6 0xbf 0x3b 0x75 0x9a 0x42 0x0 0x6 0xc0 0x6f 0xd2 0xee 0x40 0x0 
+[0;32mI (7603) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x3b 0x75 0x9a 0x42 
+[0;32mI (7607) sensor-model: Sauna temp: 77.2 C[0m
+[0;32mI (7612) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0x6f 0xd2 0xee 0x40 
+[0;32mI (7621) sensor-model: Sauna RH: 7.5 %[0m
+recv:  0x2 0xb5 0x1 0x3 0xc0 0x7f 0x0 
+[0;32mI (7637) sensor-model: decode status:0, len:5, type:0xb5[0m
+decode: 0xb5 0x0 0x0 0xc0 0x7f 
+recv:  0x6 0xbf 0x11 0x7c 0x9a 0x42 0x0 0x6 0xc0 0x6f 0xeb 0xee 0x40 0x0 
+[0;32mI (8603) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x11 0x7c 0x9a 0x42 
+[0;32mI (8607) sensor-model: Sauna temp: 77.2 C[0m
+[0;32mI (8612) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0x6f 0xeb 0xee 0x40 
+[0;32mI (8621) sensor-model: Sauna RH: 7.5 %[0m
+recv:  0x6 0xbf 0xe7 0x82 0x9a 0x42 0x0 0x6 0xc0 0x71 0xfe 0xef 0x40 0x0 
+[0;32mI (9603) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0xe7 0x82 0x9a 0x42 
+[0;32mI (9607) sensor-model: Sauna temp: 77.3 C[0m
+[0;32mI (9612) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0x71 0xfe 0xef 0x40 
+[0;32mI (9621) sensor-model: Sauna RH: 7.5 %[0m
+recv:  0x2 0xb2 0x4 0x40 0x55 0x44 0x0 0x6 0xb3 0x37 0xd5 0xae 0x41 0x0 0x6 0xb4 0x36 0x7e 0x6 0x42 0x0 
+[0;32mI (9635) sensor-model: decode status:0, len:5, type:0xb2[0m
+decode: 0xb2 0x0 0x40 0x55 0x44 
+[0;32mI (9644) sensor-model: decode status:0, len:5, type:0xb3[0m
+decode: 0xb3 0x37 0xd5 0xae 0x41 
+[0;32mI (9653) sensor-model: decode status:0, len:5, type:0xb4[0m
+decode: 0xb4 0x36 0x7e 0x6 0x42 
+recv:  0x2 0xb5 0x1 0x3 0xc0 0x7f 0x0 
+[0;32mI (9666) sensor-model: decode status:0, len:5, type:0xb5[0m
+decode: 0xb5 0x0 0x0 0xc0 0x7f 
+recv:  0x6 0xbf 0xf1 0x91 0x9a 0x42 0x0 0x6 0xc0 0x6f 0x68 0xef 0x40 0x0 
+[0;32mI (10603) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0xf1 0x91 0x9a 0x42 
+[0;32mI (10607) sensor-model: Sauna temp: 77.3 C[0m
+[0;32mI (10612) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0x6f 0x68 0xef 0x40 
+[0;32mI (10621) sensor-model: Sauna RH: 7.5 %[0m
+Guru Meditation Error: Core  0 panic'ed (IllegalInstruction). Exception was unhandled.
+Memory dump at 0x41ff897c: 00000000 00000000 00000000
+Core  0 register dump:
+PC      : 0x41ff8981  PS      : 0x00060d33  A0      : 0x00000000  A1      : 0x3fcb9fb0  
+A2      : 0x3fcc5f58  A3      : 0x00000000  A4      : 0x00a75b23  A5      : 0x00000000  
+A6      : 0x00000001  A7      : 0x3fca2cbc  A8      : 0x820089a0  A9      : 0x3fcb9f90  
+A10     : 0x00000000  A11     : 0x00a76202  A12     : 0x3fc9d390  A13     : 0x00060d23  
+A14     : 0xb33fffff  A15     : 0xb33fffff  SAR     : 0x0000000a  EXCCAUSE: 0x00000000  
+EXCVADDR: 0x00000000  LBEG    : 0x40056f5c  LEND    : 0x40056f72  LCOUNT  : 0xffffffff  
+
+
+Backtrace: 0x41ff897e:0x3fcb9fb0 |<-CORRUPTED
+
+
+
+
+ELF file SHA256: 5bae7ab1f84acf35
+
+Rebooting...
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x3 (RTC_SW_SYS_RST),boot:0x8 (SPI_FAST_FLASH_BOOT)
+Saved PC:0x40375ebb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3818,len:0x19ac
+load:0x403c9700,len:0x4
+load:0x403c9704,len:0xdd4
+load:0x403cc700,len:0x31c8
+entry 0x403c9938
+[0;32mI (31) boot: ESP-IDF v5.1.6-1594-gb0f5707906 2nd stage bootloader[0m
+[0;32mI (31) boot: compile time Apr 21 2026 19:51:30[0m
+[0;32mI (32) boot: Multicore bootloader[0m
+[0;32mI (36) boot: chip revision: v0.2[0m
+[0;32mI (40) boot: efuse block revision: v1.3[0m
+[0;32mI (44) qio_mode: Enabling QIO for flash chip WinBond[0m
+[0;32mI (50) boot.esp32s3: Boot SPI Speed : 80MHz[0m
+[0;32mI (55) boot.esp32s3: SPI Mode       : QIO[0m
+[0;32mI (59) boot.esp32s3: SPI Flash Size : 8MB[0m
+[0;32mI (64) boot: Enabling RNG early entropy source...[0m
+[0;32mI (69) boot: Partition Table:[0m
+[0;32mI (73) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (80) boot:  0 nvs              WiFi data        01 02 00009000 00020000[0m
+[0;32mI (88) boot:  1 phy_init         RF data          01 01 00029000 00001000[0m
+[0;32mI (95) boot:  2 factory          factory app      00 00 00030000 003d0000[0m
+[0;32mI (103) boot: End of partition table[0m
+[0;32mI (107) esp_image: segment 0: paddr=00030020 vaddr=3c100020 size=12d808h (1234952) map[0m
+[0;32mI (307) esp_image: segment 1: paddr=0015d830 vaddr=3fc9d200 size=027e8h ( 10216) load[0m
+[0;32mI (309) esp_image: segment 2: paddr=00160020 vaddr=42000020 size=f6b1ch (1010460) map[0m
+[0;32mI (469) esp_image: segment 3: paddr=00256b44 vaddr=3fc9f9e8 size=02b9ch ( 11164) load[0m
+[0;32mI (471) esp_image: segment 4: paddr=002596e8 vaddr=40374000 size=1917ch (102780) load[0m
+[0;32mI (505) boot: Loaded app from partition at offset 0x30000[0m
+[0;32mI (505) boot: Disabling RNG early entropy source...[0m
+[0;32mI (517) cpu_start: Multicore app[0m
+[0;33mW (517) flash HPM: HPM mode is optional feature that depends on flash model. Read Docs First![0m
+[0;33mW (519) flash HPM: HPM mode with DC adjustment is disabled. Some flash models may not be supported. Read Docs First![0m
+[0;33mW (530) flash HPM: High performance mode of this flash model hasn't been supported.[0m
+[0;32mI (539) MSPI Timing: Flash timing tuning index: 3[0m
+[0;32mI (544) octal_psram: vendor id    : 0x0d (AP)[0m
+[0;32mI (549) octal_psram: dev id       : 0x02 (generation 3)[0m
+[0;32mI (555) octal_psram: density      : 0x03 (64 Mbit)[0m
+[0;32mI (560) octal_psram: good-die     : 0x01 (Pass)[0m
+[0;32mI (565) octal_psram: Latency      : 0x01 (Fixed)[0m
+[0;32mI (570) octal_psram: VCC          : 0x01 (3V)[0m
+[0;32mI (576) octal_psram: SRF          : 0x01 (Fast Refresh)[0m
+[0;32mI (581) octal_psram: BurstType    : 0x01 (Hybrid Wrap)[0m
+[0;32mI (587) octal_psram: BurstLen     : 0x01 (32 Byte)[0m
+[0;32mI (593) octal_psram: Readlatency  : 0x02 (10 cycles@Fixed)[0m
+[0;32mI (599) octal_psram: DriveStrength: 0x00 (1/1)[0m
+[0;32mI (610) MSPI Timing: PSRAM timing tuning index: 2[0m
+[0;32mI (610) esp_psram: Found 8MB PSRAM device[0m
+[0;32mI (614) esp_psram: Speed: 120MHz[0m
+[0;32mI (680) mmu_psram: Instructions copied and mapped to SPIRAM[0m
+[0;32mI (746) mmu_psram: Read only data copied and mapped to SPIRAM[0m
+[0;32mI (746) cpu_start: Pro cpu up.[0m
+[0;32mI (746) cpu_start: Starting app cpu, entry point is 0x403759b0[0m
+[0;32mI (0) cpu_start: App cpu up.[0m
+[0;32mI (970) esp_psram: SPI SRAM memory test OK[0m
+[0;32mI (979) cpu_start: Pro cpu start user code[0m
+[0;32mI (979) cpu_start: cpu freq: 240000000 Hz[0m
+[0;32mI (979) cpu_start: Application information:[0m
+[0;32mI (982) cpu_start: Project name:     indicator_basis[0m
+[0;32mI (988) cpu_start: App version:      v0.2.6-13-g2799d10-dirty[0m
+[0;32mI (994) cpu_start: Compile time:     May  3 2026 19:22:22[0m
+[0;32mI (1000) cpu_start: ELF file SHA256:  5bae7ab1f84acf35...[0m
+[0;32mI (1006) cpu_start: ESP-IDF:          v5.1.6-1594-gb0f5707906[0m
+[0;32mI (1013) cpu_start: Min chip rev:     v0.0[0m
+[0;32mI (1018) cpu_start: Max chip rev:     v0.99 [0m
+[0;32mI (1023) cpu_start: Chip rev:         v0.2[0m
+[0;32mI (1027) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (1035) heap_init: At 3FCB79C8 len 00031D48 (199 KiB): DRAM[0m
+[0;32mI (1041) heap_init: At 3FCE9710 len 00005724 (21 KiB): STACK/DRAM[0m
+[0;32mI (1048) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM[0m
+[0;32mI (1054) heap_init: At 600FE010 len 00001FD8 (7 KiB): RTCRAM[0m
+[0;32mI (1060) esp_psram: Adding pool of 5952K of PSRAM memory to heap allocator[0m
+[0;32mI (1068) spi_flash: detected chip: winbond[0m
+[0;32mI (1073) spi_flash: flash io: qio[0m
+[0;33mW (1077) ADC: legacy driver is deprecated, please migrate to `esp_adc/adc_oneshot.h`[0m
+[0;32mI (1085) sleep: Configure to isolate all GPIO pins in sleep state[0m
+[0;32mI (1092) sleep: Enable automatic switching of GPIO sleep configuration[0m
+[0;32mI (1099) app_start: Starting scheduler on CPU0[0m
+[0;32mI (1104) app_start: Starting scheduler on CPU1[0m
+[0;32mI (1104) main_task: Started on CPU0[0m
+[0;32mI (1114) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations[0m
+[0;32mI (1122) main_task: Calling app_main()[0m
+[0;32mI (1127) : 
+   _____                      _________    ____         
+  / ___/___  ____  ________  / ____/   |  / __ \       
+  \__ \/ _ \/ __ \/ ___/ _ \/ /   / /| | / /_/ /   
+ ___/ /  __/ / / (__  )  __/ /___/ ___ |/ ____/         
+/____/\___/_/ /_/____/\___/\____/_/  |_/_/           
+--------------------------------------------------------
+ Version: v1.0.0 May  3 2026 19:22:23
+--------------------------------------------------------
+[0m
+[0;33mW (1178) BOOT: SSC v0.2.11 | reset=PANIC(4) boot_count=1180[0m
+[0;32mI (1179) i2c_bus: i2c0 bus inited[0m
+[0;32mI (1179) bsp boards: detecting board SenseCAP_Indicator[0m
+[0;32mI (1184) bsp boards: Detected board: [SenseCAP_Indicator][0m
+[0;32mI (1195) gpio: GPIO[38]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:0 [0m
+[0;32mI (1219) gpio: GPIO[45]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1234) gpio: GPIO[41]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1234) gpio: GPIO[48]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1644) lvgl_port: Add TP input device to LVGL[0m
+[0;32mI (1774) view: Sensor screen: 11 panels in 4 rows, balanced layout[0m
+[0;32mI (1775) view: Database settings button added to settings screen[0m
+[0;32mI (1778) UI_SAUNA: ui_sauna_init (480x480 dark-CI)[0m
+[0;32mI (1782) UI_SAUNA: detail-buffer alloziert: cap=3600 slots in PSRAM[0m
+[0;32mI (1989) UI_SAUNA: heartbeat: scr=LEGACY!! running=0[0m
+[0;32mI (2033) sensor-model: sensor history data read successful[0m
+[0;32mI (2034) sensor-model: encode status:0, len:2[0m
+0x2 0xa4 
+[0;32mI (2036) pp: pp rom version: e7ae62f[0m
+[0;32mI (2039) net80211: net80211 rom version: e7ae62f[0m
+I (2045) wifi:wifi driver task: 3fcf77f8, prio:23, stack:6656, core=0
+I (2058) wifi:wifi firmware version: 3e11197
+I (2058) wifi:wifi certification version: v7.0
+I (2059) wifi:config NVS flash: enabled
+I (2062) wifi:config nano formating: disabled
+I (2066) wifi:Init data frame dynamic rx buffer num: 32
+I (2071) wifi:Init static rx mgmt buffer num: 5
+I (2075) wifi:Init management short buffer num: 32
+I (2080) wifi:Init dynamic tx buffer num: 32
+I (2084) wifi:Init static tx FG buffer num: 2
+I (2088) wifi:Init static rx buffer size: 1600
+I (2092) wifi:Init static rx buffer num: 10
+I (2096) wifi:Init dynamic rx buffer num: 32
+[0;32mI (2100) wifi_init: rx ba win: 6[0m
+[0;32mI (2104) wifi_init: tcpip mbox: 32[0m
+[0;32mI (2108) wifi_init: udp mbox: 6[0m
+[0;32mI (2112) wifi_init: tcp mbox: 6[0m
+[0;32mI (2116) wifi_init: tcp tx win: 5760[0m
+[0;32mI (2120) wifi_init: tcp rx win: 5760[0m
+[0;32mI (2124) wifi_init: tcp mss: 1440[0m
+[0;32mI (2128) wifi_init: WiFi IRAM OP enabled[0m
+[0;32mI (2133) wifi_init: WiFi RX IRAM OP enabled[0m
+[0;32mI (2138) wifi-model: last config ssid: Tommy[0m
+[0;32mI (2143) phy_init: phy_version 711,97bcf0a2,Aug 25 2025,19:04:10[0m
+I (2180) wifi:mode : sta (d8:3b:da:a3:d8:f8)
+I (2180) wifi:enable tsf
+[0;32mI (2181) wifi-model: wifi event: WIFI_EVENT_STA_START[0m
+[0;32mI (2182) time: cfg not find[0m
+[0;33mW (2185) time: boot fallback: source=NVS_FALLBACK, applied=2026-05-04 15:00:41 (ts=1777906841)[0m
+[0;33mW (2194) time: Auto timezone: net_zone leer, default Europe/Vienna[0m
+[0;32mI (2200) time: Applying TZ environment variable: CET-1CEST,M3.5.0,M10.5.0/3[0m
+[0;32mI (2209) display: cfg not find[0m
+[0;32mI (2212) mariadb: No saved config, using defaults[0m
+[0;31mE (2217) mariadb: Failed to create DB task[0m
+[0;32mI (2222) SSTORE: NVS: used=1215 free=2817 total=4032 (ns-cnt=13)[0m
+[0;32mI (2229) SSTORE: session store ready, 3 entries[0m
+[0;32mI (2235) SESSION: pre-worker heap: internal=4559 psram=5108544[0m
+[0;32mI (2240) SESSION: session_worker task started, period=1000ms[0m
+[0;32mI (2247) SESSION: session_worker task erstellt, handle=0x3fcc364c[0m
+[0;32mI (2253) SESSION: indicator_session initialised (cap=3600 samples)[0m
+[0;32mI (2261) SESSION: history_list -> UI: count=3 total=3 items=0x3fcabd90[0m
+I (2265) wifi:[0;32mI (2268) UI_SAUNA: on_history_list: count=3 total=3 items=0x3fcabd90[0m
+new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+I (2281) wifi:state: init -> auth (b0)
+I (2293) wifi:state: auth -> init (1c0)
+I (2295) wifi:new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+[0;32mI (2296) wifi-model: wifi event: WIFI_EVENT_STA_DISCONNECTED[0m
+[0;32mI (2301) wifi-model: retry to connect to the AP[0m
+[0;32mI (3208) time: need update time view[0m
+[0;32mI (3209) time: Mon May  4 17:00:42 2026[0m
+[0;32mI (3240) SESSION: worker hb=1 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+[0;32mI (4036) sensor-model: encode status:0, len:2[0m
+0x2 0xa8 
+[0;32mI (4240) SESSION: worker hb=2 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x4 0xc3 0x9f 0x4 0x1 0x1 0x1 0x0 
+[0;32mI (4594) sensor-model: decode status:0, len:6, type:0xc3[0m
+decode: 0xc3 0x9f 0x4 0x0 0x0 0x0 
+[0;33mW (4596) UI_SAUNA: rp2040 boot_count=1183 reset_reason=0[0m
+[0;32mI (4705) wifi-model: wifi event: WIFI_EVENT_STA_DISCONNECTED[0m
+[0;32mI (4706) wifi-model: retry to connect to the AP[0m
+I (4711) wifi:new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+I (4712) wifi:state: init -> auth (b0)
+I (4723) wifi:state: auth -> assoc (0)
+I (4758) wifi:state: assoc -> run (10)
+I (4778) wifi:connected with Tommy, aid = 1, channel 1, BW20, bssid = 8e:5b:3b:8a:53:70
+I (4778) wifi:security: WPA2-PSK, phy: bgn, rssi: -59
+I (4781) wifi:pm start, type: 1
+
+I (4783) wifi:dp: 1, bi: 102400, li: 3, scale listen interval from 307200 us to 307200 us
+I (4791) wifi:set rx beacon pti, rx_bcn_pti: 0, bcn_timeout: 25000, mt_pti: 0, mt_time: 10000
+[0;32mI (4800) wifi-model: wifi event: WIFI_EVENT_STA_CONNECTED[0m
+[0;32mI (4805) time: event: VIEW_EVENT_WIFI_ST[0m
+[0;32mI (4810) city: event: VIEW_EVENT_WIFI_ST[0m
+I (4821) wifi:<ba-add>idx:0 (ifx:0, 8e:5b:3b:8a:53:70), tid:0, ssn:0, winSize:64
+I (4824) wifi:dp: 2, bi: 102400, li: 4, scale listen interval from 307200 us to 409600 us
+I (4829) wifi:AP's beacon interval = 102400 us, DTIM period = 2
+[0;32mI (5240) SESSION: worker hb=3 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x6 0xbf 0xdf 0xdf 0x9a 0x42 0x0 0x6 0xc0 0x6f 0xeb 0xee 0x40 0x0 
+[0;32mI (5604) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0xdf 0xdf 0x9a 0x42 
+[0;32mI (5608) sensor-model: Sauna temp: 77.4 C[0m
+[0;32mI (5613) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0x6f 0xeb 0xee 0x40 
+[0;32mI (5622) sensor-model: Sauna RH: 7.5 %[0m
+recv:  0x2 0xb5 0x1 0x3 0xc0 0x7f 0x0 
+[0;32mI (5641) sensor-model: decode status:0, len:5, type:0xb5[0m
+decode: 0xb5 0x0 0x0 0xc0 0x7f 
+[0;32mI (6240) SESSION: worker hb=4 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+[0;32mI (6299) esp_netif_handlers: sta ip: 10.18.55.96, mask: 255.255.255.0, gw: 10.18.55.77[0m
+[0;32mI (6299) wifi-model: got ip:10.18.55.96[0m
+[0;32mI (6301) wifi-model: Last network exception, check network...[0m
+[0;31mE (6308) ping_sock: esp_ping_new_session(254): create ping task failed[0m
+[0;33mW (6315) wifi-model: ping new_session failed: ESP_ERR_NO_MEM - skipping ping[0m
+[0;32mI (6323) time: event: VIEW_EVENT_WIFI_ST[0m
+[0;33mW (6327) time: WIFI_ST: network up, NTP stale (src=2) - retry sntp[0m
+[0;32mI (6334) city: event: VIEW_EVENT_WIFI_ST[0m
+[0;32mI (6382) ntp: Notification of a time synchronization event[0m
+recv:  0x6 0xbf 0x13 0xe8 0x9a 0x42 0x0 0x6 0xc0 0xee 0x35 0xed 0x40 0x0 
+[0;32mI (6604) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x13 0xe8 0x9a 0x42 
+[0;32mI (6609) sensor-model: Sauna temp: 77.5 C[0m
+[0;32mI (6614) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0xee 0x35 0xed 0x40 
+[0;32mI (6623) sensor-model: Sauna RH: 7.4 %[0m
+Guru Meditation Error: Core  0 panic'ed (Cache disabled but cached memory region accessed). 
+
+
+Core  0 register dump:
+PC      : 0x42022b88  PS      : 0x00060734  A0      : 0x8203abee  A1      : 0x3fccb660  
+A2      : 0x3fcc7740  A3      : 0x3fcb3574  A4      : 0x00000000  A5      : 0x00000000  
+A6      : 0x00000000  A7      : 0x00000000  A8      : 0x82022277  A9      : 0x3fcb3578  
+A10     : 0x3fcc7744  A11     : 0x00000000  A12     : 0x3fcb3574  A13     : 0x00000000  
+A14     : 0x42027178  A15     : 0xb33fffff  SAR     : 0x0000001a  EXCCAUSE: 0x00000007  
+EXCVADDR: 0x00000000  LBEG    : 0x40056f5c  LEND    : 0x40056f72  LCOUNT  : 0xffffffff  
+
+
+Backtrace: 0x42022b85:0x3fccb660 0x4203abeb:0x3fccb6b0 0x4200b393:0x3fccb6e0
+
+
+
+
+ELF file SHA256: 5bae7ab1f84acf35
+
+Rebooting...
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x3 (RTC_SW_SYS_RST),boot:0x8 (SPI_FAST_FLASH_BOOT)
+Saved PC:0x40375ebb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3818,len:0x19ac
+load:0x403c9700,len:0x4
+load:0x403c9704,len:0xdd4
+load:0x403cc700,len:0x31c8
+entry 0x403c9938
+[0;32mI (31) boot: ESP-IDF v5.1.6-1594-gb0f5707906 2nd stage bootloader[0m
+[0;32mI (31) boot: compile time Apr 21 2026 19:51:30[0m
+[0;32mI (32) boot: Multicore bootloader[0m
+[0;32mI (36) boot: chip revision: v0.2[0m
+[0;32mI (40) boot: efuse block revision: v1.3[0m
+[0;32mI (44) qio_mode: Enabling QIO for flash chip WinBond[0m
+[0;32mI (50) boot.esp32s3: Boot SPI Speed : 80MHz[0m
+[0;32mI (55) boot.esp32s3: SPI Mode       : QIO[0m
+[0;32mI (59) boot.esp32s3: SPI Flash Size : 8MB[0m
+[0;32mI (64) boot: Enabling RNG early entropy source...[0m
+[0;32mI (69) boot: Partition Table:[0m
+[0;32mI (73) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (80) boot:  0 nvs              WiFi data        01 02 00009000 00020000[0m
+[0;32mI (88) boot:  1 phy_init         RF data          01 01 00029000 00001000[0m
+[0;32mI (95) boot:  2 factory          factory app      00 00 00030000 003d0000[0m
+[0;32mI (103) boot: End of partition table[0m
+[0;32mI (107) esp_image: segment 0: paddr=00030020 vaddr=3c100020 size=12d808h (1234952) map[0m
+[0;32mI (307) esp_image: segment 1: paddr=0015d830 vaddr=3fc9d200 size=027e8h ( 10216) load[0m
+[0;32mI (309) esp_image: segment 2: paddr=00160020 vaddr=42000020 size=f6b1ch (1010460) map[0m
+[0;32mI (469) esp_image: segment 3: paddr=00256b44 vaddr=3fc9f9e8 size=02b9ch ( 11164) load[0m
+[0;32mI (471) esp_image: segment 4: paddr=002596e8 vaddr=40374000 size=1917ch (102780) load[0m
+[0;32mI (505) boot: Loaded app from partition at offset 0x30000[0m
+[0;32mI (505) boot: Disabling RNG early entropy source...[0m
+[0;32mI (517) cpu_start: Multicore app[0m
+[0;33mW (517) flash HPM: HPM mode is optional feature that depends on flash model. Read Docs First![0m
+[0;33mW (519) flash HPM: HPM mode with DC adjustment is disabled. Some flash models may not be supported. Read Docs First![0m
+[0;33mW (530) flash HPM: High performance mode of this flash model hasn't been supported.[0m
+[0;32mI (539) MSPI Timing: Flash timing tuning index: 3[0m
+[0;32mI (544) octal_psram: vendor id    : 0x0d (AP)[0m
+[0;32mI (549) octal_psram: dev id       : 0x02 (generation 3)[0m
+[0;32mI (555) octal_psram: density      : 0x03 (64 Mbit)[0m
+[0;32mI (560) octal_psram: good-die     : 0x01 (Pass)[0m
+[0;32mI (565) octal_psram: Latency      : 0x01 (Fixed)[0m
+[0;32mI (570) octal_psram: VCC          : 0x01 (3V)[0m
+[0;32mI (576) octal_psram: SRF          : 0x01 (Fast Refresh)[0m
+[0;32mI (581) octal_psram: BurstType    : 0x01 (Hybrid Wrap)[0m
+[0;32mI (587) octal_psram: BurstLen     : 0x01 (32 Byte)[0m
+[0;32mI (593) octal_psram: Readlatency  : 0x02 (10 cycles@Fixed)[0m
+[0;32mI (599) octal_psram: DriveStrength: 0x00 (1/1)[0m
+[0;32mI (610) MSPI Timing: PSRAM timing tuning index: 2[0m
+[0;32mI (610) esp_psram: Found 8MB PSRAM device[0m
+[0;32mI (614) esp_psram: Speed: 120MHz[0m
+[0;32mI (680) mmu_psram: Instructions copied and mapped to SPIRAM[0m
+[0;32mI (746) mmu_psram: Read only data copied and mapped to SPIRAM[0m
+[0;32mI (746) cpu_start: Pro cpu up.[0m
+[0;32mI (746) cpu_start: Starting app cpu, entry point is 0x403759b0[0m
+[0;32mI (0) cpu_start: App cpu up.[0m
+[0;32mI (970) esp_psram: SPI SRAM memory test OK[0m
+[0;32mI (979) cpu_start: Pro cpu start user code[0m
+[0;32mI (979) cpu_start: cpu freq: 240000000 Hz[0m
+[0;32mI (979) cpu_start: Application information:[0m
+[0;32mI (982) cpu_start: Project name:     indicator_basis[0m
+[0;32mI (988) cpu_start: App version:      v0.2.6-13-g2799d10-dirty[0m
+[0;32mI (994) cpu_start: Compile time:     May  3 2026 19:22:22[0m
+[0;32mI (1000) cpu_start: ELF file SHA256:  5bae7ab1f84acf35...[0m
+[0;32mI (1007) cpu_start: ESP-IDF:          v5.1.6-1594-gb0f5707906[0m
+[0;32mI (1013) cpu_start: Min chip rev:     v0.0[0m
+[0;32mI (1018) cpu_start: Max chip rev:     v0.99 [0m
+[0;32mI (1023) cpu_start: Chip rev:         v0.2[0m
+[0;32mI (1027) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (1035) heap_init: At 3FCB79C8 len 00031D48 (199 KiB): DRAM[0m
+[0;32mI (1041) heap_init: At 3FCE9710 len 00005724 (21 KiB): STACK/DRAM[0m
+[0;32mI (1048) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM[0m
+[0;32mI (1054) heap_init: At 600FE010 len 00001FD8 (7 KiB): RTCRAM[0m
+[0;32mI (1060) esp_psram: Adding pool of 5952K of PSRAM memory to heap allocator[0m
+[0;32mI (1068) spi_flash: detected chip: winbond[0m
+[0;32mI (1073) spi_flash: flash io: qio[0m
+[0;33mW (1077) ADC: legacy driver is deprecated, please migrate to `esp_adc/adc_oneshot.h`[0m
+[0;32mI (1085) sleep: Configure to isolate all GPIO pins in sleep state[0m
+[0;32mI (1092) sleep: Enable automatic switching of GPIO sleep configuration[0m
+[0;32mI (1099) app_start: Starting scheduler on CPU0[0m
+[0;32mI (1104) app_start: Starting scheduler on CPU1[0m
+[0;32mI (1104) main_task: Started on CPU0[0m
+[0;32mI (1114) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations[0m
+[0;32mI (1122) main_task: Calling app_main()[0m
+[0;32mI (1127) : 
+   _____                      _________    ____         
+  / ___/___  ____  ________  / ____/   |  / __ \       
+  \__ \/ _ \/ __ \/ ___/ _ \/ /   / /| | / /_/ /   
+ ___/ /  __/ / / (__  )  __/ /___/ ___ |/ ____/         
+/____/\___/_/ /_/____/\___/\____/_/  |_/_/           
+--------------------------------------------------------
+ Version: v1.0.0 May  3 2026 19:22:23
+--------------------------------------------------------
+[0m
+[0;33mW (1178) BOOT: SSC v0.2.11 | reset=PANIC(4) boot_count=1181[0m
+[0;32mI (1179) i2c_bus: i2c0 bus inited[0m
+[0;32mI (1179) bsp boards: detecting board SenseCAP_Indicator[0m
+[0;32mI (1184) bsp boards: Detected board: [SenseCAP_Indicator][0m
+[0;32mI (1195) gpio: GPIO[38]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:0 [0m
+[0;32mI (1219) gpio: GPIO[45]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1234) gpio: GPIO[41]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1234) gpio: GPIO[48]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1644) lvgl_port: Add TP input device to LVGL[0m
+[0;32mI (1774) view: Sensor screen: 11 panels in 4 rows, balanced layout[0m
+[0;32mI (1775) view: Database settings button added to settings screen[0m
+[0;32mI (1778) UI_SAUNA: ui_sauna_init (480x480 dark-CI)[0m
+[0;32mI (1782) UI_SAUNA: detail-buffer alloziert: cap=3600 slots in PSRAM[0m
+[0;32mI (1989) UI_SAUNA: heartbeat: scr=LEGACY!! running=0[0m
+[0;32mI (2033) sensor-model: sensor history data read successful[0m
+[0;32mI (2034) sensor-model: encode status:0, len:2[0m
+0x2 0xa4 
+[0;32mI (2036) pp: pp rom version: e7ae62f[0m
+[0;32mI (2039) net80211: net80211 rom version: e7ae62f[0m
+I (2045) wifi:wifi driver task: 3fcf77f8, prio:23, stack:6656, core=0
+I (2058) wifi:wifi firmware version: 3e11197
+I (2058) wifi:wifi certification version: v7.0
+I (2059) wifi:config NVS flash: enabled
+I (2062) wifi:config nano formating: disabled
+I (2066) wifi:Init data frame dynamic rx buffer num: 32
+I (2071) wifi:Init static rx mgmt buffer num: 5
+I (2075) wifi:Init management short buffer num: 32
+I (2080) wifi:Init dynamic tx buffer num: 32
+I (2084) wifi:Init static tx FG buffer num: 2
+I (2088) wifi:Init static rx buffer size: 1600
+I (2092) wifi:Init static rx buffer num: 10
+I (2096) wifi:Init dynamic rx buffer num: 32
+[0;32mI (2100) wifi_init: rx ba win: 6[0m
+[0;32mI (2104) wifi_init: tcpip mbox: 32[0m
+[0;32mI (2108) wifi_init: udp mbox: 6[0m
+[0;32mI (2112) wifi_init: tcp mbox: 6[0m
+[0;32mI (2116) wifi_init: tcp tx win: 5760[0m
+[0;32mI (2120) wifi_init: tcp rx win: 5760[0m
+[0;32mI (2124) wifi_init: tcp mss: 1440[0m
+[0;32mI (2128) wifi_init: WiFi IRAM OP enabled[0m
+[0;32mI (2133) wifi_init: WiFi RX IRAM OP enabled[0m
+[0;32mI (2138) wifi-model: last config ssid: Tommy[0m
+[0;32mI (2143) phy_init: phy_version 711,97bcf0a2,Aug 25 2025,19:04:10[0m
+I (2180) wifi:mode : sta (d8:3b:da:a3:d8:f8)
+I (2180) wifi:enable tsf
+[0;32mI (2181) wifi-model: wifi event: WIFI_EVENT_STA_START[0m
+[0;32mI (2181) time: cfg not find[0m
+[0;33mW (2185) time: boot fallback: source=NVS_FALLBACK, applied=2026-05-04 15:00:52 (ts=1777906852)[0m
+I (2186) wifi:new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+I (2199) wifi:state: init -> auth (b0)
+[0;33mW (2204) time: Auto timezone: net_zone leer, default Europe/Vienna[0m
+I (2209) wifi:state: auth -> init (1c0)
+[0;32mI (2214) time: Applying TZ environment variable: CET-1CEST,M3.5.0,M10.5.0/3[0m
+I (2215) wifi:new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+[0;32mI (2227) wifi-model: wifi event: WIFI_EVENT_STA_DISCONNECTED[0m
+[0;32mI (2234) wifi-model: retry to connect to the AP[0m
+[0;32mI (2241) display: cfg not find[0m
+[0;32mI (2243) mariadb: No saved config, using defaults[0m
+[0;31mE (2248) mariadb: Failed to create DB task[0m
+[0;32mI (2253) SSTORE: NVS: used=1215 free=2817 total=4032 (ns-cnt=13)[0m
+[0;32mI (2259) SSTORE: session store ready, 3 entries[0m
+[0;32mI (2265) SESSION: pre-worker heap: internal=4527 psram=5108544[0m
+[0;32mI (2271) SESSION: session_worker task started, period=1000ms[0m
+[0;32mI (2271) SESSION: session_worker task erstellt, handle=0x3fcc364c[0m
+[0;32mI (2284) SESSION: indicator_session initialised (cap=3600 samples)[0m
+[0;32mI (2292) SESSION: history_list -> UI: count=3 total=3 items=0x3fcabd90[0m
+[0;32mI (2298) UI_SAUNA: on_history_list: count=3 total=3 items=0x3fcabd90[0m
+[0;32mI (3239) time: need update time view[0m
+[0;32mI (3239) time: Mon May  4 17:00:53 2026[0m
+[0;32mI (3271) SESSION: worker hb=1 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+[0;32mI (4036) sensor-model: encode status:0, len:2[0m
+0x2 0xa8 
+[0;32mI (4271) SESSION: worker hb=2 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x4 0xc3 0xa0 0x4 0x1 0x1 0x1 0x0 
+[0;32mI (4593) sensor-model: decode status:0, len:6, type:0xc3[0m
+decode: 0xc3 0xa0 0x4 0x0 0x0 0x0 
+[0;33mW (4595) UI_SAUNA: rp2040 boot_count=1184 reset_reason=0[0m
+[0;32mI (4638) wifi-model: wifi event: WIFI_EVENT_STA_DISCONNECTED[0m
+[0;32mI (4639) wifi-model: retry to connect to the AP[0m
+[0;32mI (5271) SESSION: worker hb=3 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x6 0xbf 0x89 0x30 0x9b 0x42 0x0 0x6 0xc0 0xee 0xb8 0xec 0x40 0x0 
+[0;32mI (5604) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x89 0x30 0x9b 0x42 
+[0;32mI (5608) sensor-model: Sauna temp: 77.6 C[0m
+[0;32mI (5613) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0xee 0xb8 0xec 0x40 
+[0;32mI (5622) sensor-model: Sauna RH: 7.4 %[0m
+recv:  0x2 0xb5 0x1 0x3 0xc0 0x7f 0x0 
+[0;32mI (5642) sensor-model: decode status:0, len:5, type:0xb5[0m
+decode: 0xb5 0x0 0x0 0xc0 0x7f 
+[0;32mI (6271) SESSION: worker hb=4 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x6 0xbf 0x5f 0x37 0x9b 0x42 0x0 0x6 0xc0 0x6a 0x86 0xea 0x40 0x0 
+[0;32mI (6604) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x5f 0x37 0x9b 0x42 
+[0;32mI (6609) sensor-model: Sauna temp: 77.6 C[0m
+[0;32mI (6614) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0x6a 0x86 0xea 0x40 
+[0;32mI (6623) sensor-model: Sauna RH: 7.3 %[0m
+[0;32mI (7044) wifi-model: wifi event: WIFI_EVENT_STA_DISCONNECTED[0m
+[0;32mI (7044) wifi-model: retry to connect to the AP[0m
+I (7049) wifi:new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+I (7050) wifi:state: init -> auth (b0)
+I (7060) wifi:state: auth -> assoc (0)
+I (7102) wifi:state: assoc -> run (10)
+I (7124) wifi:connected with Tommy, aid = 2, channel 1, BW20, bssid = 8e:5b:3b:8a:53:70
+I (7124) wifi:security: WPA2-PSK, phy: bgn, rssi: -67
+I (7126) wifi:pm start, type: 1
+
+I (7128) wifi:dp: 1, bi: 102400, li: 3, scale listen interval from 307200 us to 307200 us
+I (7136) wifi:set rx beacon pti, rx_bcn_pti: 0, bcn_timeout: 25000, mt_pti: 0, mt_time: 10000
+I (7145) wifi:dp: 2, bi: 102400, li: 4, scale listen interval from 307200 us to 409600 us
+I (7152) wifi:AP's beacon interval = 102400 us, DTIM period = 2
+[0;32mI (7159) wifi-model: wifi event: WIFI_EVENT_STA_CONNECTED[0m
+[0;32mI (7164) time: event: VIEW_EVENT_WIFI_ST[0m
+[0;32mI (7169) city: event: VIEW_EVENT_WIFI_ST[0m
+I (7175) wifi:<ba-add>idx:0 (ifx:0, 8e:5b:3b:8a:53:70), tid:0, ssn:1, winSize:64
+[0;32mI (7271) SESSION: worker hb=5 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x6 0xbf 0x69 0x46 0x9b 0x42 0x0 0x6 0xc0 0xe9 0x66 0xe9 0x40 0x0 
+[0;32mI (7604) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x69 0x46 0x9b 0x42 
+[0;32mI (7609) sensor-model: Sauna temp: 77.6 C[0m
+[0;32mI (7614) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0xe9 0x66 0xe9 0x40 
+[0;32mI (7623) sensor-model: Sauna RH: 7.3 %[0m
+recv:  0x2 0xb5 0x1 0x3 0xc0 0x7f 0x0 
+[0;32mI (7641) sensor-model: decode status:0, len:5, type:0xb5[0m
+decode: 0xb5 0x0 0x0 0xc0 0x7f 
+[0;32mI (8159) esp_netif_handlers: sta ip: 10.18.55.96, mask: 255.255.255.0, gw: 10.18.55.77[0m
+[0;32mI (8159) wifi-model: got ip:10.18.55.96[0m
+[0;32mI (8161) wifi-model: Last network exception, check network...[0m
+[0;31mE (8168) ping_sock: esp_ping_new_session(254): create ping task failed[0m
+[0;33mW (8175) wifi-model: ping new_session failed: ESP_ERR_NO_MEM - skipping ping[0m
+[0;32mI (8183) time: event: VIEW_EVENT_WIFI_ST[0m
+[0;33mW (8187) time: WIFI_ST: network up, NTP stale (src=2) - retry sntp[0m
+[0;32mI (8194) city: event: VIEW_EVENT_WIFI_ST[0m
+recv:  0x6 0xbf 0x15 0x54 0x9b 0x42 0x0 0x6 0xc0 0x6c 0x2f 0xec 0x40 0x0 
+[0;32mI (8604) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x15 0x54 0x9b 0x42 
+[0;32mI (8609) sensor-model: Sauna temp: 77.7 C[0m
+[0;32mI (8614) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0x6c 0x2f 0xec 0x40 
+[0;32mI (8623) sensor-model: Sauna RH: 7.4 %[0m
+recv:  0x6 0xbf 0x49 0x5c 0x9b 0x42 0x0 0x6 0xc0 0xe9 0x66 0xe9 0x40 0x0 
+[0;32mI (9604) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x49 0x5c 0x9b 0x42 
+[0;32mI (9609) sensor-model: Sauna temp: 77.7 C[0m
+[0;32mI (9614) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0xe9 0x66 0xe9 0x40 
+[0;32mI (9623) sensor-model: Sauna RH: 7.3 %[0m
+recv:  0x2 0xb2 0x1 0x3 0x51 0x44 0x0 0x6 0xb3 0x5 0x98 0xad 0x41 0x0 0x6 0xb4 0x56 0x1d 0x6 0x42 0x0 
+[0;32mI (9636) sensor-model: decode status:0, len:5, type:0xb2[0m
+decode: 0xb2 0x0 0x0 0x51 0x44 
+[0;32mI (9645) sensor-model: decode status:0, len:5, type:0xb3[0m
+decode: 0xb3 0x5 0x98 0xad 0x41 
+[0;32mI (9654) sensor-model: decode status:0, len:5, type:0xb4[0m
+decode: 0xb4 0x56 0x1d 0x6 0x42 
+recv:  0x2 0xb5 0x1 0x3 0xc0 0x7f 0x0 
+[0;32mI (9669) sensor-model: decode status:0, len:5, type:0xb5[0m
+decode: 0xb5 0x0 0x0 0xc0 0x7f 
+[0;32mI (10239) time: need update time view[0m
+[0;32mI (10239) time: Mon May  4 17:01:00 2026[0m
+recv:  0x6 0xbf 0xcc 0x70 0x9b 0x42 0x0 0x6 0xc0 0x6a 0x1c 0xeb 0x40 0x0 
+[0;32mI (10604) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0xcc 0x70 0x9b 0x42 
+[0;32mI (10609) sensor-model: Sauna temp: 77.7 C[0m
+[0;32mI (10614) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0x6a 0x1c 0xeb 0x40 
+[0;32mI (10623) sensor-model: Sauna RH: 7.3 %[0m
+recv:  0x6 0xbf 0xd6 0x7f 0x9b 0x42 0x0 0x6 0xc0 0xea 0xfc 0xe9 0x40 0x0 
+[0;32mI (11604) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0xd6 0x7f 0x9b 0x42 
+[0;32mI (11609) sensor-model: Sauna temp: 77.7 C[0m
+[0;32mI (11614) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0xea 0xfc 0xe9 0x40 
+[0;32mI (11623) sensor-model: Sauna RH: 7.3 %[0m
+Guru Meditation Error: Core  1 panic'ed (InstrFetchProhibited). Exception was unhandled.
+
+Core  1 register dump:
+PC      : 0x09025201  PS      : 0x00060130  A0      : 0x8200d232  A1      : 0x3fcf10e0  
+A2      : 0x00000002  A3      : 0x3fcabb8c  A4      : 0x000001ff  A5      : 0x3fcb3ef0  
+A6      : 0x00000000  A7      : 0x3fcb3ef8  A8      : 0x8205cbe6  A9      : 0x3fc9dbc4  
+A10     : 0x3fcee0f0  A11     : 0x3fcf10f0  A12     : 0x00000001  A13     : 0x000001ff  
+A14     : 0x00000001  A15     : 0x3fcee5e4  SAR     : 0x0000001c  EXCCAUSE: 0x00000014  
+EXCVADDR: 0x09025200  LBEG    : 0x40056f5c  LEND    : 0x40056f72  LCOUNT  : 0x00000000  
+
+
+Backtrace: 0x090251fe:0x3fcf10e0 0x4200d22f:0x3fcf1130
+
+
+
+
+ELF file SHA256: 5bae7ab1f84acf35
+
+Rebooting...
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x3 (RTC_SW_SYS_RST),boot:0x8 (SPI_FAST_FLASH_BOOT)
+Saved PC:0x403830ea
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3818,len:0x19ac
+load:0x403c9700,len:0x4
+load:0x403c9704,len:0xdd4
+load:0x403cc700,len:0x31c8
+entry 0x403c9938
+[0;32mI (31) boot: ESP-IDF v5.1.6-1594-gb0f5707906 2nd stage bootloader[0m
+[0;32mI (31) boot: compile time Apr 21 2026 19:51:30[0m
+[0;32mI (32) boot: Multicore bootloader[0m
+[0;32mI (36) boot: chip revision: v0.2[0m
+[0;32mI (40) boot: efuse block revision: v1.3[0m
+[0;32mI (44) qio_mode: Enabling QIO for flash chip WinBond[0m
+[0;32mI (50) boot.esp32s3: Boot SPI Speed : 80MHz[0m
+[0;32mI (55) boot.esp32s3: SPI Mode       : QIO[0m
+[0;32mI (59) boot.esp32s3: SPI Flash Size : 8MB[0m
+[0;32mI (64) boot: Enabling RNG early entropy source...[0m
+[0;32mI (69) boot: Partition Table:[0m
+[0;32mI (73) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (80) boot:  0 nvs              WiFi data        01 02 00009000 00020000[0m
+[0;32mI (88) boot:  1 phy_init         RF data          01 01 00029000 00001000[0m
+[0;32mI (95) boot:  2 factory          factory app      00 00 00030000 003d0000[0m
+[0;32mI (103) boot: End of partition table[0m
+[0;32mI (107) esp_image: segment 0: paddr=00030020 vaddr=3c100020 size=12d808h (1234952) map[0m
+[0;32mI (307) esp_image: segment 1: paddr=0015d830 vaddr=3fc9d200 size=027e8h ( 10216) load[0m
+[0;32mI (309) esp_image: segment 2: paddr=00160020 vaddr=42000020 size=f6b1ch (1010460) map[0m
+[0;32mI (469) esp_image: segment 3: paddr=00256b44 vaddr=3fc9f9e8 size=02b9ch ( 11164) load[0m
+[0;32mI (471) esp_image: segment 4: paddr=002596e8 vaddr=40374000 size=1917ch (102780) load[0m
+[0;32mI (505) boot: Loaded app from partition at offset 0x30000[0m
+[0;32mI (505) boot: Disabling RNG early entropy source...[0m
+[0;32mI (517) cpu_start: Multicore app[0m
+[0;33mW (517) flash HPM: HPM mode is optional feature that depends on flash model. Read Docs First![0m
+[0;33mW (519) flash HPM: HPM mode with DC adjustment is disabled. Some flash models may not be supported. Read Docs First![0m
+[0;33mW (530) flash HPM: High performance mode of this flash model hasn't been supported.[0m
+[0;32mI (539) MSPI Timing: Flash timing tuning index: 3[0m
+[0;32mI (544) octal_psram: vendor id    : 0x0d (AP)[0m
+[0;32mI (549) octal_psram: dev id       : 0x02 (generation 3)[0m
+[0;32mI (555) octal_psram: density      : 0x03 (64 Mbit)[0m
+[0;32mI (560) octal_psram: good-die     : 0x01 (Pass)[0m
+[0;32mI (565) octal_psram: Latency      : 0x01 (Fixed)[0m
+[0;32mI (570) octal_psram: VCC          : 0x01 (3V)[0m
+[0;32mI (576) octal_psram: SRF          : 0x01 (Fast Refresh)[0m
+[0;32mI (581) octal_psram: BurstType    : 0x01 (Hybrid Wrap)[0m
+[0;32mI (587) octal_psram: BurstLen     : 0x01 (32 Byte)[0m
+[0;32mI (593) octal_psram: Readlatency  : 0x02 (10 cycles@Fixed)[0m
+[0;32mI (599) octal_psram: DriveStrength: 0x00 (1/1)[0m
+[0;32mI (610) MSPI Timing: PSRAM timing tuning index: 2[0m
+[0;32mI (610) esp_psram: Found 8MB PSRAM device[0m
+[0;32mI (614) esp_psram: Speed: 120MHz[0m
+[0;32mI (680) mmu_psram: Instructions copied and mapped to SPIRAM[0m
+[0;32mI (746) mmu_psram: Read only data copied and mapped to SPIRAM[0m
+[0;32mI (746) cpu_start: Pro cpu up.[0m
+[0;32mI (746) cpu_start: Starting app cpu, entry point is 0x403759b0[0m
+[0;32mI (0) cpu_start: App cpu up.[0m
+[0;32mI (970) esp_psram: SPI SRAM memory test OK[0m
+[0;32mI (979) cpu_start: Pro cpu start user code[0m
+[0;32mI (979) cpu_start: cpu freq: 240000000 Hz[0m
+[0;32mI (979) cpu_start: Application information:[0m
+[0;32mI (982) cpu_start: Project name:     indicator_basis[0m
+[0;32mI (988) cpu_start: App version:      v0.2.6-13-g2799d10-dirty[0m
+[0;32mI (994) cpu_start: Compile time:     May  3 2026 19:22:22[0m
+[0;32mI (1000) cpu_start: ELF file SHA256:  5bae7ab1f84acf35...[0m
+[0;32mI (1006) cpu_start: ESP-IDF:          v5.1.6-1594-gb0f5707906[0m
+[0;32mI (1013) cpu_start: Min chip rev:     v0.0[0m
+[0;32mI (1018) cpu_start: Max chip rev:     v0.99 [0m
+[0;32mI (1023) cpu_start: Chip rev:         v0.2[0m
+[0;32mI (1027) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (1035) heap_init: At 3FCB79C8 len 00031D48 (199 KiB): DRAM[0m
+[0;32mI (1041) heap_init: At 3FCE9710 len 00005724 (21 KiB): STACK/DRAM[0m
+[0;32mI (1048) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM[0m
+[0;32mI (1054) heap_init: At 600FE010 len 00001FD8 (7 KiB): RTCRAM[0m
+[0;32mI (1060) esp_psram: Adding pool of 5952K of PSRAM memory to heap allocator[0m
+[0;32mI (1068) spi_flash: detected chip: winbond[0m
+[0;32mI (1073) spi_flash: flash io: qio[0m
+[0;33mW (1077) ADC: legacy driver is deprecated, please migrate to `esp_adc/adc_oneshot.h`[0m
+[0;32mI (1085) sleep: Configure to isolate all GPIO pins in sleep state[0m
+[0;32mI (1092) sleep: Enable automatic switching of GPIO sleep configuration[0m
+[0;32mI (1099) app_start: Starting scheduler on CPU0[0m
+[0;32mI (1104) app_start: Starting scheduler on CPU1[0m
+[0;32mI (1104) main_task: Started on CPU0[0m
+[0;32mI (1114) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations[0m
+[0;32mI (1122) main_task: Calling app_main()[0m
+[0;32mI (1127) : 
+   _____                      _________    ____         
+  / ___/___  ____  ________  / ____/   |  / __ \       
+  \__ \/ _ \/ __ \/ ___/ _ \/ /   / /| | / /_/ /   
+ ___/ /  __/ / / (__  )  __/ /___/ ___ |/ ____/         
+/____/\___/_/ /_/____/\___/\____/_/  |_/_/           
+--------------------------------------------------------
+ Version: v1.0.0 May  3 2026 19:22:23
+--------------------------------------------------------
+[0m
+[0;33mW (1178) BOOT: SSC v0.2.11 | reset=PANIC(4) boot_count=1182[0m
+[0;32mI (1179) i2c_bus: i2c0 bus inited[0m
+[0;32mI (1179) bsp boards: detecting board SenseCAP_Indicator[0m
+[0;32mI (1184) bsp boards: Detected board: [SenseCAP_Indicator][0m
+[0;32mI (1195) gpio: GPIO[38]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:0 [0m
+[0;32mI (1219) gpio: GPIO[45]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1234) gpio: GPIO[41]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1234) gpio: GPIO[48]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1644) lvgl_port: Add TP input device to LVGL[0m
+[0;32mI (1774) view: Sensor screen: 11 panels in 4 rows, balanced layout[0m
+[0;32mI (1775) view: Database settings button added to settings screen[0m
+[0;32mI (1778) UI_SAUNA: ui_sauna_init (480x480 dark-CI)[0m
+[0;32mI (1782) UI_SAUNA: detail-buffer alloziert: cap=3600 slots in PSRAM[0m
+[0;32mI (1989) UI_SAUNA: heartbeat: scr=LEGACY!! running=0[0m
+[0;32mI (2033) sensor-model: sensor history data read successful[0m
+[0;32mI (2034) sensor-model: encode status:0, len:2[0m
+0x2 0xa4 
+[0;32mI (2036) pp: pp rom version: e7ae62f[0m
+[0;32mI (2039) net80211: net80211 rom version: e7ae62f[0m
+I (2045) wifi:wifi driver task: 3fcf77f8, prio:23, stack:6656, core=0
+I (2058) wifi:wifi firmware version: 3e11197
+I (2058) wifi:wifi certification version: v7.0
+I (2059) wifi:config NVS flash: enabled
+I (2062) wifi:config nano formating: disabled
+I (2066) wifi:Init data frame dynamic rx buffer num: 32
+I (2071) wifi:Init static rx mgmt buffer num: 5
+I (2075) wifi:Init management short buffer num: 32
+I (2080) wifi:Init dynamic tx buffer num: 32
+I (2084) wifi:Init static tx FG buffer num: 2
+I (2088) wifi:Init static rx buffer size: 1600
+I (2092) wifi:Init static rx buffer num: 10
+I (2096) wifi:Init dynamic rx buffer num: 32
+[0;32mI (2100) wifi_init: rx ba win: 6[0m
+[0;32mI (2104) wifi_init: tcpip mbox: 32[0m
+[0;32mI (2108) wifi_init: udp mbox: 6[0m
+[0;32mI (2112) wifi_init: tcp mbox: 6[0m
+[0;32mI (2116) wifi_init: tcp tx win: 5760[0m
+[0;32mI (2120) wifi_init: tcp rx win: 5760[0m
+[0;32mI (2124) wifi_init: tcp mss: 1440[0m
+[0;32mI (2128) wifi_init: WiFi IRAM OP enabled[0m
+[0;32mI (2133) wifi_init: WiFi RX IRAM OP enabled[0m
+[0;32mI (2138) wifi-model: last config ssid: Tommy[0m
+[0;32mI (2143) phy_init: phy_version 711,97bcf0a2,Aug 25 2025,19:04:10[0m
+I (2179) wifi:mode : sta (d8:3b:da:a3:d8:f8)
+I (2179) wifi:enable tsf
+[0;32mI (2180) wifi-model: wifi event: WIFI_EVENT_STA_START[0m
+[0;32mI (2181) time: cfg not find[0m
+[0;33mW (2184) time: boot fallback: source=COMPILE_TIME, applied=2026-05-04 15:01:03 (ts=1777906863)[0m
+I (2185) wifi:new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+I (2199) wifi:state: init -> auth (b0)
+[0;33mW (2203) time: Auto timezone: net_zone leer, default Europe/Vienna[0m
+[0;32mI (2209) time: Applying TZ environment variable: CET-1CEST,M3.5.0,M10.5.0/3[0m
+[0;32mI (2218) display: cfg not find[0m
+[0;32mI (2221) mariadb: No saved config, using defaults[0m
+[0;31mE (2226) mariadb: Failed to create DB task[0m
+[0;32mI (2231) SSTORE: NVS: used=1215 free=2817 total=4032 (ns-cnt=13)[0m
+[0;32mI (2237) SSTORE: session store ready, 3 entries[0m
+[0;32mI (2243) SESSION: pre-worker heap: internal=4255 psram=5108544[0m
+[0;32mI (2249) SESSION: session_worker task started, period=1000ms[0m
+[0;32mI (2255) SESSION: session_worker task erstellt, handle=0x3fcc364c[0m
+[0;32mI (2262) SESSION: indicator_session initialised (cap=3600 samples)[0m
+[0;32mI (2270) SESSION: history_list -> UI: count=3 total=3 items=0x3fcabd90[0m
+[0;32mI (2276) UI_SAUNA: on_history_list: count=3 total=3 items=0x3fcabd90[0m
+I (2278) wifi:state: auth -> assoc (0)
+I (2380) wifi:state: assoc -> run (10)
+I (2398) wifi:connected with Tommy, aid = 3, channel 1, BW20, bssid = 8e:5b:3b:8a:53:70
+I (2398) wifi:security: WPA2-PSK, phy: bgn, rssi: -56
+I (2400) wifi:pm start, type: 1
+
+I (2402) wifi:dp: 1, bi: 102400, li: 3, scale listen interval from 307200 us to 307200 us
+I (2410) wifi:set rx beacon pti, rx_bcn_pti: 0, bcn_timeout: 25000, mt_pti: 0, mt_time: 10000
+[0;32mI (2419) wifi-model: wifi event: WIFI_EVENT_STA_CONNECTED[0m
+[0;32mI (2425) time: event: VIEW_EVENT_WIFI_ST[0m
+[0;32mI (2429) city: event: VIEW_EVENT_WIFI_ST[0m
+I (2459) wifi:dp: 2, bi: 102400, li: 4, scale listen interval from 307200 us to 409600 us
+I (2459) wifi:AP's beacon interval = 102400 us, DTIM period = 2
+I (2525) wifi:<ba-add>idx:0 (ifx:0, 8e:5b:3b:8a:53:70), tid:0, ssn:1, winSize:64
+[0;32mI (3217) time: need update time view[0m
+[0;32mI (3217) time: Mon May  4 17:01:04 2026[0m
+[0;32mI (3249) SESSION: worker hb=1 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+[0;32mI (3419) esp_netif_handlers: sta ip: 10.18.55.96, mask: 255.255.255.0, gw: 10.18.55.77[0m
+[0;32mI (3419) wifi-model: got ip:10.18.55.96[0m
+[0;32mI (3421) wifi-model: Last network exception, check network...[0m
+[0;31mE (3428) ping_sock: esp_ping_new_session(254): create ping task failed[0m
+[0;33mW (3435) wifi-model: ping new_session failed: ESP_ERR_NO_MEM - skipping ping[0m
+[0;32mI (3443) time: event: VIEW_EVENT_WIFI_ST[0m
+[0;33mW (3447) time: WIFI_ST: network up, NTP stale (src=1) - retry sntp[0m
+[0;32mI (3454) city: event: VIEW_EVENT_WIFI_ST[0m
+[0;32mI (4035) sensor-model: encode status:0, len:2[0m
+0x2 0xa8 
+[0;32mI (4249) SESSION: worker hb=2 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x4 0xc3 0xa1 0x4 0x1 0x1 0x1 0x0 
+[0;32mI (4592) sensor-model: decode status:0, len:6, type:0xc3[0m
+decode: 0xc3 0xa1 0x4 0x0 0x0 0x0 
+[0;33mW (4594) UI_SAUNA: rp2040 boot_count=1185 reset_reason=0[0m
+[0;32mI (5249) SESSION: worker hb=3 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x6 0xbf 0x42 0xb9 0x9b 0x42 0x0 0x6 0xc0 0xea 0x92 0xea 0x40 0x0 
+[0;32mI (5602) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x42 0xb9 0x9b 0x42 
+[0;32mI (5606) sensor-model: Sauna temp: 77.9 C[0m
+[0;32mI (5611) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0xea 0x92 0xea 0x40 
+[0;32mI (5620) sensor-model: Sauna RH: 7.3 %[0m
+recv:  0x2 0xb5 0x1 0x3 0xc0 0x7f 0x0 
+[0;32mI (5641) sensor-model: decode status:0, len:5, type:0xb5[0m
+decode: 0xb5 0x0 0x0 0xc0 0x7f 
+[0;32mI (6249) SESSION: worker hb=4 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x6 0xbf 0xee 0xc6 0x9b 0x42 0x0 0x6 0xc0 0xe9 0xe9 0xe8 0x40 0x0 
+[0;32mI (6602) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0xee 0xc6 0x9b 0x42 
+[0;32mI (6607) sensor-model: Sauna temp: 77.9 C[0m
+[0;32mI (6612) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0xe9 0xe9 0xe8 0x40 
+[0;32mI (6621) sensor-model: Sauna RH: 7.3 %[0m
+[0;32mI (7249) SESSION: worker hb=5 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+[0;32mI (7455) ntp: Notification of a time synchronization event[0m
+recv:  0x6 0xbf 0x2c 0xde 0x9b 0x42 0x0 0x6 0xc0 0x67 0xca 0xe7 0x40 0x0 
+[0;32mI (7602) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x2c 0xde 0x9b 0x42 
+[0;32mI (7607) sensor-model: Sauna temp: 77.9 C[0m
+[0;32mI (7612) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0x67 0xca 0xe7 0x40 
+[0;32mI (7621) sensor-model: Sauna RH: 7.2 %[0m
+recv:  0x2 0xb5 0x1 0x3 0xc0 0x7f 0x0 
+[0;32mI (7637) sensor-model: decode status:0, len:5, type:0xb5[0m
+decode: 0xb5 0x0 0x0 0xc0 0x7f 
+[0;32mI (8217) time: need update time view[0m
+[0;32mI (8217) time: Mon May  4 17:00:12 2026[0m
+recv:  0x6 0xbf 0x2 0xe5 0x9b 0x42 0x0 0x6 0xc0 0xe9 0x7f 0xe9 0x40 0x0 
+[0;32mI (8602) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x2 0xe5 0x9b 0x42 
+[0;32mI (8607) sensor-model: Sauna temp: 77.9 C[0m
+[0;32mI (8611) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0xe9 0x7f 0xe9 0x40 
+[0;32mI (8620) sensor-model: Sauna RH: 7.3 %[0m
+recv:  0x6 0xbf 0x36 0xed 0x9b 0x42 0x0 0x6 0xc0 0x67 0x34 0xe7 0x40 0x0 
+[0;32mI (9602) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x36 0xed 0x9b 0x42 
+[0;32mI (9607) sensor-model: Sauna temp: 78.0 C[0m
+[0;32mI (9612) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0x67 0x34 0xe7 0x40 
+[0;32mI (9621) sensor-model: Sauna RH: 7.2 %[0m
+recv:  0x2 0xb2 0x4 0xc0 0x43 0x44 0x0 0x6 0xb3 0xb6 0x7d 0xae 0x41 0x0 0x6 0xb4 0x45 0x60 0x5 0x42 0x0 
+[0;32mI (9639) sensor-model: decode status:0, len:5, type:0xb2[0m
+decode: 0xb2 0x0 0xc0 0x43 0x44 
+[0;32mI (9643) sensor-model: decode status:0, len:5, type:0xb3[0m
+decode: 0xb3 0xb6 0x7d 0xae 0x41 
+[0;32mI (9652) sensor-model: decode status:0, len:5, type:0xb4[0m
+decode: 0xb4 0x45 0x60 0x5 0x42 
+recv:  0x2 0xb5 0x1 0x3 0xc0 0x7f 0x0 
+[0;32mI (9665) sensor-model: decode status:0, len:5, type:0xb5[0m
+decode: 0xb5 0x0 0x0 0xc0 0x7f 
+recv:  0x6 0xbf 0xc2 0x10 0x9c 0x42 0x0 0x6 0xc0 0x67 0xca 0xe7 0x40 0x0 
+[0;32mI (10602) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0xc2 0x10 0x9c 0x42 
+[0;32mI (10607) sensor-model: Sauna temp: 78.0 C[0m
+[0;32mI (10612) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0x67 0xca 0xe7 0x40 
+[0;32mI (10621) sensor-model: Sauna RH: 7.2 %[0m
+recv:  0x6 0xbf 0xb8 0x1 0x9c 0x42 0x0 0x6 0xc0 0xe9 0x53 0xe8 0x40 0x0 
+[0;32mI (11602) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0xb8 0x1 0x9c 0x42 
+[0;32mI (11607) sensor-model: Sauna temp: 78.0 C[0m
+[0;32mI (11612) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0xe9 0x53 0xe8 0x40 
+[0;32mI (11621) sensor-model: Sauna RH: 7.3 %[0m
+recv:  0x2 0xb5 0x1 0x3 0xc0 0x7f 0x0 
+[0;32mI (11636) sensor-model: decode status:0, len:5, type:0xb5[0m
+decode: 0xb5 0x0 0x0 0xc0 0x7f 
+[0;32mI (12034) sensor-model: __sensor_history_data_update_check: Mon May  4 17:00:16 2026 (interval=68)[0m
+[0;32mI (12034) sensor-model: Temp index:1, data:27, time:1777820400[0m
+[0;32mI (12039) sensor-model: Temp index:2, data:25, time:1777821300[0m
+[0;32mI (12045) sensor-model: Temp index:3, data:25, time:1777822200[0m
+[0;32mI (12052) sensor-model: Temp index:4, data:25, time:1777823100[0m
+[0;32mI (12058) sensor-model: Temp index:5, data:25, time:1777824000[0m
+[0;32mI (12065) sensor-model: Temp index:6, data:25, time:1777824900[0m
+[0;32mI (12071) sensor-model: Temp index:7, data:25, time:1777825800[0m
+[0;32mI (12078) sensor-model: Temp index:8, data:26, time:1777826700[0m
+[0;32mI (12084) sensor-model: Temp index:9, data:25, time:1777827600[0m
+[0;32mI (12091) sensor-model: Temp index:10, data:25, time:1777828500[0m
+[0;32mI (12098) sensor-model: Temp index:18, data:16, time:1777835700[0m
+[0;32mI (12104) sensor-model: Temp History day data  95 overlap ![0m
+[0;32mI (12110) sensor-model: Temp, index:6, min:16, max:16, time:1777766400[0m
+[0;32mI (12112) UI_SAUNA: heartbeat: scr=HOME running=0[0m
+Guru Meditation Error: Core  0 panic'ed (LoadProhibited). Exception was unhandled.
+
+Core  0 register dump:
+PC      : 0x420639da  PS      : 0x00060330  A0      : 0x82063c57  A1      : 0x3fccb580  
+A2      : 0x3fcc4640  A3      : 0x3c218130  A4      : 0x3fccb4b4  A5      : 0x00000010  
+A6      : 0x00ff0000  A7      : 0xff000000  A8      : 0x80377954  A9      : 0x3fccb560  
+A10     : 0x00060f23  A11     : 0x00000000  A12     : 0x00000001  A13     : 0x3fcc43d4  
+A14     : 0x3fccb47c  A15     : 0x00000000  SAR     : 0x00000004  EXCCAUSE: 0x0000001c  
+EXCVADDR: 0x00060f23  LBEG    : 0x400556d5  LEND    : 0x400556e5  LCOUNT  : 0xfffffffe  
+
+
+Backtrace: 0x420639d7:0x3fccb580 0x42063c54:0x3fccb5a0 0x42061e17:0x3fccb5e0 0x42061f97:0x3fccb610 0x4201581a:0x3fccb630 0x4203abeb:0x3fccb6b0 0x4200b393:0x3fccb6e0
+
+
+
+
+ELF file SHA256: 5bae7ab1f84acf35
+
+Rebooting...
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x3 (RTC_SW_SYS_RST),boot:0x8 (SPI_FAST_FLASH_BOOT)
+Saved PC:0x40375ebb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3818,len:0x19ac
+load:0x403c9700,len:0x4
+load:0x403c9704,len:0xdd4
+load:0x403cc700,len:0x31c8
+entry 0x403c9938
+[0;32mI (31) boot: ESP-IDF v5.1.6-1594-gb0f5707906 2nd stage bootloader[0m
+[0;32mI (31) boot: compile time Apr 21 2026 19:51:30[0m
+[0;32mI (32) boot: Multicore bootloader[0m
+[0;32mI (36) boot: chip revision: v0.2[0m
+[0;32mI (40) boot: efuse block revision: v1.3[0m
+[0;32mI (44) qio_mode: Enabling QIO for flash chip WinBond[0m
+[0;32mI (50) boot.esp32s3: Boot SPI Speed : 80MHz[0m
+[0;32mI (55) boot.esp32s3: SPI Mode       : QIO[0m
+[0;32mI (59) boot.esp32s3: SPI Flash Size : 8MB[0m
+[0;32mI (64) boot: Enabling RNG early entropy source...[0m
+[0;32mI (69) boot: Partition Table:[0m
+[0;32mI (73) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (80) boot:  0 nvs              WiFi data        01 02 00009000 00020000[0m
+[0;32mI (88) boot:  1 phy_init         RF data          01 01 00029000 00001000[0m
+[0;32mI (95) boot:  2 factory          factory app      00 00 00030000 003d0000[0m
+[0;32mI (103) boot: End of partition table[0m
+[0;32mI (107) esp_image: segment 0: paddr=00030020 vaddr=3c100020 size=12d808h (1234952) map[0m
+[0;32mI (307) esp_image: segment 1: paddr=0015d830 vaddr=3fc9d200 size=027e8h ( 10216) load[0m
+[0;32mI (309) esp_image: segment 2: paddr=00160020 vaddr=42000020 size=f6b1ch (1010460) map[0m
+[0;32mI (469) esp_image: segment 3: paddr=00256b44 vaddr=3fc9f9e8 size=02b9ch ( 11164) load[0m
+[0;32mI (471) esp_image: segment 4: paddr=002596e8 vaddr=40374000 size=1917ch (102780) load[0m
+[0;32mI (505) boot: Loaded app from partition at offset 0x30000[0m
+[0;32mI (505) boot: Disabling RNG early entropy source...[0m
+[0;32mI (517) cpu_start: Multicore app[0m
+[0;33mW (517) flash HPM: HPM mode is optional feature that depends on flash model. Read Docs First![0m
+[0;33mW (519) flash HPM: HPM mode with DC adjustment is disabled. Some flash models may not be supported. Read Docs First![0m
+[0;33mW (530) flash HPM: High performance mode of this flash model hasn't been supported.[0m
+[0;32mI (539) MSPI Timing: Flash timing tuning index: 3[0m
+[0;32mI (544) octal_psram: vendor id    : 0x0d (AP)[0m
+[0;32mI (549) octal_psram: dev id       : 0x02 (generation 3)[0m
+[0;32mI (555) octal_psram: density      : 0x03 (64 Mbit)[0m
+[0;32mI (560) octal_psram: good-die     : 0x01 (Pass)[0m
+[0;32mI (565) octal_psram: Latency      : 0x01 (Fixed)[0m
+[0;32mI (570) octal_psram: VCC          : 0x01 (3V)[0m
+[0;32mI (576) octal_psram: SRF          : 0x01 (Fast Refresh)[0m
+[0;32mI (581) octal_psram: BurstType    : 0x01 (Hybrid Wrap)[0m
+[0;32mI (587) octal_psram: BurstLen     : 0x01 (32 Byte)[0m
+[0;32mI (593) octal_psram: Readlatency  : 0x02 (10 cycles@Fixed)[0m
+[0;32mI (599) octal_psram: DriveStrength: 0x00 (1/1)[0m
+[0;32mI (610) MSPI Timing: PSRAM timing tuning index: 2[0m
+[0;32mI (610) esp_psram: Found 8MB PSRAM device[0m
+[0;32mI (614) esp_psram: Speed: 120MHz[0m
+[0;32mI (680) mmu_psram: Instructions copied and mapped to SPIRAM[0m
+[0;32mI (746) mmu_psram: Read only data copied and mapped to SPIRAM[0m
+[0;32mI (746) cpu_start: Pro cpu up.[0m
+[0;32mI (746) cpu_start: Starting app cpu, entry point is 0x403759b0[0m
+[0;32mI (0) cpu_start: App cpu up.[0m
+[0;32mI (970) esp_psram: SPI SRAM memory test OK[0m
+[0;32mI (979) cpu_start: Pro cpu start user code[0m
+[0;32mI (979) cpu_start: cpu freq: 240000000 Hz[0m
+[0;32mI (979) cpu_start: Application information:[0m
+[0;32mI (982) cpu_start: Project name:     indicator_basis[0m
+[0;32mI (988) cpu_start: App version:      v0.2.6-13-g2799d10-dirty[0m
+[0;32mI (994) cpu_start: Compile time:     May  3 2026 19:22:22[0m
+[0;32mI (1000) cpu_start: ELF file SHA256:  5bae7ab1f84acf35...[0m
+[0;32mI (1007) cpu_start: ESP-IDF:          v5.1.6-1594-gb0f5707906[0m
+[0;32mI (1013) cpu_start: Min chip rev:     v0.0[0m
+[0;32mI (1018) cpu_start: Max chip rev:     v0.99 [0m
+[0;32mI (1023) cpu_start: Chip rev:         v0.2[0m
+[0;32mI (1027) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (1035) heap_init: At 3FCB79C8 len 00031D48 (199 KiB): DRAM[0m
+[0;32mI (1041) heap_init: At 3FCE9710 len 00005724 (21 KiB): STACK/DRAM[0m
+[0;32mI (1048) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM[0m
+[0;32mI (1054) heap_init: At 600FE010 len 00001FD8 (7 KiB): RTCRAM[0m
+[0;32mI (1060) esp_psram: Adding pool of 5952K of PSRAM memory to heap allocator[0m
+[0;32mI (1068) spi_flash: detected chip: winbond[0m
+[0;32mI (1073) spi_flash: flash io: qio[0m
+[0;33mW (1077) ADC: legacy driver is deprecated, please migrate to `esp_adc/adc_oneshot.h`[0m
+[0;32mI (1085) sleep: Configure to isolate all GPIO pins in sleep state[0m
+[0;32mI (1092) sleep: Enable automatic switching of GPIO sleep configuration[0m
+[0;32mI (1099) app_start: Starting scheduler on CPU0[0m
+[0;32mI (1104) app_start: Starting scheduler on CPU1[0m
+[0;32mI (1104) main_task: Started on CPU0[0m
+[0;32mI (1114) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations[0m
+[0;32mI (1122) main_task: Calling app_main()[0m
+[0;32mI (1127) : 
+   _____                      _________    ____         
+  / ___/___  ____  ________  / ____/   |  / __ \       
+  \__ \/ _ \/ __ \/ ___/ _ \/ /   / /| | / /_/ /   
+ ___/ /  __/ / / (__  )  __/ /___/ ___ |/ ____/         
+/____/\___/_/ /_/____/\___/\____/_/  |_/_/           
+--------------------------------------------------------
+ Version: v1.0.0 May  3 2026 19:22:23
+--------------------------------------------------------
+[0m
+[0;33mW (1178) BOOT: SSC v0.2.11 | reset=PANIC(4) boot_count=1183[0m
+[0;32mI (1179) i2c_bus: i2c0 bus inited[0m
+[0;32mI (1179) bsp boards: detecting board SenseCAP_Indicator[0m
+[0;32mI (1184) bsp boards: Detected board: [SenseCAP_Indicator][0m
+[0;32mI (1195) gpio: GPIO[38]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:0 [0m
+[0;32mI (1219) gpio: GPIO[45]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1234) gpio: GPIO[41]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1234) gpio: GPIO[48]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1644) lvgl_port: Add TP input device to LVGL[0m
+[0;32mI (1774) view: Sensor screen: 11 panels in 4 rows, balanced layout[0m
+[0;32mI (1775) view: Database settings button added to settings screen[0m
+[0;32mI (1778) UI_SAUNA: ui_sauna_init (480x480 dark-CI)[0m
+[0;32mI (1782) UI_SAUNA: detail-buffer alloziert: cap=3600 slots in PSRAM[0m
+[0;32mI (1989) UI_SAUNA: heartbeat: scr=LEGACY!! running=0[0m
+[0;32mI (2054) sensor-model: sensor history data read successful[0m
+[0;32mI (2055) sensor-model: encode status:0, len:2[0m
+0x2 0xa4 
+[0;32mI (2057) pp: pp rom version: e7ae62f[0m
+[0;32mI (2060) net80211: net80211 rom version: e7ae62f[0m
+I (2066) wifi:wifi driver task: 3fcf791c, prio:23, stack:6656, core=0
+I (2092) wifi:wifi firmware version: 3e11197
+I (2092) wifi:wifi certification version: v7.0
+I (2092) wifi:config NVS flash: enabled
+I (2093) wifi:config nano formating: disabled
+I (2097) wifi:Init data frame dynamic rx buffer num: 32
+I (2102) wifi:Init static rx mgmt buffer num: 5
+I (2106) wifi:Init management short buffer num: 32
+I (2111) wifi:Init dynamic tx buffer num: 32
+I (2115) wifi:Init static tx FG buffer num: 2
+I (2119) wifi:Init static rx buffer size: 1600
+I (2123) wifi:Init static rx buffer num: 10
+I (2127) wifi:Init dynamic rx buffer num: 32
+[0;32mI (2131) wifi_init: rx ba win: 6[0m
+[0;32mI (2135) wifi_init: tcpip mbox: 32[0m
+[0;32mI (2139) wifi_init: udp mbox: 6[0m
+[0;32mI (2143) wifi_init: tcp mbox: 6[0m
+[0;32mI (2146) wifi_init: tcp tx win: 5760[0m
+[0;32mI (2151) wifi_init: tcp rx win: 5760[0m
+[0;32mI (2155) wifi_init: tcp mss: 1440[0m
+[0;32mI (2159) wifi_init: WiFi IRAM OP enabled[0m
+[0;32mI (2163) wifi_init: WiFi RX IRAM OP enabled[0m
+[0;32mI (2168) wifi-model: last config ssid: Tommy[0m
+[0;32mI (2174) phy_init: phy_version 711,97bcf0a2,Aug 25 2025,19:04:10[0m
+I (2210) wifi:mode : sta (d8:3b:da:a3:d8:f8)
+I (2210) wifi:enable tsf
+[0;32mI (2211) wifi-model: wifi event: WIFI_EVENT_STA_START[0m
+[0;32mI (2212) time: cfg not find[0m
+[0;33mW (2215) time: boot fallback: source=NVS_FALLBACK, applied=2026-05-04 15:01:11 (ts=1777906871)[0m
+I (2216) wifi:new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+I (2230) wifi:state: init -> auth (b0)
+[0;33mW (2234) time: Auto timezone: net_zone leer, default Europe/Vienna[0m
+[0;32mI (2240) time: Applying TZ environment variable: CET-1CEST,M3.5.0,M10.5.0/3[0m
+I (2241) wifi:state: auth -> init (1c0)
+I (2252) wifi:new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+[0;32mI (2257) wifi-model: wifi event: WIFI_EVENT_STA_DISCONNECTED[0m
+[0;32mI (2264) wifi-model: retry to connect to the AP[0m
+[0;32mI (2272) display: cfg not find[0m
+[0;32mI (2273) mariadb: No saved config, using defaults[0m
+[0;31mE (2278) mariadb: Failed to create DB task[0m
+[0;32mI (2283) SSTORE: NVS: used=1215 free=2817 total=4032 (ns-cnt=13)[0m
+[0;32mI (2289) SSTORE: session store ready, 3 entries[0m
+[0;32mI (2295) SESSION: pre-worker heap: internal=4487 psram=5108544[0m
+[0;32mI (2301) SESSION: session_worker task started, period=1000ms[0m
+[0;32mI (2307) SESSION: session_worker task erstellt, handle=0x3fcc3828[0m
+[0;32mI (2314) SESSION: indicator_session initialised (cap=3600 samples)[0m
+[0;32mI (2322) SESSION: history_list -> UI: count=3 total=3 items=0x3fcabd90[0m
+[0;32mI (2328) UI_SAUNA: on_history_list: count=3 total=3 items=0x3fcabd90[0m
+[0;32mI (3269) time: need update time view[0m
+[0;32mI (3269) time: Mon May  4 17:01:12 2026[0m
+[0;32mI (3301) SESSION: worker hb=1 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+[0;32mI (4056) sensor-model: encode status:0, len:2[0m
+0x2 0xa8 
+[0;32mI (4301) SESSION: worker hb=2 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x4 0xc3 0xa2 0x4 0x1 0x1 0x1 0x0 
+[0;32mI (4593) sensor-model: decode status:0, len:6, type:0xc3[0m
+decode: 0xc3 0xa2 0x4 0x0 0x0 0x0 
+[0;33mW (4595) UI_SAUNA: rp2040 boot_count=1186 reset_reason=0[0m
+[0;32mI (4669) wifi-model: wifi event: WIFI_EVENT_STA_DISCONNECTED[0m
+[0;32mI (4669) wifi-model: retry to connect to the AP[0m
+I (4674) wifi:new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+I (4675) wifi:state: init -> auth (b0)
+I (4686) wifi:state: auth -> assoc (0)
+I (4720) wifi:state: assoc -> run (10)
+I (4740) wifi:connected with Tommy, aid = 4, channel 1, BW20, bssid = 8e:5b:3b:8a:53:70
+I (4740) wifi:security: WPA2-PSK, phy: bgn, rssi: -61
+I (4742) wifi:pm start, type: 1
+
+I (4744) wifi:dp: 1, bi: 102400, li: 3, scale listen interval from 307200 us to 307200 us
+I (4752) wifi:set rx beacon pti, rx_bcn_pti: 0, bcn_timeout: 25000, mt_pti: 0, mt_time: 10000
+I (4761) wifi:dp: 2, bi: 102400, li: 4, scale listen interval from 307200 us to 409600 us
+I (4769) wifi:AP's beacon interval = 102400 us, DTIM period = 2
+[0;32mI (4775) wifi-model: wifi event: WIFI_EVENT_STA_CONNECTED[0m
+[0;32mI (4780) time: event: VIEW_EVENT_WIFI_ST[0m
+[0;32mI (4785) city: event: VIEW_EVENT_WIFI_ST[0m
+I (4796) wifi:<ba-add>idx:0 (ifx:0, 8e:5b:3b:8a:53:70), tid:0, ssn:1, winSize:64
+[0;32mI (5301) SESSION: worker hb=3 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x6 0xbf 0xe 0x60 0x9c 0x42 0x0 0x6 0xc0 0x69 0x60 0xe8 0x40 0x0 
+[0;32mI (5603) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0xe 0x60 0x9c 0x42 
+[0;32mI (5607) sensor-model: Sauna temp: 78.2 C[0m
+[0;32mI (5612) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0x69 0x60 0xe8 0x40 
+[0;32mI (5621) sensor-model: Sauna RH: 7.3 %[0m
+recv:  0x2 0xb5 0x1 0x3 0xc0 0x7f 0x0 
+[0;32mI (5637) sensor-model: decode status:0, len:5, type:0xb5[0m
+decode: 0xb5 0x0 0x0 0xc0 0x7f 
+[0;32mI (5775) esp_netif_handlers: sta ip: 10.18.55.96, mask: 255.255.255.0, gw: 10.18.55.77[0m
+[0;32mI (5775) wifi-model: got ip:10.18.55.96[0m
+[0;32mI (5777) wifi-model: Last network exception, check network...[0m
+[0;31mE (5784) ping_sock: esp_ping_new_session(254): create ping task failed[0m
+[0;33mW (5791) wifi-model: ping new_session failed: ESP_ERR_NO_MEM - skipping ping[0m
+[0;32mI (5799) time: event: VIEW_EVENT_WIFI_ST[0m
+[0;33mW (5803) time: WIFI_ST: network up, NTP stale (src=2) - retry sntp[0m
+[0;32mI (5810) city: event: VIEW_EVENT_WIFI_ST[0m
+[0;32mI (6290) ntp: Notification of a time synchronization event[0m
+[0;32mI (6301) SESSION: worker hb=4 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x6 0xbf 0x4 0x51 0x9c 0x42 0x0 0x6 0xc0 0x66 0x21 0xe6 0x40 0x0 
+[0;32mI (6603) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x4 0x51 0x9c 0x42 
+[0;32mI (6607) sensor-model: Sauna temp: 78.2 C[0m
+[0;32mI (6612) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0x66 0x21 0xe6 0x40 
+[0;32mI (6622) sensor-model: Sauna RH: 7.2 %[0m
+[0;32mI (7269) time: need update time view[0m
+[0;32mI (7269) time: Mon May  4 17:00:23 2026[0m
+[0;32mI (7301) SESSION: worker hb=5 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x6 0xbf 0x90 0x74 0x9c 0x42 0x0 0x6 0xc0 0x67 0xe3 0xe7 0x40 0x0 
+[0;32mI (7603) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x90 0x74 0x9c 0x42 
+[0;32mI (7607) sensor-model: Sauna temp: 78.2 C[0m
+[0;32mI (7612) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0x67 0xe3 0xe7 0x40 
+[0;32mI (7621) sensor-model: Sauna RH: 7.2 %[0m
+recv:  0x2 0xb5 0x1 0x3 0xc0 0x7f 0x0 
+[0;32mI (7637) sensor-model: decode status:0, len:5, type:0xb5[0m
+decode: 0xb5 0x0 0x0 0xc0 0x7f 
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x8 (SPI_FAST_FLASH_BOOT)
+Saved PC:0x403830c6
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3818,len:0x19ac
+load:0x403c9700,len:0x4
+load:0x403c9704,len:0xdd4
+load:0x403cc700,len:0x31c8
+entry 0x403c9938
+[0;32mI (31) boot: ESP-IDF v5.1.6-1594-gb0f5707906 2nd stage bootloader[0m
+[0;32mI (31) boot: compile time Apr 21 2026 19:51:30[0m
+[0;32mI (32) boot: Multicore bootloader[0m
+[0;32mI (36) boot: chip revision: v0.2[0m
+[0;32mI (40) boot: efuse block revision: v1.3[0m
+[0;32mI (44) qio_mode: Enabling QIO for flash chip WinBond[0m
+[0;32mI (50) boot.esp32s3: Boot SPI Speed : 80MHz[0m
+[0;32mI (55) boot.esp32s3: SPI Mode       : QIO[0m
+[0;32mI (59) boot.esp32s3: SPI Flash Size : 8MB[0m
+[0;33mW (64) boot.esp32s3: PRO CPU has been reset by WDT.[0m
+[0;33mW (69) boot.esp32s3: APP CPU has been reset by WDT.[0m
+[0;32mI (75) boot: Enabling RNG early entropy source...[0m
+[0;32mI (81) boot: Partition Table:[0m
+[0;32mI (84) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (91) boot:  0 nvs              WiFi data        01 02 00009000 00020000[0m
+[0;32mI (99) boot:  1 phy_init         RF data          01 01 00029000 00001000[0m
+[0;32mI (106) boot:  2 factory          factory app      00 00 00030000 003d0000[0m
+[0;32mI (114) boot: End of partition table[0m
+[0;32mI (118) esp_image: segment 0: paddr=00030020 vaddr=3c100020 size=12d808h (1234952) map[0m
+[0;32mI (318) esp_image: segment 1: paddr=0015d830 vaddr=3fc9d200 size=027e8h ( 10216) load[0m
+[0;32mI (320) esp_image: segment 2: paddr=00160020 vaddr=42000020 size=f6b1ch (1010460) map[0m
+[0;32mI (480) esp_image: segment 3: paddr=00256b44 vaddr=3fc9f9e8 size=02b9ch ( 11164) load[0m
+[0;32mI (482) esp_image: segment 4: paddr=002596e8 vaddr=40374000 size=1917ch (102780) load[0m
+[0;32mI (516) boot: Loaded app from partition at offset 0x30000[0m
+[0;32mI (516) boot: Disabling RNG early entropy source...[0m
+[0;32mI (528) cpu_start: Multicore app[0m
+[0;33mW (529) flash HPM: HPM mode is optional feature that depends on flash model. Read Docs First![0m
+[0;33mW (530) flash HPM: HPM mode with DC adjustment is disabled. Some flash models may not be supported. Read Docs First![0m
+[0;33mW (541) flash HPM: High performance mode of this flash model hasn't been supported.[0m
+[0;32mI (550) MSPI Timing: Flash timing tuning index: 3[0m
+[0;32mI (555) octal_psram: vendor id    : 0x0d (AP)[0m
+[0;32mI (560) octal_psram: dev id       : 0x02 (generation 3)[0m
+[0;32mI (566) octal_psram: density      : 0x03 (64 Mbit)[0m
+[0;32mI (571) octal_psram: good-die     : 0x01 (Pass)[0m
+[0;32mI (576) octal_psram: Latency      : 0x01 (Fixed)[0m
+[0;32mI (582) octal_psram: VCC          : 0x01 (3V)[0m
+[0;32mI (587) octal_psram: SRF          : 0x01 (Fast Refresh)[0m
+[0;32mI (593) octal_psram: BurstType    : 0x01 (Hybrid Wrap)[0m
+[0;32mI (598) octal_psram: BurstLen     : 0x01 (32 Byte)[0m
+[0;32mI (604) octal_psram: Readlatency  : 0x02 (10 cycles@Fixed)[0m
+[0;32mI (610) octal_psram: DriveStrength: 0x00 (1/1)[0m
+[0;32mI (621) MSPI Timing: PSRAM timing tuning index: 2[0m
+[0;32mI (621) esp_psram: Found 8MB PSRAM device[0m
+[0;32mI (626) esp_psram: Speed: 120MHz[0m
+[0;32mI (691) mmu_psram: Instructions copied and mapped to SPIRAM[0m
+[0;32mI (757) mmu_psram: Read only data copied and mapped to SPIRAM[0m
+[0;32mI (757) cpu_start: Pro cpu up.[0m
+[0;32mI (757) cpu_start: Starting app cpu, entry point is 0x403759b0[0m
+[0;32mI (0) cpu_start: App cpu up.[0m
+[0;32mI (982) esp_psram: SPI SRAM memory test OK[0m
+[0;32mI (990) cpu_start: Pro cpu start user code[0m
+[0;32mI (990) cpu_start: cpu freq: 240000000 Hz[0m
+[0;32mI (991) cpu_start: Application information:[0m
+[0;32mI (993) cpu_start: Project name:     indicator_basis[0m
+[0;32mI (999) cpu_start: App version:      v0.2.6-13-g2799d10-dirty[0m
+[0;32mI (1006) cpu_start: Compile time:     May  3 2026 19:22:22[0m
+[0;32mI (1012) cpu_start: ELF file SHA256:  5bae7ab1f84acf35...[0m
+[0;32mI (1018) cpu_start: ESP-IDF:          v5.1.6-1594-gb0f5707906[0m
+[0;32mI (1024) cpu_start: Min chip rev:     v0.0[0m
+[0;32mI (1029) cpu_start: Max chip rev:     v0.99 [0m
+[0;32mI (1034) cpu_start: Chip rev:         v0.2[0m
+[0;32mI (1039) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (1046) heap_init: At 3FCB79C8 len 00031D48 (199 KiB): DRAM[0m
+[0;32mI (1052) heap_init: At 3FCE9710 len 00005724 (21 KiB): STACK/DRAM[0m
+[0;32mI (1059) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM[0m
+[0;32mI (1065) heap_init: At 600FE010 len 00001FD8 (7 KiB): RTCRAM[0m
+[0;32mI (1072) esp_psram: Adding pool of 5952K of PSRAM memory to heap allocator[0m
+[0;32mI (1079) spi_flash: detected chip: winbond[0m
+[0;32mI (1084) spi_flash: flash io: qio[0m
+[0;33mW (1088) ADC: legacy driver is deprecated, please migrate to `esp_adc/adc_oneshot.h`[0m
+[0;32mI (1096) sleep: Configure to isolate all GPIO pins in sleep state[0m
+[0;32mI (1103) sleep: Enable automatic switching of GPIO sleep configuration[0m
+[0;32mI (1111) app_start: Starting scheduler on CPU0[0m
+[0;32mI (1116) app_start: Starting scheduler on CPU1[0m
+[0;32mI (1116) main_task: Started on CPU0[0m
+[0;32mI (1126) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations[0m
+[0;32mI (1134) main_task: Calling app_main()[0m
+[0;32mI (1139) : 
+   _____                      _________    ____         
+  / ___/___  ____  ________  / ____/   |  / __ \       
+  \__ \/ _ \/ __ \/ ___/ _ \/ /   / /| | / /_/ /   
+ ___/ /  __/ / / (__  )  __/ /___/ ___ |/ ____/         
+/____/\___/_/ /_/____/\___/\____/_/  |_/_/           
+--------------------------------------------------------
+ Version: v1.0.0 May  3 2026 19:22:23
+--------------------------------------------------------
+[0m
+[0;33mW (1190) BOOT: SSC v0.2.11 | reset=INT_WDT(5) boot_count=1184[0m
+[0;32mI (1191) i2c_bus: i2c0 bus inited[0m
+[0;32mI (1191) bsp boards: detecting board SenseCAP_Indicator[0m
+[0;32mI (1196) bsp boards: Detected board: [SenseCAP_Indicator][0m
+[0;32mI (1207) gpio: GPIO[38]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:0 [0m
+[0;32mI (1231) gpio: GPIO[45]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1246) gpio: GPIO[41]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1246) gpio: GPIO[48]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1656) lvgl_port: Add TP input device to LVGL[0m
+[0;32mI (1786) view: Sensor screen: 11 panels in 4 rows, balanced layout[0m
+[0;32mI (1787) view: Database settings button added to settings screen[0m
+[0;32mI (1790) UI_SAUNA: ui_sauna_init (480x480 dark-CI)[0m
+[0;32mI (1794) UI_SAUNA: detail-buffer alloziert: cap=3600 slots in PSRAM[0m
+[0;32mI (2001) UI_SAUNA: heartbeat: scr=LEGACY!! running=0[0m
+[0;32mI (2107) sensor-model: sensor history data read successful[0m
+[0;32mI (2107) sensor-model: encode status:0, len:2[0m
+0x2 0xa4 
+[0;32mI (2109) pp: pp rom version: e7ae62f[0m
+[0;32mI (2112) net80211: net80211 rom version: e7ae62f[0m
+I (2119) wifi:wifi driver task: 3fcf6a00, prio:23, stack:6656, core=0
+I (2130) wifi:wifi firmware version: 3e11197
+I (2130) wifi:wifi certification version: v7.0
+I (2132) wifi:config NVS flash: enabled
+I (2136) wifi:config nano formating: disabled
+I (2140) wifi:Init data frame dynamic rx buffer num: 32
+I (2145) wifi:Init static rx mgmt buffer num: 5
+I (2149) wifi:Init management short buffer num: 32
+I (2153) wifi:Init dynamic tx buffer num: 32
+I (2157) wifi:Init static tx FG buffer num: 2
+I (2161) wifi:Init static rx buffer size: 1600
+I (2166) wifi:Init static rx buffer num: 10
+I (2169) wifi:Init dynamic rx buffer num: 32
+[0;32mI (2174) wifi_init: rx ba win: 6[0m
+[0;32mI (2177) wifi_init: tcpip mbox: 32[0m
+[0;32mI (2181) wifi_init: udp mbox: 6[0m
+[0;32mI (2185) wifi_init: tcp mbox: 6[0m
+[0;32mI (2189) wifi_init: tcp tx win: 5760[0m
+[0;32mI (2193) wifi_init: tcp rx win: 5760[0m
+[0;32mI (2198) wifi_init: tcp mss: 1440[0m
+[0;32mI (2202) wifi_init: WiFi IRAM OP enabled[0m
+[0;32mI (2206) wifi_init: WiFi RX IRAM OP enabled[0m
+[0;32mI (2211) wifi-model: last config ssid: Tommy[0m
+[0;32mI (2216) phy_init: phy_version 711,97bcf0a2,Aug 25 2025,19:04:10[0m
+I (2253) wifi:mode : sta (d8:3b:da:a3:d8:f8)
+I (2253) wifi:enable tsf
+[0;32mI (2254) wifi-model: wifi event: WIFI_EVENT_STA_START[0m
+[0;32mI (2255) time: cfg not find[0m
+[0;33mW (2258) time: boot fallback: source=NVS_FALLBACK, applied=2026-05-04 15:01:22 (ts=1777906882)[0m
+I (2260) wifi:new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+I (2273) wifi:state: init -> auth (b0)
+[0;33mW (2277) time: Auto timezone: net_zone leer, default Europe/Vienna[0m
+I (2283) wifi:state: auth -> init (1c0)
+[0;32mI (2287) time: Applying TZ environment variable: CET-1CEST,M3.5.0,M10.5.0/3[0m
+I (2288) wifi:new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+[0;32mI (2300) wifi-model: wifi event: WIFI_EVENT_STA_DISCONNECTED[0m
+[0;32mI (2307) wifi-model: retry to connect to the AP[0m
+[0;32mI (2313) display: cfg not find[0m
+[0;32mI (2316) mariadb: No saved config, using defaults[0m
+[0;31mE (2321) mariadb: Failed to create DB task[0m
+[0;32mI (2326) SSTORE: NVS: used=1215 free=2817 total=4032 (ns-cnt=13)[0m
+[0;32mI (2332) SSTORE: session store ready, 3 entries[0m
+[0;32mI (2339) SESSION: pre-worker heap: internal=4507 psram=5108544[0m
+[0;32mI (2344) SESSION: session_worker task started, period=1000ms[0m
+[0;32mI (2350) SESSION: session_worker task erstellt, handle=0x3fcc3cc0[0m
+[0;32mI (2357) SESSION: indicator_session initialised (cap=3600 samples)[0m
+[0;32mI (2365) SESSION: history_list -> UI: count=3 total=3 items=0x3fcabd90[0m
+[0;32mI (2371) UI_SAUNA: on_history_list: count=3 total=3 items=0x3fcabd90[0m
+[0;32mI (3312) time: need update time view[0m
+[0;32mI (3312) time: Mon May  4 17:01:23 2026[0m
+[0;32mI (3344) SESSION: worker hb=1 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+[0;32mI (4109) sensor-model: encode status:0, len:2[0m
+0x2 0xa8 
+[0;32mI (4344) SESSION: worker hb=2 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x4 0xc3 0xa3 0x4 0x1 0x1 0x1 0x0 
+[0;32mI (4606) sensor-model: decode status:0, len:6, type:0xc3[0m
+decode: 0xc3 0xa3 0x4 0x0 0x0 0x0 
+[0;33mW (4608) UI_SAUNA: rp2040 boot_count=1187 reset_reason=0[0m
+[0;32mI (4712) wifi-model: wifi event: WIFI_EVENT_STA_DISCONNECTED[0m
+[0;32mI (4712) wifi-model: retry to connect to the AP[0m
+I (4717) wifi:new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+I (4718) wifi:state: init -> auth (b0)
+I (4729) wifi:state: auth -> assoc (0)
+I (4767) wifi:state: assoc -> run (10)
+I (4788) wifi:connected with Tommy, aid = 5, channel 1, BW20, bssid = 8e:5b:3b:8a:53:70
+I (4788) wifi:security: WPA2-PSK, phy: bgn, rssi: -64
+I (4790) wifi:pm start, type: 1
+
+I (4792) wifi:dp: 1, bi: 102400, li: 3, scale listen interval from 307200 us to 307200 us
+I (4800) wifi:set rx beacon pti, rx_bcn_pti: 0, bcn_timeout: 25000, mt_pti: 0, mt_time: 10000
+I (4808) wifi:dp: 2, bi: 102400, li: 4, scale listen interval from 307200 us to 409600 us
+I (4816) wifi:AP's beacon interval = 102400 us, DTIM period = 2
+[0;32mI (4822) wifi-model: wifi event: WIFI_EVENT_STA_CONNECTED[0m
+[0;32mI (4828) time: event: VIEW_EVENT_WIFI_ST[0m
+[0;32mI (4832) city: event: VIEW_EVENT_WIFI_ST[0m
+I (4839) wifi:<ba-add>idx:0 (ifx:0, 8e:5b:3b:8a:53:70), tid:0, ssn:1, winSize:64
+[0;32mI (5344) SESSION: worker hb=3 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x6 0xbf 0x5a 0xaf 0x9c 0x42 0x0 0x6 0xc0 0x67 0x4d 0xe7 0x40 0x0 
+[0;32mI (5616) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x5a 0xaf 0x9c 0x42 
+[0;32mI (5620) sensor-model: Sauna temp: 78.3 C[0m
+[0;32mI (5625) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0x67 0x4d 0xe7 0x40 
+[0;32mI (5636) sensor-model: Sauna RH: 7.2 %[0m
+recv:  0x2 0xb5 0x1 0x3 0xc0 0x7f 0x0 
+[0;32mI (5650) sensor-model: decode status:0, len:5, type:0xb5[0m
+decode: 0xb5 0x0 0x0 0xc0 0x7f 
+[0;32mI (5822) esp_netif_handlers: sta ip: 10.18.55.96, mask: 255.255.255.0, gw: 10.18.55.77[0m
+[0;32mI (5822) wifi-model: got ip:10.18.55.96[0m
+[0;32mI (5824) wifi-model: Last network exception, check network...[0m
+[0;31mE (5831) ping_sock: esp_ping_new_session(254): create ping task failed[0m
+[0;33mW (5838) wifi-model: ping new_session failed: ESP_ERR_NO_MEM - skipping ping[0m
+[0;32mI (5846) time: event: VIEW_EVENT_WIFI_ST[0m
+[0;33mW (5850) time: WIFI_ST: network up, NTP stale (src=2) - retry sntp[0m
+[0;32mI (5857) city: event: VIEW_EVENT_WIFI_ST[0m
+[0;32mI (6121) ntp: Notification of a time synchronization event[0m
+[0;32mI (6312) time: need update time view[0m
+[0;32mI (6312) time: Mon May  4 17:00:31 2026[0m
+[0;32mI (6344) SESSION: worker hb=4 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x6 0xbf 0x64 0xbe 0x9c 0x42 0x0 0x6 0xc0 0xe6 0x2d 0xe6 0x40 0x0 
+[0;32mI (6616) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x64 0xbe 0x9c 0x42 
+[0;32mI (6620) sensor-model: Sauna temp: 78.4 C[0m
+[0;32mI (6625) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0xe6 0x2d 0xe6 0x40 
+[0;32mI (6635) sensor-model: Sauna RH: 7.2 %[0m
+[0;32mI (7344) SESSION: worker hb=5 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x6 0xbf 0x45 0xd4 0x9c 0x42 0x0 0x6 0xc0 0x67 0xe3 0xe7 0x40 0x0 
+[0;32mI (7616) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x45 0xd4 0x9c 0x42 
+[0;32mI (7620) sensor-model: Sauna temp: 78.4 C[0m
+[0;32mI (7625) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0x67 0xe3 0xe7 0x40 
+[0;32mI (7634) sensor-model: Sauna RH: 7.2 %[0m
+recv:  0x2 0xb5 0x1 0x3 0xc0 0x7f 0x0 
+[0;32mI (7650) sensor-model: decode status:0, len:5, type:0xb5[0m
+decode: 0xb5 0x0 0x0 0xc0 0x7f 
+Guru Meditation Error: Core  0 panic'ed (IllegalInstruction). Exception was unhandled.
+Memory dump at 0x41ffb690: 00000000 00000000 00000000
+Core  0 register dump:
+PC      : 0x41ffb694  PS      : 0x00060930  A0      : 0x82037b8b  A1      : 0x3fccb640  
+A2      : 0x3fcd72f8  A3      : 0x00000108  A4      : 0x000003e8  A5      : 0x00000000  
+A6      : 0x00000400  A7      : 0x00000001  A8      : 0x8203b9a3  A9      : 0x3fccb610  
+A10     : 0x3fcd72f8  A11     : 0x3fccb648  A12     : 0x00000000  A13     : 0x3fccb640  
+A14     : 0x00000000  A15     : 0x00000000  SAR     : 0x0000001f  EXCCAUSE: 0x00000000  
+EXCVADDR: 0x00000000  LBEG    : 0x420295b5  LEND    : 0x420295bc  LCOUNT  : 0x00000007  
+
+
+Backtrace: 0x41ffb691:0x3fccb640 |<-CORRUPTED
+
+
+
+
+ELF file SHA256: 5bae7ab1f84acf35
+
+Rebooting...
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x3 (RTC_SW_SYS_RST),boot:0x8 (SPI_FAST_FLASH_BOOT)
+Saved PC:0x40375ebb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3818,len:0x19ac
+load:0x403c9700,len:0x4
+load:0x403c9704,len:0xdd4
+load:0x403cc700,len:0x31c8
+entry 0x403c9938
+[0;32mI (31) boot: ESP-IDF v5.1.6-1594-gb0f5707906 2nd stage bootloader[0m
+[0;32mI (31) boot: compile time Apr 21 2026 19:51:30[0m
+[0;32mI (32) boot: Multicore bootloader[0m
+[0;32mI (36) boot: chip revision: v0.2[0m
+[0;32mI (40) boot: efuse block revision: v1.3[0m
+[0;32mI (44) qio_mode: Enabling QIO for flash chip WinBond[0m
+[0;32mI (50) boot.esp32s3: Boot SPI Speed : 80MHz[0m
+[0;32mI (55) boot.esp32s3: SPI Mode       : QIO[0m
+[0;32mI (59) boot.esp32s3: SPI Flash Size : 8MB[0m
+[0;32mI (64) boot: Enabling RNG early entropy source...[0m
+[0;32mI (69) boot: Partition Table:[0m
+[0;32mI (73) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (80) boot:  0 nvs              WiFi data        01 02 00009000 00020000[0m
+[0;32mI (88) boot:  1 phy_init         RF data          01 01 00029000 00001000[0m
+[0;32mI (95) boot:  2 factory          factory app      00 00 00030000 003d0000[0m
+[0;32mI (103) boot: End of partition table[0m
+[0;32mI (107) esp_image: segment 0: paddr=00030020 vaddr=3c100020 size=12d808h (1234952) map[0m
+[0;32mI (307) esp_image: segment 1: paddr=0015d830 vaddr=3fc9d200 size=027e8h ( 10216) load[0m
+[0;32mI (309) esp_image: segment 2: paddr=00160020 vaddr=42000020 size=f6b1ch (1010460) map[0m
+[0;32mI (469) esp_image: segment 3: paddr=00256b44 vaddr=3fc9f9e8 size=02b9ch ( 11164) load[0m
+[0;32mI (471) esp_image: segment 4: paddr=002596e8 vaddr=40374000 size=1917ch (102780) load[0m
+[0;32mI (505) boot: Loaded app from partition at offset 0x30000[0m
+[0;32mI (505) boot: Disabling RNG early entropy source...[0m
+[0;32mI (517) cpu_start: Multicore app[0m
+[0;33mW (517) flash HPM: HPM mode is optional feature that depends on flash model. Read Docs First![0m
+[0;33mW (519) flash HPM: HPM mode with DC adjustment is disabled. Some flash models may not be supported. Read Docs First![0m
+[0;33mW (530) flash HPM: High performance mode of this flash model hasn't been supported.[0m
+[0;32mI (539) MSPI Timing: Flash timing tuning index: 3[0m
+[0;32mI (544) octal_psram: vendor id    : 0x0d (AP)[0m
+[0;32mI (549) octal_psram: dev id       : 0x02 (generation 3)[0m
+[0;32mI (555) octal_psram: density      : 0x03 (64 Mbit)[0m
+[0;32mI (560) octal_psram: good-die     : 0x01 (Pass)[0m
+[0;32mI (565) octal_psram: Latency      : 0x01 (Fixed)[0m
+[0;32mI (570) octal_psram: VCC          : 0x01 (3V)[0m
+[0;32mI (576) octal_psram: SRF          : 0x01 (Fast Refresh)[0m
+[0;32mI (581) octal_psram: BurstType    : 0x01 (Hybrid Wrap)[0m
+[0;32mI (587) octal_psram: BurstLen     : 0x01 (32 Byte)[0m
+[0;32mI (593) octal_psram: Readlatency  : 0x02 (10 cycles@Fixed)[0m
+[0;32mI (599) octal_psram: DriveStrength: 0x00 (1/1)[0m
+[0;32mI (610) MSPI Timing: PSRAM timing tuning index: 2[0m
+[0;32mI (610) esp_psram: Found 8MB PSRAM device[0m
+[0;32mI (614) esp_psram: Speed: 120MHz[0m
+[0;32mI (680) mmu_psram: Instructions copied and mapped to SPIRAM[0m
+[0;32mI (746) mmu_psram: Read only data copied and mapped to SPIRAM[0m
+[0;32mI (746) cpu_start: Pro cpu up.[0m
+[0;32mI (746) cpu_start: Starting app cpu, entry point is 0x403759b0[0m
+[0;32mI (0) cpu_start: App cpu up.[0m
+[0;32mI (970) esp_psram: SPI SRAM memory test OK[0m
+[0;32mI (979) cpu_start: Pro cpu start user code[0m
+[0;32mI (979) cpu_start: cpu freq: 240000000 Hz[0m
+[0;32mI (979) cpu_start: Application information:[0m
+[0;32mI (982) cpu_start: Project name:     indicator_basis[0m
+[0;32mI (988) cpu_start: App version:      v0.2.6-13-g2799d10-dirty[0m
+[0;32mI (994) cpu_start: Compile time:     May  3 2026 19:22:22[0m
+[0;32mI (1000) cpu_start: ELF file SHA256:  5bae7ab1f84acf35...[0m
+[0;32mI (1006) cpu_start: ESP-IDF:          v5.1.6-1594-gb0f5707906[0m
+[0;32mI (1013) cpu_start: Min chip rev:     v0.0[0m
+[0;32mI (1018) cpu_start: Max chip rev:     v0.99 [0m
+[0;32mI (1023) cpu_start: Chip rev:         v0.2[0m
+[0;32mI (1027) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (1035) heap_init: At 3FCB79C8 len 00031D48 (199 KiB): DRAM[0m
+[0;32mI (1041) heap_init: At 3FCE9710 len 00005724 (21 KiB): STACK/DRAM[0m
+[0;32mI (1048) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM[0m
+[0;32mI (1054) heap_init: At 600FE010 len 00001FD8 (7 KiB): RTCRAM[0m
+[0;32mI (1060) esp_psram: Adding pool of 5952K of PSRAM memory to heap allocator[0m
+[0;32mI (1068) spi_flash: detected chip: winbond[0m
+[0;32mI (1073) spi_flash: flash io: qio[0m
+[0;33mW (1077) ADC: legacy driver is deprecated, please migrate to `esp_adc/adc_oneshot.h`[0m
+[0;32mI (1085) sleep: Configure to isolate all GPIO pins in sleep state[0m
+[0;32mI (1092) sleep: Enable automatic switching of GPIO sleep configuration[0m
+[0;32mI (1099) app_start: Starting scheduler on CPU0[0m
+[0;32mI (1104) app_start: Starting scheduler on CPU1[0m
+[0;32mI (1104) main_task: Started on CPU0[0m
+[0;32mI (1114) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations[0m
+[0;32mI (1122) main_task: Calling app_main()[0m
+[0;32mI (1127) : 
+   _____                      _________    ____         
+  / ___/___  ____  ________  / ____/   |  / __ \       
+  \__ \/ _ \/ __ \/ ___/ _ \/ /   / /| | / /_/ /   
+ ___/ /  __/ / / (__  )  __/ /___/ ___ |/ ____/         
+/____/\___/_/ /_/____/\___/\____/_/  |_/_/           
+--------------------------------------------------------
+ Version: v1.0.0 May  3 2026 19:22:23
+--------------------------------------------------------
+[0m
+[0;33mW (1178) BOOT: SSC v0.2.11 | reset=PANIC(4) boot_count=1185[0m
+[0;32mI (1179) i2c_bus: i2c0 bus inited[0m
+[0;32mI (1179) bsp boards: detecting board SenseCAP_Indicator[0m
+[0;32mI (1184) bsp boards: Detected board: [SenseCAP_Indicator][0m
+[0;32mI (1195) gpio: GPIO[38]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:0 [0m
+[0;32mI (1219) gpio: GPIO[45]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1234) gpio: GPIO[41]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1234) gpio: GPIO[48]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;32mI (1644) lvgl_port: Add TP input device to LVGL[0m
+[0;32mI (1774) view: Sensor screen: 11 panels in 4 rows, balanced layout[0m
+[0;32mI (1776) view: Database settings button added to settings screen[0m
+[0;32mI (1778) UI_SAUNA: ui_sauna_init (480x480 dark-CI)[0m
+[0;32mI (1782) UI_SAUNA: detail-buffer alloziert: cap=3600 slots in PSRAM[0m
+[0;32mI (1990) UI_SAUNA: heartbeat: scr=LEGACY!! running=0[0m
+[0;32mI (2033) sensor-model: sensor history data read successful[0m
+[0;32mI (2034) sensor-model: encode status:0, len:2[0m
+0x2 0xa4 
+[0;32mI (2036) pp: pp rom version: e7ae62f[0m
+[0;32mI (2039) net80211: net80211 rom version: e7ae62f[0m
+I (2045) wifi:wifi driver task: 3fcf77f8, prio:23, stack:6656, core=0
+I (2058) wifi:wifi firmware version: 3e11197
+I (2058) wifi:wifi certification version: v7.0
+I (2059) wifi:config NVS flash: enabled
+I (2062) wifi:config nano formating: disabled
+I (2066) wifi:Init data frame dynamic rx buffer num: 32
+I (2071) wifi:Init static rx mgmt buffer num: 5
+I (2075) wifi:Init management short buffer num: 32
+I (2080) wifi:Init dynamic tx buffer num: 32
+I (2084) wifi:Init static tx FG buffer num: 2
+I (2088) wifi:Init static rx buffer size: 1600
+I (2092) wifi:Init static rx buffer num: 10
+I (2096) wifi:Init dynamic rx buffer num: 32
+[0;32mI (2100) wifi_init: rx ba win: 6[0m
+[0;32mI (2104) wifi_init: tcpip mbox: 32[0m
+[0;32mI (2108) wifi_init: udp mbox: 6[0m
+[0;32mI (2112) wifi_init: tcp mbox: 6[0m
+[0;32mI (2116) wifi_init: tcp tx win: 5760[0m
+[0;32mI (2120) wifi_init: tcp rx win: 5760[0m
+[0;32mI (2124) wifi_init: tcp mss: 1440[0m
+[0;32mI (2128) wifi_init: WiFi IRAM OP enabled[0m
+[0;32mI (2133) wifi_init: WiFi RX IRAM OP enabled[0m
+[0;32mI (2138) wifi-model: last config ssid: Tommy[0m
+[0;32mI (2143) phy_init: phy_version 711,97bcf0a2,Aug 25 2025,19:04:10[0m
+I (2179) wifi:mode : sta (d8:3b:da:a3:d8:f8)
+I (2179) wifi:enable tsf
+[0;32mI (2180) wifi-model: wifi event: WIFI_EVENT_STA_START[0m
+[0;32mI (2180) time: cfg not find[0m
+[0;33mW (2184) time: boot fallback: source=NVS_FALLBACK, applied=2026-05-04 15:01:31 (ts=1777906891)[0m
+I (2185) wifi:new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+I (2198) wifi:state: init -> auth (b0)
+[0;33mW (2203) time: Auto timezone: net_zone leer, default Europe/Vienna[0m
+[0;32mI (2209) time: Applying TZ environment variable: CET-1CEST,M3.5.0,M10.5.0/3[0m
+I (2214) wifi:state: auth -> init (1c0)
+I (2221) wifi:new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+[0;32mI (2226) wifi-model: wifi event: WIFI_EVENT_STA_DISCONNECTED[0m
+[0;32mI (2233) wifi-model: retry to connect to the AP[0m
+[0;32mI (2238) display: cfg not find[0m
+[0;32mI (2242) mariadb: No saved config, using defaults[0m
+[0;31mE (2247) mariadb: Failed to create DB task[0m
+[0;32mI (2251) SSTORE: NVS: used=1215 free=2817 total=4032 (ns-cnt=13)[0m
+[0;32mI (2258) SSTORE: session store ready, 3 entries[0m
+[0;32mI (2264) SESSION: pre-worker heap: internal=4487 psram=5108544[0m
+[0;32mI (2270) SESSION: session_worker task started, period=1000ms[0m
+[0;32mI (2276) SESSION: session_worker task erstellt, handle=0x3fcc364c[0m
+[0;32mI (2283) SESSION: indicator_session initialised (cap=3600 samples)[0m
+[0;32mI (2291) SESSION: history_list -> UI: count=3 total=3 items=0x3fcabd90[0m
+[0;32mI (2297) UI_SAUNA: on_history_list: count=3 total=3 items=0x3fcabd90[0m
+[0;32mI (3220) time: need update time view[0m
+[0;32mI (3221) time: Mon May  4 17:01:32 2026[0m
+[0;32mI (3270) SESSION: worker hb=1 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+[0;32mI (4036) sensor-model: encode status:0, len:2[0m
+0x2 0xa8 
+[0;32mI (4270) SESSION: worker hb=2 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x4 0xc3 0xa4 0x4 0x1 0x1 0x1 0x0 
+[0;32mI (4592) sensor-model: decode status:0, len:6, type:0xc3[0m
+decode: 0xc3 0xa4 0x4 0x0 0x0 0x0 
+[0;33mW (4594) UI_SAUNA: rp2040 boot_count=1188 reset_reason=0[0m
+[0;32mI (4637) wifi-model: wifi event: WIFI_EVENT_STA_DISCONNECTED[0m
+[0;32mI (4638) wifi-model: retry to connect to the AP[0m
+I (4642) wifi:new:<1,0>, old:<1,0>, ap:<255,255>, sta:<1,0>, prof:1
+I (4644) wifi:state: init -> auth (b0)
+I (4654) wifi:state: auth -> assoc (0)
+I (4691) wifi:state: assoc -> run (10)
+I (4713) wifi:connected with Tommy, aid = 6, channel 1, BW20, bssid = 8e:5b:3b:8a:53:70
+I (4713) wifi:security: WPA2-PSK, phy: bgn, rssi: -55
+I (4715) wifi:pm start, type: 1
+
+I (4717) wifi:dp: 1, bi: 102400, li: 3, scale listen interval from 307200 us to 307200 us
+I (4725) wifi:set rx beacon pti, rx_bcn_pti: 0, bcn_timeout: 25000, mt_pti: 0, mt_time: 10000
+[0;32mI (4734) wifi-model: wifi event: WIFI_EVENT_STA_CONNECTED[0m
+[0;32mI (4740) time: event: VIEW_EVENT_WIFI_ST[0m
+[0;32mI (4744) city: event: VIEW_EVENT_WIFI_ST[0m
+I (4750) wifi:<ba-add>idx:0 (ifx:0, 8e:5b:3b:8a:53:70), tid:0, ssn:1, winSize:64
+I (4815) wifi:dp: 2, bi: 102400, li: 4, scale listen interval from 307200 us to 409600 us
+I (4815) wifi:AP's beacon interval = 102400 us, DTIM period = 2
+[0;32mI (5270) SESSION: worker hb=3 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x6 0xbf 0x87 0x14 0x9d 0x42 0x0 0x6 0xc0 0x66 0x40 0xe5 0x40 0x0 
+[0;32mI (5603) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x87 0x14 0x9d 0x42 
+[0;32mI (5607) sensor-model: Sauna temp: 78.5 C[0m
+[0;32mI (5612) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0x66 0x40 0xe5 0x40 
+[0;32mI (5621) sensor-model: Sauna RH: 7.2 %[0m
+recv:  0x2 0xb5 0x1 0x3 0xc0 0x7f 0x0 
+[0;32mI (5637) sensor-model: decode status:0, len:5, type:0xb5[0m
+decode: 0xb5 0x0 0x0 0xc0 0x7f 
+[0;32mI (5734) esp_netif_handlers: sta ip: 10.18.55.96, mask: 255.255.255.0, gw: 10.18.55.77[0m
+[0;32mI (5734) wifi-model: got ip:10.18.55.96[0m
+[0;32mI (5736) wifi-model: Last network exception, check network...[0m
+[0;31mE (5743) ping_sock: esp_ping_new_session(254): create ping task failed[0m
+[0;33mW (5750) wifi-model: ping new_session failed: ESP_ERR_NO_MEM - skipping ping[0m
+[0;32mI (5758) time: event: VIEW_EVENT_WIFI_ST[0m
+[0;33mW (5762) time: WIFI_ST: network up, NTP stale (src=2) - retry sntp[0m
+[0;32mI (5769) city: event: VIEW_EVENT_WIFI_ST[0m
+[0;32mI (6245) ntp: Notification of a time synchronization event[0m
+[0;32mI (6270) SESSION: worker hb=4 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x6 0xbf 0x3d 0x31 0x9d 0x42 0x0 0x6 0xc0 0x66 0xd6 0xe5 0x40 0x0 
+[0;32mI (6603) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x3d 0x31 0x9d 0x42 
+[0;32mI (6607) sensor-model: Sauna temp: 78.6 C[0m
+[0;32mI (6612) sensor-model: decode status:0, len:5, type:0xc0[0m
+decode: 0xc0 0x66 0xd6 0xe5 0x40 
+[0;32mI (6621) sensor-model: Sauna RH: 7.2 %[0m
+[0;32mI (7220) time: need update time view[0m
+[0;32mI (7221) time: Mon May  4 17:00:41 2026[0m
+[0;32mI (7270) SESSION: worker hb=5 state=0 dt=0 temp=nan rh=nan have_snap=0[0m
+recv:  0x6 0xbf 0x67 0x2a 0x9d 0x42 0x0 0x6 0xc0 0xe7 0x59 0xe7 0x40 0x0 
+[0;32mI (7603) sensor-model: decode status:0, len:5, type:0xbf[0m
+decode: 0xbf 0x67 0x2a 0x9d 0x42 
+[0;32mI (7607) sensor-model: Sauna temp: 78.6 C[0m
+[0;32mI (7612) sensor-model: decode status:0, len:5,
