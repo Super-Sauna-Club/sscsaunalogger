@@ -964,8 +964,11 @@ static void build_home(void) {
 static void home_update_recent(const struct view_data_session_list *list) {
     if (!home_recent_list) return;
     lv_obj_clean(home_recent_list);
-    /* Nur die 2 letzten sessions zeigen; volle history unter "historie". */
-    uint16_t n = list->count < 2 ? list->count : 2;
+    /* Mit "Geraet intern" sichtbar: 2 zeilen (eng). Ohne: 4 zeilen
+     * (mehr platz vorhanden). Listenhoehe wird in apply_dashboard_
+     * visibility entsprechend gesetzt.                              */
+    uint16_t cap = (g_ssc_settings.dash_intern_visible != 0) ? 2 : 4;
+    uint16_t n = list->count < cap ? list->count : cap;
     for (uint16_t i = 0; i < n; i++) {
         const struct view_data_session_meta *m = &list->items[i];
         char head[64];
@@ -2501,7 +2504,8 @@ void ssc_settings_apply_dashboard_visibility(void)
                         LV_ALIGN_OUT_BOTTOM_LEFT, 0, 6);
         lv_obj_align_to(home_recent_list, home_letzte_sessions_hdr,
                         LV_ALIGN_OUT_BOTTOM_LEFT, 0, 4);
-        lv_obj_set_size(home_recent_list, 464, 68);
+        /* 2 zeilen × ~55px + pad. */
+        lv_obj_set_size(home_recent_list, 464, 120);
     } else {
         lv_obj_add_flag(home_geraet_intern_vbox, LV_OBJ_FLAG_HIDDEN);
         lv_obj_align_to(home_session_start_btn, home_sauna_cabin_card,
@@ -2510,7 +2514,18 @@ void ssc_settings_apply_dashboard_visibility(void)
                         LV_ALIGN_OUT_BOTTOM_LEFT, 0, 6);
         lv_obj_align_to(home_recent_list, home_letzte_sessions_hdr,
                         LV_ALIGN_OUT_BOTTOM_LEFT, 0, 4);
-        lv_obj_set_size(home_recent_list, 464, 68 + 78);
+        /* 4 zeilen × ~55px + pad. */
+        lv_obj_set_size(home_recent_list, 464, 240);
+    }
+    /* Liste neu rendern damit die row-cap (2 vs 4) greift. */
+    if (hist_cache_count > 0) {
+        struct view_data_session_list dummy = {
+            .total = hist_cache_count,
+            .start_index = 0,
+            .count = hist_cache_count,
+            .items = hist_cached,
+        };
+        home_update_recent(&dummy);
     }
 }
 
