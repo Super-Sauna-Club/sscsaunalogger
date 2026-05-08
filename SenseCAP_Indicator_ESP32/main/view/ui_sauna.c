@@ -1363,8 +1363,10 @@ static void build_live(void) {
 
     /* STARTEN (nur im READY-state sichtbar) */
     live_start_btn = lv_btn_create(arow);
+    /* v0.3.1: gleiche breite wie SPEICHERN (300x52 in summary) damit
+     * konsistente CTA-groesse ueber alle screens.                     */
     style_primary_btn(live_start_btn);
-    lv_obj_set_size(live_start_btn, 292, 60);
+    lv_obj_set_size(live_start_btn, 300, 60);
     lv_obj_t *lst = lv_label_create(live_start_btn);
     lv_label_set_text(lst, LV_SYMBOL_PLAY "  STARTEN");
     lv_obj_set_style_text_font(lst, F_MD, 0);
@@ -1381,21 +1383,30 @@ static void build_live(void) {
     lv_obj_add_flag(live_aufguss_btn, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_size(live_aufguss_btn, 0, 0);
 
-    /* STOPPEN (nur im RUNNING-state) */
+    /* STOPPEN (nur im RUNNING-state).
+     * v0.3.1: gleiche breite (300) wie STARTEN/SPEICHERN, gelb/amber
+     * statt ghost weil das die haupt-CTA im RUNNING-state ist.        */
     live_stop_btn = lv_btn_create(arow);
-    style_ghost_btn(live_stop_btn);
-    lv_obj_set_size(live_stop_btn, 120, 60);
+    lv_obj_set_size(live_stop_btn, 300, 60);
+    lv_obj_set_style_bg_color(live_stop_btn, lv_color_hex(0xc8a02a), 0);
+    lv_obj_set_style_bg_color(live_stop_btn,
+                              lv_color_hex(0xe6bc3c), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(live_stop_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(live_stop_btn, SSC_RADIUS_BTN, 0);
+    lv_obj_set_style_border_width(live_stop_btn, 0, 0);
     lv_obj_t *lstop = lv_label_create(live_stop_btn);
-    lv_label_set_text(lstop, "STOPPEN");
-    lv_obj_set_style_text_font(lstop, F_SM, 0);
+    lv_label_set_text(lstop, LV_SYMBOL_STOP "  STOPPEN");
+    lv_obj_set_style_text_font(lstop, F_MD, 0);
+    lv_obj_set_style_text_color(lstop, lv_color_hex(0x1a1a1a), 0);
     lv_obj_center(lstop);
     lv_obj_add_event_cb(live_stop_btn, on_live_stop_clicked,
                         LV_EVENT_CLICKED, NULL);
 
-    /* ABBRECHEN (immer sichtbar) */
+    /* ABBRECHEN (immer sichtbar). v0.3.1: gleiche breite wie VERWERFEN
+     * (146) im summary-form fuer konsistenz.                          */
     live_cancel_btn = lv_btn_create(arow);
     style_ghost_btn(live_cancel_btn);
-    lv_obj_set_size(live_cancel_btn, 124, 60);
+    lv_obj_set_size(live_cancel_btn, 146, 60);
     lv_obj_t *lcan = lv_label_create(live_cancel_btn);
     lv_label_set_text(lcan, "ABBRECHEN");
     lv_obj_set_style_text_font(lcan, F_SM, 0);
@@ -1590,10 +1601,11 @@ static void build_summary(void) {
                           LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_clear_flag(pa_row, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* --- Zelle links: TEILNEHMER --- */
+    /* --- Zelle links: TEILNEHMER ---
+     * v0.3.1: full row-breite weil aufguss-anzahl-zelle weg ist. */
     lv_obj_t *pp_col = lv_obj_create(pa_row);
     lv_obj_remove_style_all(pp_col);
-    lv_obj_set_size(pp_col, 200, 90);
+    lv_obj_set_size(pp_col, 420, 90);
     lv_obj_clear_flag(pp_col, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *pp_l = lv_label_create(pp_col);
