@@ -163,8 +163,14 @@ void app_main(void)
     indicator_controller_init();
 
     /* v0.2.14: settings runtime-apply NACH model+controller-init. wifi/
-     * time/backlight gehen jetzt in den state den die toggles vorgeben. */
+     * time/backlight gehen jetzt in den state den die toggles vorgeben.
+     * v0.3.1: lv_port_sem MUSS gehalten sein - apply_dashboard_visibility
+     * macht LVGL-calls (lv_obj_align_to/set_size). Ohne lock racing mit
+     * dem LCD-task -> random LoadProhibited/IllegalInstruction panics
+     * im render-pfad. War der bootloop-trigger in v0.3.0.              */
+    lv_port_sem_take();
     ssc_settings_apply_runtime();
+    lv_port_sem_give();
 
     /* v0.2.14: heap-observability nach init + periodisch.
      * Hintergrund: am 2026-05-04 hatten wir nach init nur 4559 byte

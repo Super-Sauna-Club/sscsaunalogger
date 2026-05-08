@@ -24,7 +24,11 @@ static const char *NVS_TAG = "NVS_REC";
 RTC_NOINIT_ATTR static uint32_t s_panic_streak;
 RTC_NOINIT_ATTR static uint32_t s_panic_streak_magic;
 #define PANIC_STREAK_MAGIC      0x5C5A5751U
-#define PANIC_STREAK_THRESHOLD  5
+/* v0.3.1: war 5. Hochgesetzt damit bei einem panic-bootloop nicht
+ * automatisch NVS-erase + datenverlust passiert. Eigene erfahrung:
+ * panic-loop hat in v0.3.0 wifi-config + sessions gewiped bevor
+ * der bug gefunden war.                                             */
+#define PANIC_STREAK_THRESHOLD  100
 
 int indicator_storage_init(void)
 {

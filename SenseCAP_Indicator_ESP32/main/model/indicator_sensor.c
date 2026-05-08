@@ -10,7 +10,11 @@
 #include "time.h"
 
 #define SENSOR_HISTORY_DATA_DEBUG  0
-#define SENSOR_COMM_DEBUG    1
+/* v0.3.1: hard auf 0 - das war der bootloop-trigger.
+ * Bei =1 macht der comm-task printf fuer jedes UART-byte (1000+/sec
+ * wenn data laeuft) - mit 4KB-stack in PSRAM hat newlib-puts irgend-
+ * wann die stack-grenze gerissen -> IllegalInstruction in _puts_r.   */
+#define SENSOR_COMM_DEBUG    0
 
 #define HISTORY_INTERVAL_SECONDS  900
 
@@ -25,7 +29,9 @@
 
 #define ESP32_COMM_PORT_NUM      (2)
 #define ESP32_COMM_BAUD_RATE     (115200)
-#define ESP32_RP2040_COMM_TASK_STACK_SIZE    (1024*4)
+/* v0.3.1: stack 4K -> 6K. Mit DRAM-stack reicht 4K eigentlich, aber
+ * +2K kostet kaum was und gibt spielraum fuer ESP_LOGI-format-buffers. */
+#define ESP32_RP2040_COMM_TASK_STACK_SIZE    (1024*6)
 #define BUF_SIZE (512)
 
 /* v0.2.14: 2x 512 byte raus aus DRAM .bss. lazy heap_caps_malloc(SPIRAM)
@@ -1199,7 +1205,7 @@ static int __cmd_send(uint8_t cmd, void *p_data, uint16_t len)
         index += len;
     }
     cobs_encode_result ret = cobs_encode(buf, BUF_SIZE,  data, index);
-#if 1//SENSOR_COMM_DEBUG
+#if SENSOR_COMM_DEBUG
     ESP_LOGI(TAG, "encode status:%d, len:%d",  ret.status,  ret.out_len);
     for(int i=0; i < ret.out_len; i++ ) {
         printf( "0x%x ", buf[i] );
@@ -1646,7 +1652,9 @@ int indicator_sensor_init(void)
         esp_restart();
     }
 
-    /* v0.2.14: stack in PSRAM (4 KB raus aus DRAM). */
+    /* Stack in PSRAM. DRAM ist zu knapp; das war ursaechlich der
+     * panic-trigger - bei DRAM=1.5KB free hat lvgl-malloc NULL-pointer
+     * zurueckgegeben, render-routinen sind ueber NULL gestolpert.       */
     xTaskCreateWithCaps(esp32_rp2040_comm_task, "esp32_rp2040_comm_task", ESP32_RP2040_COMM_TASK_STACK_SIZE, NULL, 2, NULL, MALLOC_CAP_SPIRAM);
 
     /* v0.2.12: legacy sensor_history_data-task disabled. Schrieb periodisch

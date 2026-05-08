@@ -599,7 +599,7 @@ int indicator_wifi_init(void)
 
     __wifi_model_init();
     
-    /* v0.2.14: stack in PSRAM (5 KB raus aus DRAM). */
+    /* Stack in PSRAM (DRAM zu eng). */
     xTaskCreateWithCaps(&__indicator_wifi_task, "__indicator_wifi_task", 1024 * 5, NULL, 10, NULL, MALLOC_CAP_SPIRAM);
 
 

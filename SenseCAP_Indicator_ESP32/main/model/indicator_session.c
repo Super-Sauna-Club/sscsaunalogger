@@ -1192,28 +1192,14 @@ int indicator_session_init(void) {
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
-    /* Stack in PSRAM allozieren - internal DRAM ist nach LVGL+WiFi zu
-     * fragmentiert fuer einen 8-KB-block. xTaskCreateWithCaps aus
-     * freertos/idf_additions.h nimmt die caps fuer den stack.        */
+    /* Stack in PSRAM (DRAM ist zu knapp - lessons learned 2026-05-08). */
     BaseType_t rc = xTaskCreateWithCaps(
         session_worker, "ssc_session",
         SSC_TASK_STACK, NULL, SSC_TASK_PRIO, &s_worker,
         MALLOC_CAP_SPIRAM);
     if (rc != pdPASS) {
-        ESP_LOGE(TAG, "worker task create failed (psram) rc=%d, "
-                 "heap internal=%u psram=%u - fallback auf DRAM-stack",
-                 (int)rc,
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
-        /* Fallback: klassischer xTaskCreate mit halbierter stack-groesse.
-         * Besser ein kleinerer DRAM-stack als gar keine session-worker. */
-        rc = xTaskCreate(session_worker, "ssc_session",
-                         SSC_TASK_STACK / 2, NULL, SSC_TASK_PRIO, &s_worker);
-        if (rc != pdPASS) {
-            ESP_LOGE(TAG, "worker task create failed (dram) rc=%d",
-                     (int)rc);
-            return -3;
-        }
+        ESP_LOGE(TAG, "worker task create failed rc=%d", (int)rc);
+        return -3;
     }
     ESP_LOGI(TAG, "session_worker task erstellt, handle=%p", (void *)s_worker);
 
@@ -1231,21 +1217,11 @@ int indicator_session_init(void) {
                       VIEW_EVENT_HISTORY_LIST_REQ, NULL, 0,
                       pdMS_TO_TICKS(100));
 
-    /* v0.3.0: hybrid-storage initial sync - SD-list von RP2040 anfragen.
-     * Esp_timer feuert in 3s, gibt RP2040 zeit hochzukommen + UART-stack
-     * stable zu sein. Antwort kommt async als META_RESP-stream + DONE.  */
-    {
-        static esp_timer_handle_t s_sd_list_timer = NULL;
-        if (s_sd_list_timer == NULL) {
-            const esp_timer_create_args_t args = {
-                .callback = (esp_timer_cb_t)indicator_session_request_sd_list,
-                .name = "ssc_sd_list_initial",
-            };
-            esp_timer_create(&args, &s_sd_list_timer);
-            /* 5s gibt RP2040 zeit zum boot + UART-stack stable. */
-            esp_timer_start_once(s_sd_list_timer, 5 * 1000 * 1000ULL);
-        }
-    }
+    /* v0.3.1: auto-sd-list-kick beim boot DEAKTIVIERT. War ein peak-load-
+     * spike (META_RESP-stream + n× NVS-write + UART traffic) der bei
+     * v0.3.0 auf demselben zeitfenster wie ein anderer panic lag und
+     * den bootloop verstaerkt hat. User kann's manuell triggern via
+     * Settings -> Speicher -> AUS SD WIEDERHERSTELLEN.                  */
     return 0;
 }
 
