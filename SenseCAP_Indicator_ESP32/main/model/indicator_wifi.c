@@ -2,6 +2,8 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/idf_additions.h"   /* xTaskCreateWithCaps */
+#include "esp_heap_caps.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
 
@@ -578,7 +580,8 @@ int indicator_wifi_init(void)
 
     __wifi_model_init();
     
-    xTaskCreate(&__indicator_wifi_task, "__indicator_wifi_task", 1024 * 5, NULL, 10, NULL);
+    /* v0.2.14: stack in PSRAM (5 KB raus aus DRAM). */
+    xTaskCreateWithCaps(&__indicator_wifi_task, "__indicator_wifi_task", 1024 * 5, NULL, 10, NULL, MALLOC_CAP_SPIRAM);
 
 
     ESP_ERROR_CHECK(esp_netif_init());

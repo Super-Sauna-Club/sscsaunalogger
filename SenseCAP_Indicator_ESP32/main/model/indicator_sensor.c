@@ -1,4 +1,6 @@
 #include "indicator_sensor.h"
+#include "freertos/idf_additions.h"   /* xTaskCreateWithCaps */
+#include "esp_heap_caps.h"
 #include "driver/uart.h"
 #include "cobs.h"
 #include "esp_timer.h"
@@ -26,8 +28,11 @@
 #define ESP32_RP2040_COMM_TASK_STACK_SIZE    (1024*4)
 #define BUF_SIZE (512)
 
-uint8_t buf[BUF_SIZE];   //recv 
-uint8_t data[BUF_SIZE];  //decode
+/* v0.2.14: 2x 512 byte raus aus DRAM .bss. lazy heap_caps_malloc(SPIRAM)
+ * in indicator_sensor_init - die comm-task ist der einzige reader/writer
+ * und startet erst nach init.                                          */
+static uint8_t *buf = NULL;     /* recv */
+static uint8_t *data = NULL;    /* decode */
 
 enum  pkt_type {
 
@@ -1157,7 +1162,7 @@ static int __cmd_send(uint8_t cmd, void *p_data, uint8_t len)
         memcpy(&data[1], p_data, len);
         index += len;
     }
-    cobs_encode_result ret = cobs_encode(buf, sizeof(buf),  data, index);
+    cobs_encode_result ret = cobs_encode(buf, BUF_SIZE,  data, index);
 #if 1//SENSOR_COMM_DEBUG
     ESP_LOGI(TAG, "encode status:%d, len:%d",  ret.status,  ret.out_len);
     for(int i=0; i < ret.out_len; i++ ) {
@@ -1233,8 +1238,8 @@ static void esp32_rp2040_comm_task(void *arg)
             if (b == 0x00) {
                 /* packet-ende */
                 if (accum_len > 0) {
-                    memset(data, 0, sizeof(data));
-                    ret = cobs_decode(data, sizeof(data), accum, accum_len);
+                    memset(data, 0, BUF_SIZE);
+                    ret = cobs_decode(data, BUF_SIZE, accum, accum_len);
 #if SENSOR_COMM_DEBUG
                     ESP_LOGI(TAG, "decode status:%d, len:%d, type:0x%x",
                              ret.status, ret.out_len, data[0]);
@@ -1594,10 +1599,19 @@ int indicator_sensor_init(void)
     updata_queue_handle = xQueueCreate(4, sizeof( struct updata_queue_msg));
 
     __sensor_history_data_restore();
-    
+
     __sensor_history_data_update_init();
 
-    xTaskCreate(esp32_rp2040_comm_task, "esp32_rp2040_comm_task", ESP32_RP2040_COMM_TASK_STACK_SIZE, NULL, 2, NULL);
+    /* v0.2.14: comm-buffers in PSRAM (1 KB raus aus DRAM). */
+    if (buf == NULL)  buf  = heap_caps_malloc(BUF_SIZE, MALLOC_CAP_SPIRAM);
+    if (data == NULL) data = heap_caps_malloc(BUF_SIZE, MALLOC_CAP_SPIRAM);
+    if (buf == NULL || data == NULL) {
+        ESP_LOGE("sensor", "psram alloc fail (recv/decode buf) - reboot");
+        esp_restart();
+    }
+
+    /* v0.2.14: stack in PSRAM (4 KB raus aus DRAM). */
+    xTaskCreateWithCaps(esp32_rp2040_comm_task, "esp32_rp2040_comm_task", ESP32_RP2040_COMM_TASK_STACK_SIZE, NULL, 2, NULL, MALLOC_CAP_SPIRAM);
 
     /* v0.2.12: legacy sensor_history_data-task disabled. Schrieb periodisch
      * in den NVS-namespace 'sensor_data' fuer die alten luftqualitaets-

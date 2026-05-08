@@ -22,3 +22,6 @@ SenseCAP_Indicator_ESP32_original/
 # OS
 .DS_Store
 Thumbs.db
+
+# Extrahierte session-CSVs (reproduzierbar via RP2040 ?D-cmd)
+sessions_extracted/

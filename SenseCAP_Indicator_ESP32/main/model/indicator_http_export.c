@@ -37,6 +37,8 @@
 #include "esp_event.h"
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"   /* xTaskCreateWithCaps */
+#include "esp_heap_caps.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
@@ -311,6 +313,7 @@ int indicator_http_export_init(void) {
     esp_event_handler_register_with(view_event_handle, VIEW_EVENT_BASE,
                                     VIEW_EVENT_HTTP_CFG_APPLY,
                                     on_view_event, NULL);
-    xTaskCreate(retry_task, "ssc_httpx", 6 * 1024, NULL, 4, NULL);
+    /* v0.2.14: stack in PSRAM (6 KB raus aus DRAM). */
+    xTaskCreateWithCaps(retry_task, "ssc_httpx", 6 * 1024, NULL, 4, NULL, MALLOC_CAP_SPIRAM);
     return 0;
 }

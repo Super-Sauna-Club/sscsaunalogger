@@ -1,5 +1,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"   /* xTaskCreateWithCaps */
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "bsp_board.h"
@@ -73,6 +75,18 @@ static uint32_t __boot_counter_tick_and_get(void)
 ESP_EVENT_DEFINE_BASE(VIEW_EVENT_BASE);
 esp_event_loop_handle_t view_event_handle;
 
+/* Eigener event-loop-runner. Wird von xTaskCreateWithCaps mit PSRAM-
+ * stack erzeugt damit die 16 KB nicht aus DRAM kommen. Loop laeuft
+ * forever - esp_event_loop_run blockiert bis ein event reinkommt
+ * oder timeout (portMAX_DELAY = forever). Returns ESP_OK nach jedem
+ * abgearbeiteten event-batch.                                       */
+void __view_event_loop_task(void *arg)
+{
+    while (1) {
+        esp_event_loop_run(view_event_handle, portMAX_DELAY);
+    }
+}
+
 /* v0.2.7: capturen vor event-loop-create, broadcasten sobald event-loop da. */
 static struct view_data_boot_info g_boot_info;
 
@@ -96,22 +110,38 @@ void app_main(void)
     lv_port_init();
 
 
+    /* v0.2.14: event-loop OHNE auto-task, damit wir die task selbst mit
+     * PSRAM-stack via xTaskCreateWithCaps erzeugen koennen.
+     * task_name=NULL signalisiert ESP-IDF "no automatic task" - der
+     * caller muss esp_event_loop_run() periodisch aufrufen.
+     * 16 KB stack in PSRAM = 16 KB DRAM gewinn (vorher in DRAM via
+     * esp_event_loop_create internal allocation).                       */
     esp_event_loop_args_t view_event_task_args = {
-        /* 32 statt 10: bei 1-Hz session-worker + sensor-events mit
-         * lv_port_sem_take in den handlern kann die queue sonst voll
-         * laufen und post_live_event verliert events (20ms timeout) -
-         * timer bleibt dann auf 0:00 weil UI nie einen live-event sieht. */
-        .queue_size = 32,
-        .task_name = "view_event_task",
-        .task_priority = uxTaskPriorityGet(NULL),
-        .task_stack_size = 16384,   /* 16 KB fuer session-save-flow
-                                     * (mariadb-TCP + cJSON + NVS +
-                                     * lv_scr_load) - 10 KB haben zu
-                                     * stack-overflow gefuehrt.      */
-        .task_core_id = tskNO_AFFINITY
+        .queue_size = 32,           /* 32 statt 10: bei 1-Hz session-worker +
+                                       sensor-events. Volle queue fuehrt zu
+                                       gedroppten live-events (20ms timeout). */
+        .task_name = NULL,
     };
-
     ESP_ERROR_CHECK(esp_event_loop_create(&view_event_task_args, &view_event_handle));
+
+    /* Eigene task fuer den event-loop - stack in PSRAM. 16 KB ist needed
+     * weil session-save-flow mariadb-TCP + cJSON + NVS + lv_scr_load
+     * triggert (10 KB hat zu stack-overflow gefuehrt).                  */
+    extern void __view_event_loop_task(void *arg);
+    TaskHandle_t s_view_loop_task = NULL;
+    BaseType_t r = xTaskCreateWithCaps(
+        __view_event_loop_task, "view_event_task",
+        16384, NULL, uxTaskPriorityGet(NULL), &s_view_loop_task,
+        MALLOC_CAP_SPIRAM);
+    if (r != pdPASS) {
+        ESP_LOGE(TAG, "view_event_task PSRAM-stack create failed (rc=%d) "
+                      "- fallback DRAM-stack via xTaskCreate", (int)r);
+        if (xTaskCreate(__view_event_loop_task, "view_event_task",
+                        16384, NULL, uxTaskPriorityGet(NULL),
+                        &s_view_loop_task) != pdPASS) {
+            ESP_LOGE(TAG, "DRAM-fallback fail too - critical");
+        }
+    }
 
     /* v0.2.7: boot-info broadcasten sobald event-loop up. UI kann sich
      * subscriben und im INFO-Screen / Home-Toast darauf reagieren.      */
@@ -128,19 +158,31 @@ void app_main(void)
     indicator_model_init();
     indicator_controller_init();
 
-    static char buffer[128];    /* Make sure buffer is enough for `sprintf` */
-    while (1) {
-        // sprintf(buffer, "   Biggest /     Free /    Total\n"
-        //         "\t  DRAM : [%8d / %8d / %8d]\n"
-        //         "\t PSRAM : [%8d / %8d / %8d]",
-        //         heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
-        //         heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-        //         heap_caps_get_total_size(MALLOC_CAP_INTERNAL),
-        //         heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
-        //         heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
-        //         heap_caps_get_total_size(MALLOC_CAP_SPIRAM));
-        // ESP_LOGI("MEM", "%s", buffer);
+    /* v0.2.14: heap-observability nach init + periodisch.
+     * Hintergrund: am 2026-05-04 hatten wir nach init nur 4559 byte
+     * internal heap free (sollte ~30 KB sein). Ohne log keine ground-
+     * truth fuer fixes. Boot-banner zeigt post-init-state, periodische
+     * 60s-zeile zeigt drift waehrend wifi/lvgl/session-arbeitslast.    */
+    static char buffer[160];
+    snprintf(buffer, sizeof(buffer),
+             "post-init: DRAM big=%u free=%u total=%u | "
+             "PSRAM big=%u free=%u total=%u",
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_total_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+             (unsigned)heap_caps_get_total_size(MALLOC_CAP_SPIRAM));
+    ESP_LOGI("MEM", "%s", buffer);
 
-        vTaskDelay(pdMS_TO_TICKS(10000));
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(60000));
+        snprintf(buffer, sizeof(buffer),
+                 "DRAM big=%u free=%u | PSRAM big=%u free=%u",
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+        ESP_LOGI("MEM", "%s", buffer);
     }
 }

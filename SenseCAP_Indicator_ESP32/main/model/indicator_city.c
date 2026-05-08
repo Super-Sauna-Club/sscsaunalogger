@@ -1,5 +1,7 @@
 #include "indicator_city.h"
 #include "freertos/semphr.h"
+#include "freertos/idf_additions.h"   /* xTaskCreateWithCaps (IDF v5.1+) */
+#include "esp_heap_caps.h"
 #include "esp_tls.h"
 #include "esp_http_client.h"
 #include "cJSON.h"
@@ -51,7 +53,11 @@ static SemaphoreHandle_t   __g_http_com_sem;
 
 static bool net_flag = false;
 
-static char local_response_buffer[MAX_HTTP_OUTPUT_BUFFER] = {0};
+/* v0.2.14: war static char[4096] in DRAM .bss. PSRAM-allocation in init
+ * gibt 4 KB internal heap zurueck. Wenn die allocation fehlschlaegt
+ * laeuft der HTTP-pfad ohne buffer (alle response-handler erkennen NULL
+ * via early-return - ist eh nicht critical-path).                     */
+static char *local_response_buffer = NULL;
 
 static int __city_data_prase(const char *p_str)
 {
@@ -169,7 +175,7 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt)
 
 static int __city_get(void)
 {
-    memset(local_response_buffer, 0, sizeof(local_response_buffer));
+    memset(local_response_buffer, 0, MAX_HTTP_OUTPUT_BUFFER);
 
     esp_http_client_config_t config = {
         .host = "ip-api.com",
@@ -276,10 +282,10 @@ static int __city_get(void)
 
         /* Read HTTP response */
         int recv_len = 0;
-        bzero(local_response_buffer, sizeof(local_response_buffer));
+        bzero(local_response_buffer, MAX_HTTP_OUTPUT_BUFFER);
 
         do {
-            r = read(s, local_response_buffer + recv_len, sizeof(local_response_buffer)-1-recv_len);
+            r = read(s, local_response_buffer + recv_len, MAX_HTTP_OUTPUT_BUFFER-1-recv_len);
             recv_len += r;
             for(int i = 0; i < r; i++) {
                 putchar(local_response_buffer[i+recv_len]);
@@ -539,10 +545,10 @@ static int https_get_request(esp_tls_cfg_t cfg, const char *WEB_SERVER_URL, cons
     } while (written_bytes < strlen(REQUEST));
 
     ESP_LOGI(TAG, "Reading HTTP response...");
-    memset(local_response_buffer, 0x00, sizeof(local_response_buffer));
+    memset(local_response_buffer, 0x00, MAX_HTTP_OUTPUT_BUFFER);
     recv_len = 0;
     do {
-        len = sizeof(local_response_buffer) - recv_len - 1;
+        len = MAX_HTTP_OUTPUT_BUFFER - recv_len - 1;
        
         ret = esp_tls_conn_read(tls, (char *)local_response_buffer + recv_len, len);
 
@@ -743,8 +749,8 @@ int https_mbedtls_request(const char *p_url, const char * port, const char *p_re
         {
             /* In real life, we probably want to close connection if ret != 0 */
             ESP_LOGW(TAG, "Failed to verify peer certificate!");
-            bzero(local_response_buffer, sizeof(local_response_buffer));
-            mbedtls_x509_crt_verify_info(local_response_buffer, sizeof(local_response_buffer), "  ! ", flags);
+            bzero(local_response_buffer, MAX_HTTP_OUTPUT_BUFFER);
+            mbedtls_x509_crt_verify_info(local_response_buffer, MAX_HTTP_OUTPUT_BUFFER, "  ! ", flags);
             ESP_LOGW(TAG, "verification info: %s", local_response_buffer);
         }
         else {
@@ -770,8 +776,8 @@ int https_mbedtls_request(const char *p_url, const char * port, const char *p_re
 
         ESP_LOGI(TAG, "Reading HTTP response...");
         int recv_len = 0;
-        len = sizeof(local_response_buffer) - 1;
-        bzero(local_response_buffer, sizeof(local_response_buffer));
+        len = MAX_HTTP_OUTPUT_BUFFER - 1;
+        bzero(local_response_buffer, MAX_HTTP_OUTPUT_BUFFER);
         do
         {
             len -= recv_len;
@@ -1042,6 +1048,16 @@ int indicator_city_init(void)
 {
     __g_http_com_sem = xSemaphoreCreateBinary();
 
+    /* v0.2.14: response-buffer aus PSRAM. Falls SPIRAM-malloc fail (sehr
+     * unwahrscheinlich, ~8 MB frei), sind die HTTP-handler tolerant
+     * gegen NULL und loggen das.                                       */
+    if (local_response_buffer == NULL) {
+        local_response_buffer = heap_caps_malloc(MAX_HTTP_OUTPUT_BUFFER, MALLOC_CAP_SPIRAM);
+        if (local_response_buffer == NULL) {
+            ESP_LOGE(TAG, "psram alloc fail (%d byte) - HTTP-pfad disabled", MAX_HTTP_OUTPUT_BUFFER);
+        }
+    }
+
     size_t stored_len = sizeof(__custom_city_name);
     esp_err_t err = indicator_storage_read(CITY_CUSTOM_STORAGE, __custom_city_name, &stored_len);
     if (err == ESP_OK && strlen(__custom_city_name) > 0) {
@@ -1050,7 +1066,8 @@ int indicator_city_init(void)
                           __custom_city_name, sizeof(__custom_city_name), portMAX_DELAY);
     }
 
-    xTaskCreate(&__indicator_http_task, "__indicator_http_task", 1024 * 5, NULL, 10, NULL);
+    /* v0.2.14: stack ueber xTaskCreateWithCaps in PSRAM. */
+    xTaskCreateWithCaps(&__indicator_http_task, "__indicator_http_task", 1024 * 5, NULL, 10, NULL, MALLOC_CAP_SPIRAM);
 
     ESP_ERROR_CHECK(esp_event_handler_instance_register_with(view_event_handle, 
                                                         VIEW_EVENT_BASE, VIEW_EVENT_WIFI_ST, 

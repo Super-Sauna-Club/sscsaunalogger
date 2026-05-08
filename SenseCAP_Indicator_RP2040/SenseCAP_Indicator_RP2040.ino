@@ -31,7 +31,7 @@
 #include "hardware/watchdog.h"    /* watchdog_caused_reboot() fuer post-crash diagnose */
 
 #define DEBUG 0
-#define VERSION "ssc-v0.2.12"
+#define VERSION "ssc-v0.2.14"
 /* v0.2.7: EEPROM layout. 256 B reserviert, erste 8B belegt.
  *  [0..3] uint32_t magic = 0x55AA5AA5
  *  [4..7] uint32_t boot_count                                      */
@@ -1504,6 +1504,99 @@ void loop() {
             new (&myPacketSerial) PacketSerial_<COBS, 0, 512>();
             myPacketSerial.setStream(&Serial1);
             myPacketSerial.setPacketHandler(&onPacketReceived);
+        }
+    }
+
+    /* v0.2.14: USB-CDC debug-cmd-handler mit feedback-loop-schutz.
+     *
+     * Bug v0.2.13: kernel-tty-mode war nicht "raw -echo", sondern default
+     * canonical+echo. Folge: jede [SAUNA]...-zeile die der chip druckte
+     * wurde vom host an den chip zurueck geschickt. Die alte version
+     * druckte dann "[SAUNA] cmd unknown: ..." was wieder geechoed wurde
+     * -> selbsterhaltender flood -> USB-CDC-tx-buffer voll -> Serial.print
+     * blockiert -> WDT(8s) feuert -> 1185+ reboots.
+     *
+     * Fix: STRICT prefix '?'. Jeder andere first-char setzt eine discard-
+     * bis-newline-flag und droppt silent. Keine echos auf unknowns.
+     * Unsere log-prefixe ([SAUNA], SGP40, session:) starten nicht mit '?'
+     * -> komplette feedback-immunitaet.
+     *
+     * Plus: max 256 chars pro loop()-iteration (sonst lasst dieser handler
+     * andere arbeit verhungern wenn host viel schickt).
+     *
+     * Commands:
+     *   ?L           -> listet /sessions/ als "[SAUNA] FILE name size"
+     *   ?D <fname>   -> dumpt CSV-content zwischen DUMP_BEGIN/DUMP_END
+     */
+    static char usbcdc_buf[80];
+    static uint8_t usbcdc_idx = 0;
+    static bool   usbcdc_discard = false;  /* true = drop bis '\n' */
+    int budget = 256;
+    while (Serial.available() && budget-- > 0) {
+        char c = Serial.read();
+        if (c == '\r') continue;
+        if (c == '\n') {
+            if (!usbcdc_discard && usbcdc_idx > 0 && usbcdc_buf[0] == '?') {
+                usbcdc_buf[usbcdc_idx] = 0;
+                char op = usbcdc_buf[1];
+                if (op == 'L' || op == 'l') {
+                    Serial.println(F("[SAUNA] LIST_BEGIN"));
+                    if (sd_init_flag) {
+                        File dir = SD.open("/sessions");
+                        if (dir) {
+                            File f;
+                            while ((f = dir.openNextFile())) {
+                                Serial.print(F("[SAUNA] FILE "));
+                                Serial.print(f.name());
+                                Serial.print(F(" "));
+                                Serial.println(f.size());
+                                f.close();
+                                rp2040.wdt_reset();
+                            }
+                            dir.close();
+                        } else {
+                            Serial.println(F("[SAUNA] cannot open /sessions"));
+                        }
+                    } else {
+                        Serial.println(F("[SAUNA] SD not ready"));
+                    }
+                    Serial.println(F("[SAUNA] LIST_END"));
+                } else if ((op == 'D' || op == 'd') &&
+                           usbcdc_buf[2] == ' ' && sd_init_flag) {
+                    char path[100];
+                    snprintf(path, sizeof(path), "/sessions/%s", usbcdc_buf+3);
+                    File f = SD.open(path);
+                    if (f) {
+                        Serial.print(F("[SAUNA] DUMP_BEGIN "));
+                        Serial.println(usbcdc_buf+3);
+                        while (f.available()) {
+                            Serial.write(f.read());
+                            if ((f.position() & 0x3FF) == 0) rp2040.wdt_reset();
+                        }
+                        f.close();
+                        Serial.println();
+                        Serial.print(F("[SAUNA] DUMP_END "));
+                        Serial.println(usbcdc_buf+3);
+                    } else {
+                        Serial.print(F("[SAUNA] DUMP_ERR not found "));
+                        Serial.println(path);
+                    }
+                }
+                /* unbekannter ?-cmd: silent ignore (kein echo - feedback-safe) */
+            }
+            usbcdc_idx = 0;
+            usbcdc_discard = false;
+        } else if (usbcdc_discard) {
+            /* drop char silent */
+        } else if (usbcdc_idx == 0 && c != '?') {
+            /* first char ist nicht '?' -> komplette zeile silent verwerfen */
+            usbcdc_discard = true;
+        } else if (usbcdc_idx < sizeof(usbcdc_buf)-1) {
+            usbcdc_buf[usbcdc_idx++] = c;
+        } else {
+            /* buffer-overrun: drop rest und ignore */
+            usbcdc_discard = true;
+            usbcdc_idx = 0;
         }
     }
 }
