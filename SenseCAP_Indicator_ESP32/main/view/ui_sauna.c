@@ -564,6 +564,10 @@ static void fmt_clock(char *buf, size_t n) {
 /*   Reusable: statkachel "GROSSE ZAHL + LABEL + UNIT"                      */
 /* ======================================================================= */
 
+/* v0.3.1: layout-rework. Vorher: topic oben links + value unten links +
+ * unit unten rechts -> grosser leerer raum + topic abgeschnitten. Jetzt:
+ * topic mittig oben (kompakter), value + unit zusammen in einer flex-row
+ * unten zentriert. Kein abgeschnittener text mehr.                        */
 static lv_obj_t *big_stat_card(lv_obj_t *parent, const char *topic,
                                 const char *unit, lv_color_t color,
                                 lv_obj_t **out_val,
@@ -571,25 +575,37 @@ static lv_obj_t *big_stat_card(lv_obj_t *parent, const char *topic,
     lv_obj_t *c = lv_obj_create(parent);
     style_card(c);
     lv_obj_set_size(c, w, h);
+    lv_obj_set_style_pad_all(c, 6, 0);
     lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *top = lv_label_create(c);
     lv_label_set_text(top, topic);
-    label_muted(top);
-    lv_obj_align(top, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_set_style_text_color(top, SSC_C_TEXT_FAINT, 0);
+    lv_obj_set_style_text_font(top, F_XS, 0);
+    lv_obj_set_style_text_letter_space(top, 1, 0);
+    lv_obj_align(top, LV_ALIGN_TOP_MID, 0, 0);
 
-    lv_obj_t *val = lv_label_create(c);
+    /* row mit value + unit nebeneinander, baseline-aligned. */
+    lv_obj_t *row = lv_obj_create(c);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_align(row, LV_ALIGN_BOTTOM_MID, 0, -2);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END,
+                          LV_FLEX_ALIGN_END);
+    lv_obj_set_style_pad_gap(row, 4, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *val = lv_label_create(row);
     lv_label_set_text(val, "-");
     lv_obj_set_style_text_font(val, F_LG, 0);
     lv_obj_set_style_text_color(val, color, 0);
-    lv_obj_align(val, LV_ALIGN_BOTTOM_LEFT, 0, -6);
     if (out_val) *out_val = val;
 
-    lv_obj_t *u = lv_label_create(c);
+    lv_obj_t *u = lv_label_create(row);
     lv_label_set_text(u, unit);
     lv_obj_set_style_text_color(u, SSC_C_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(u, F_SM, 0);
-    lv_obj_align(u, LV_ALIGN_BOTTOM_RIGHT, 0, -10);
+    lv_obj_set_style_text_font(u, F_MD, 0);
     return c;
 }
 
@@ -1216,32 +1232,38 @@ static void build_live(void) {
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_clear_flag(vrow, LV_OBJ_FLAG_SCROLLABLE);
 
-    big_stat_card(vrow, "TEMP KABINE",    "C", SSC_C_ACCENT,   &live_temp_val, 148, 84);
-    big_stat_card(vrow, "FEUCHTE KABINE", "%", SSC_C_CHART_RH, &live_rh_val,   148, 84);
+    /* v0.3.1: kuerzere topics damit nichts abgeschnitten wird. Die
+     * groessere unit-font (F_MD) + value-row macht klar was es ist. */
+    big_stat_card(vrow, "KABINE",  "°C", SSC_C_ACCENT,   &live_temp_val, 148, 84);
+    big_stat_card(vrow, "FEUCHTE", "%",  SSC_C_CHART_RH, &live_rh_val,   148, 84);
 
-    /* PEAK-Karte zweizeilig: oben max-temp in Gold, unten max-RH in Sage.
-     * Eine einzige Zeile wie "88C/70%" wird bei F_LG (36pt) in 148px Breite
-     * abgeschnitten - daher auf zwei Zeilen F_MD splitten.            */
+    /* PEAK-Karte: zwei werte (max-temp gold, max-RH sage) zentriert.
+     * v0.3.1: topic mittig oben, beide werte zentriert untereinander
+     * im gleichen layout wie die anderen cards.                      */
     lv_obj_t *peak_card = lv_obj_create(vrow);
     style_card(peak_card);
     lv_obj_set_size(peak_card, 148, 84);
+    lv_obj_set_style_pad_all(peak_card, 6, 0);
     lv_obj_clear_flag(peak_card, LV_OBJ_FLAG_SCROLLABLE);
+
     lv_obj_t *peak_lbl = lv_label_create(peak_card);
     lv_label_set_text(peak_lbl, "PEAK");
-    label_muted(peak_lbl);
-    lv_obj_align(peak_lbl, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_set_style_text_color(peak_lbl, SSC_C_TEXT_FAINT, 0);
+    lv_obj_set_style_text_font(peak_lbl, F_XS, 0);
+    lv_obj_set_style_text_letter_space(peak_lbl, 1, 0);
+    lv_obj_align(peak_lbl, LV_ALIGN_TOP_MID, 0, 0);
 
     live_peak_val = lv_label_create(peak_card);
     lv_label_set_text(live_peak_val, "-");
     lv_obj_set_style_text_font(live_peak_val, F_MD, 0);
     lv_obj_set_style_text_color(live_peak_val, SSC_C_ACCENT, 0);
-    lv_obj_align(live_peak_val, LV_ALIGN_BOTTOM_LEFT, 0, -22);
+    lv_obj_align(live_peak_val, LV_ALIGN_CENTER, 0, 4);
 
     live_peak_val2 = lv_label_create(peak_card);
     lv_label_set_text(live_peak_val2, "-");
     lv_obj_set_style_text_font(live_peak_val2, F_MD, 0);
     lv_obj_set_style_text_color(live_peak_val2, SSC_C_CHART_RH, 0);
-    lv_obj_align(live_peak_val2, LV_ALIGN_BOTTOM_LEFT, 0, -2);
+    lv_obj_align(live_peak_val2, LV_ALIGN_BOTTOM_MID, 0, -2);
 
     /* ===== Professionelles Chart-Layout mit MANUELLEN Achsen-Labels
      * ==================================================================
