@@ -41,10 +41,18 @@
 #include "../app_version.h"
 #include "../lv_port.h"
 #include "../ui/theme.h"
+#include "../model/indicator_ssc_settings.h"
+#include "../model/indicator_session.h"
+#include "bsp_lcd.h"
 
 /* Forward-decl aus indicator_session.h (wird hier gebraucht um edit-
  * button waehrend einer live-session zu blocken). */
 bool indicator_session_is_active(void);
+
+/* v0.2.14: forward-decls fuer settings-toggle-handlers - die module
+ * exportieren das public, hier brauchen wir nur den prototype.        */
+extern void indicator_wifi_set_enabled(bool en);
+extern void indicator_time_set_ntp_enabled(bool en);
 
 static const char *TAG = "UI_SAUNA";
 
@@ -66,6 +74,7 @@ static void on_history_row_clicked(lv_event_t *e);
 static void on_detail_delete_clicked(lv_event_t *e);
 static void on_detail_edit_clicked(lv_event_t *e);
 static void rebuild_operator_dropdown(void);
+static void apply_operator_presets_to_widgets(void);
 typedef void (*confirm_cb_t)(void *user_data);
 static void show_confirm(const char *title, const char *body,
                          const char *confirm_label,
@@ -92,6 +101,14 @@ static lv_obj_t *home_sauna_rh_frac;
 static lv_obj_t *home_vorraum_temp_val;
 static lv_obj_t *home_vorraum_rh_val;
 static lv_obj_t *home_vorraum_co2_val;
+/* v0.2.14: refs fuer dashboard show/hide via settings-toggle.
+ * `dash_intern_visible=0` -> vbox hidden, start-btn ruckt rauf unter
+ * cabin (gleiche groesse), letzte-sessions-liste waechst um den freien
+ * platz (78 px = 70 vbox + 8 gap).                                   */
+static lv_obj_t *home_geraet_intern_vbox;
+static lv_obj_t *home_sauna_cabin_card;
+static lv_obj_t *home_session_start_btn;
+static lv_obj_t *home_letzte_sessions_hdr;
 static lv_obj_t *home_tvoc_val;
 static lv_obj_t *home_clock_val;
 static lv_obj_t *home_clock_warn;    /* v0.2.7: "!" wenn zeit nicht NTP-synced */
@@ -368,6 +385,26 @@ static lv_obj_t *set_db_database_ta;
 static lv_obj_t *set_db_table_ta;
 static lv_obj_t *set_db_enabled_sw;
 static lv_obj_t *set_operators_ta;   /* 1 kürzel pro zeile */
+/* v0.2.14: smartphone-style toggles fuer schnellzugriff */
+static lv_obj_t *set_wifi_enabled_sw;
+static lv_obj_t *set_ntp_enabled_sw;
+static lv_obj_t *set_dash_intern_sw;
+static lv_obj_t *set_brightness_slider;
+static lv_obj_t *set_brightness_lbl;
+
+/* v0.2.14: submenu-screens, lazy gebaut beim ersten klick auf cat-btn.
+ * Bleiben dann im memory damit textareas + state ihre werte behalten. */
+static lv_obj_t *scr_set_verbindung;
+static lv_obj_t *scr_set_zeit;
+static lv_obj_t *scr_set_anzeige;
+static lv_obj_t *scr_set_export;
+static lv_obj_t *scr_set_operators;
+static lv_obj_t *scr_set_diag;
+static lv_obj_t *scr_set_danger;
+static lv_obj_t *scr_set_speicher;
+/* Diag-screen-eigene labels (heap-snapshot, wifi-status, sd/sessions) */
+static lv_obj_t *set_heap_label = NULL;
+static lv_obj_t *set_speicher_label = NULL;
 /* v0.2.7: dynamisches Diagnose-Label in Settings - zeit-source + boot-info */
 static lv_obj_t *set_diag_label = NULL;
 
@@ -672,6 +709,7 @@ static void build_home(void) {
      * Labels ober den Zahlen, Einheit rechts neben der Zahl -
      * alles per Flex-Row, keine Überlappungen mehr.             */
     lv_obj_t *cabin = lv_obj_create(scr_home);
+    home_sauna_cabin_card = cabin;
     style_card(cabin);
     /* 160 px - eine spur kompakter, start-button wird groesser. */
     lv_obj_set_size(cabin, 464, 160);
@@ -804,6 +842,7 @@ static void build_home(void) {
      * Professionell: Titel zentriert oben, drei spalten gleich gross
      * zentriert drunter (caption oben, wert gross, einheit klein).  */
     lv_obj_t *vbox = lv_obj_create(scr_home);
+    home_geraet_intern_vbox = vbox;
     style_card(vbox);
     lv_obj_set_size(vbox, 464, 70);
     lv_obj_align_to(vbox, cabin, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 6);
@@ -876,6 +915,7 @@ static void build_home(void) {
 
     /* ===== Session-Start-Button (56 px) ===== */
     lv_obj_t *start = lv_btn_create(scr_home);
+    home_session_start_btn = start;
     style_primary_btn(start);
     lv_obj_set_size(start, 464, 76);
     lv_obj_align_to(start, vbox, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 8);
@@ -887,6 +927,7 @@ static void build_home(void) {
 
     /* ===== Letzte-Sessions-Header (20 px) ===== */
     lv_obj_t *rhdr = lv_obj_create(scr_home);
+    home_letzte_sessions_hdr = rhdr;
     lv_obj_remove_style_all(rhdr);
     lv_obj_set_size(rhdr, 464, 20);
     lv_obj_align_to(rhdr, start, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 6);
@@ -1523,6 +1564,8 @@ static void build_summary(void) {
     lv_obj_set_style_bg_color(sum_operator_dd, SSC_C_ELEVATED, 0);
     lv_obj_set_style_text_color(sum_operator_dd, SSC_C_TEXT, 0);
     lv_obj_set_style_border_color(sum_operator_dd, SSC_C_BORDER, 0);
+    /* v0.3.0: presets aus cache nachziehen falls schon geladen.        */
+    apply_operator_presets_to_widgets();
 
     lv_obj_t *af_l = lv_label_create(form);
     lv_label_set_text(af_l, "AUFGUSS / RITUAL");
@@ -2435,6 +2478,108 @@ static void on_settings_back_clicked(lv_event_t *e) {
     lv_scr_load_anim(scr_home, LV_SCR_LOAD_ANIM_OVER_BOTTOM, 220, 0, false);
 }
 
+/* ======================================================================= */
+/*  v0.2.14: Settings-Toggle-Handlers + Apply-Funktionen                   */
+/* ======================================================================= */
+
+/* Layout-anpassung wenn dashboard "GERAET (INTERN)" toggled wird.
+ * Ohne: vbox versteckt, start-btn rueckt 78 px hoch (gleiche groesse),
+ * letzte-sessions-liste waechst um diese 78 px.
+ * Mit:  alles wieder an originalposition.                              */
+void ssc_settings_apply_dashboard_visibility(void)
+{
+    if (!home_geraet_intern_vbox || !home_session_start_btn ||
+        !home_letzte_sessions_hdr || !home_recent_list ||
+        !home_sauna_cabin_card) return;
+
+    bool show = (g_ssc_settings.dash_intern_visible != 0);
+    if (show) {
+        lv_obj_clear_flag(home_geraet_intern_vbox, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_align_to(home_session_start_btn, home_geraet_intern_vbox,
+                        LV_ALIGN_OUT_BOTTOM_LEFT, 0, 8);
+        lv_obj_align_to(home_letzte_sessions_hdr, home_session_start_btn,
+                        LV_ALIGN_OUT_BOTTOM_LEFT, 0, 6);
+        lv_obj_align_to(home_recent_list, home_letzte_sessions_hdr,
+                        LV_ALIGN_OUT_BOTTOM_LEFT, 0, 4);
+        lv_obj_set_size(home_recent_list, 464, 68);
+    } else {
+        lv_obj_add_flag(home_geraet_intern_vbox, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_align_to(home_session_start_btn, home_sauna_cabin_card,
+                        LV_ALIGN_OUT_BOTTOM_LEFT, 0, 6);
+        lv_obj_align_to(home_letzte_sessions_hdr, home_session_start_btn,
+                        LV_ALIGN_OUT_BOTTOM_LEFT, 0, 6);
+        lv_obj_align_to(home_recent_list, home_letzte_sessions_hdr,
+                        LV_ALIGN_OUT_BOTTOM_LEFT, 0, 4);
+        lv_obj_set_size(home_recent_list, 464, 68 + 78);
+    }
+}
+
+/* Backlight brightness via BSP-LEDC-PWM (GPIO 45, 5 kHz, 10-bit).
+ * Eingabe 5..100 - werte unter 5 werden auf 5 geclamped damit display
+ * ueber den slider nie ganz ausgehen kann (geraete-power-knopf macht
+ * das echte off, nicht der slider).                                  */
+void ssc_settings_apply_brightness(uint8_t pct)
+{
+    if (pct < SSC_BRIGHTNESS_MIN) pct = SSC_BRIGHTNESS_MIN;
+    if (pct > SSC_BRIGHTNESS_MAX) pct = SSC_BRIGHTNESS_MAX;
+    bsp_lcd_set_backlight_pct(pct);
+}
+
+/* Toggle-handler: schreibt setting + persist + apply. lv_port_sem ist
+ * implizit gehalten weil wir aus dem LVGL-event-callback kommen.      */
+static void on_set_wifi_enabled_changed(lv_event_t *e)
+{
+    bool checked = lv_obj_has_state(set_wifi_enabled_sw, LV_STATE_CHECKED);
+    g_ssc_settings.wifi_enabled = checked ? 1 : 0;
+    ssc_settings_save();
+    indicator_wifi_set_enabled(checked);
+    if (set_wifi_info) {
+        lv_label_set_text(set_wifi_info, checked ? "wlan: an" : "wlan: aus");
+        lv_obj_set_style_text_color(set_wifi_info,
+            checked ? SSC_C_ACCENT : SSC_C_TEXT_FAINT, 0);
+    }
+}
+
+static void on_set_ntp_enabled_changed(lv_event_t *e)
+{
+    bool checked = lv_obj_has_state(set_ntp_enabled_sw, LV_STATE_CHECKED);
+    g_ssc_settings.ntp_enabled = checked ? 1 : 0;
+    ssc_settings_save();
+    indicator_time_set_ntp_enabled(checked);
+}
+
+static void on_set_dash_intern_changed(lv_event_t *e)
+{
+    bool checked = lv_obj_has_state(set_dash_intern_sw, LV_STATE_CHECKED);
+    g_ssc_settings.dash_intern_visible = checked ? 1 : 0;
+    ssc_settings_save();
+    ssc_settings_apply_dashboard_visibility();
+}
+
+/* Brightness-slider: VALUE_CHANGED feuert auf jeden step waehrend der
+ * user dragt. LEDC-update ist cheap (~1us) - sofort anwenden. NVS-write
+ * erst on RELEASED damit wir nicht 50x in 2 sek schreiben.            */
+static void on_set_brightness_changed(lv_event_t *e)
+{
+    if (!set_brightness_slider) return;
+    int v = (int)lv_slider_get_value(set_brightness_slider);
+    if (v < SSC_BRIGHTNESS_MIN) v = SSC_BRIGHTNESS_MIN;
+    if (v > SSC_BRIGHTNESS_MAX) v = SSC_BRIGHTNESS_MAX;
+    g_ssc_settings.brightness_pct = (uint8_t)v;
+    ssc_settings_apply_brightness((uint8_t)v);
+    if (set_brightness_lbl) {
+        char buf[12];
+        snprintf(buf, sizeof(buf), "%d %%", v);
+        lv_label_set_text(set_brightness_lbl, buf);
+    }
+}
+
+static void on_set_brightness_released(lv_event_t *e)
+{
+    /* Slider losgelassen - jetzt persistieren. */
+    ssc_settings_save();
+}
+
 static void on_wifi_connect_clicked(lv_event_t *e) {
     struct view_data_wifi_config cfg = {0};
     const char *ssid = lv_textarea_get_text(set_wifi_ssid_ta);
@@ -2518,6 +2663,45 @@ static void on_wipe_all_clicked(lv_event_t *e) {
                  "JA, LOESCHEN", do_wipe_all, NULL);
 }
 
+/* v0.3.0+: test-session cleanup. Postet EINEN atomaren event - das
+ * model-modul iteriert die sessions und loescht alles mit peak<40C
+ * aus NVS UND SD in einem rutsch, broadcasted am ende EINMAL eine
+ * neue history-liste. Vorher: n× HISTORY_DELETE als loop hier hat
+ * die event-queue gefluted und LVGL gehangen.                       */
+static void do_wipe_test_sessions(void *user_data) {
+    (void)user_data;
+    ESP_LOGW(TAG, "user confirmed WIPE TEST sessions (peak<40C)");
+    esp_err_t e = esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
+                                    VIEW_EVENT_HISTORY_WIPE_TEST,
+                                    NULL, 0, pdMS_TO_TICKS(200));
+    if (e != ESP_OK) ESP_LOGE(TAG, "wipe_test post failed: %d", e);
+}
+
+static void on_wipe_test_sessions_clicked(lv_event_t *e) {
+    (void)e;
+    /* Anzahl ausrechnen damit user weiss was passiert. */
+    uint16_t n = 0;
+    for (uint16_t i = 0; i < hist_cache_count; i++) {
+        if (!isnan(hist_cached[i].peak_temp) &&
+            hist_cached[i].peak_temp < 40.0f) n++;
+    }
+    char msg[160];
+    if (n == 0) {
+        snprintf(msg, sizeof(msg),
+            "keine test-sessions gefunden\n"
+            "(peak-temp unter 40 grad).");
+        show_confirm("TEST-SESSIONS LOESCHEN", msg,
+                     "OK", NULL, NULL);
+        return;
+    }
+    snprintf(msg, sizeof(msg),
+        "%u sessions mit peak<40 grad finden -\n"
+        "loeschen aus NVS und SD-karte?",
+        (unsigned)n);
+    show_confirm("TEST-SESSIONS LOESCHEN", msg,
+                 "JA, LOESCHEN", do_wipe_test_sessions, NULL);
+}
+
 /* Default-Liste von supersauna.club/mitglieder abgerufen.
  * Wird beim boot verwendet wenn NVS noch leer ist.                */
 static const char *SSC_DEFAULT_OPERATORS =
@@ -2567,58 +2751,197 @@ static lv_obj_t *make_textarea(lv_obj_t *parent, const char *placeholder,
     return ta;
 }
 
-static void build_settings(void) {
-    scr_settings = lv_obj_create(NULL);
-    style_screen(scr_settings);
+/* ======================================================================= */
+/*  v0.2.14: Settings - Submenu architektur                                */
+/* ======================================================================= */
 
-    lv_obj_t *t = lv_label_create(scr_settings);
-    lv_label_set_text(t, "EINSTELLUNGEN");
+/* Forward-decls fuer sub-screen-builders + back-handler. */
+static void on_set_sub_back_clicked(lv_event_t *e);
+static void build_set_verbindung(void);
+static void build_set_zeit(void);
+static void build_set_anzeige(void);
+static void build_set_export(void);
+static void build_set_operators(void);
+static void build_set_diag(void);
+static void build_set_danger(void);
+static void build_set_speicher(void);
+static void diag_refresh_snapshots(void);
+
+/* Smartphone-style toggle-row: label links, switch rechts, optional
+ * hint-text drunter klein und gedimmt.                                  */
+static void make_toggle_row(lv_obj_t *parent, const char *label_txt,
+                            lv_obj_t **out_sw, const char *hint_txt,
+                            bool init_state, lv_event_cb_t on_change_cb)
+{
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_size(row, 420, 36);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *lbl = lv_label_create(row);
+    lv_label_set_text(lbl, label_txt);
+    lv_obj_set_style_text_font(lbl, F_SM, 0);
+    lv_obj_set_style_text_color(lbl, SSC_C_TEXT, 0);
+
+    lv_obj_t *sw = lv_switch_create(row);
+    lv_obj_set_style_bg_color(sw, SSC_C_ELEVATED, 0);
+    lv_obj_set_style_bg_color(sw, SSC_C_ACCENT, LV_STATE_CHECKED|LV_PART_INDICATOR);
+    if (init_state) lv_obj_add_state(sw, LV_STATE_CHECKED);
+    lv_obj_add_event_cb(sw, on_change_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    *out_sw = sw;
+
+    if (hint_txt && hint_txt[0]) {
+        lv_obj_t *h = lv_label_create(parent);
+        lv_label_set_long_mode(h, LV_LABEL_LONG_WRAP);
+        lv_label_set_text(h, hint_txt);
+        lv_obj_set_width(h, 420);
+        lv_obj_set_style_text_color(h, SSC_C_TEXT_FAINT, 0);
+        lv_obj_set_style_text_font(h, F_XS, 0);
+    }
+}
+
+/* Kategorie-button im main settings menu: icon links, titel + subtitle
+ * mittig, pfeil rechts. Tap-target gross genug fuer fingertouch.        */
+static void make_cat_btn(lv_obj_t *parent, const char *icon_sym,
+                         const char *title, const char *subtitle,
+                         lv_event_cb_t on_click)
+{
+    lv_obj_t *btn = lv_btn_create(parent);
+    lv_obj_set_size(btn, 432, 56);
+    lv_obj_set_style_bg_color(btn, SSC_C_ELEVATED, 0);
+    lv_obj_set_style_bg_color(btn, SSC_C_ACCENT, LV_STATE_PRESSED);
+    lv_obj_set_style_radius(btn, SSC_RADIUS_BTN, 0);
+    lv_obj_set_style_pad_all(btn, 10, 0);
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *ic = lv_label_create(btn);
+    lv_label_set_text(ic, icon_sym);
+    lv_obj_set_style_text_color(ic, SSC_C_ACCENT, 0);
+    lv_obj_set_style_text_font(ic, F_MD, 0);
+    lv_obj_align(ic, LV_ALIGN_LEFT_MID, 0, 0);
+
+    lv_obj_t *ttl = lv_label_create(btn);
+    lv_label_set_text(ttl, title);
+    lv_obj_set_style_text_color(ttl, SSC_C_TEXT, 0);
+    lv_obj_set_style_text_font(ttl, F_SM, 0);
+    lv_obj_set_style_text_letter_space(ttl, 1, 0);
+    lv_obj_align(ttl, LV_ALIGN_LEFT_MID, 36, -8);
+
+    lv_obj_t *sub = lv_label_create(btn);
+    lv_label_set_text(sub, subtitle);
+    lv_obj_set_style_text_color(sub, SSC_C_TEXT_FAINT, 0);
+    lv_obj_set_style_text_font(sub, F_XS, 0);
+    lv_obj_align(sub, LV_ALIGN_LEFT_MID, 36, 8);
+
+    lv_obj_t *arr = lv_label_create(btn);
+    lv_label_set_text(arr, LV_SYMBOL_RIGHT);
+    lv_obj_set_style_text_color(arr, SSC_C_TEXT_FAINT, 0);
+    lv_obj_set_style_text_font(arr, F_SM, 0);
+    lv_obj_align(arr, LV_ALIGN_RIGHT_MID, 0, 0);
+
+    lv_obj_add_event_cb(btn, on_click, LV_EVENT_CLICKED, NULL);
+}
+
+/* Sub-screen header-bar: zurueck-button + titel oben rechts. */
+static void make_sub_header(lv_obj_t *scr, const char *title)
+{
+    lv_obj_t *back = lv_btn_create(scr);
+    style_ghost_btn(back);
+    lv_obj_set_size(back, 100, 32);
+    lv_obj_align(back, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_t *bl = lv_label_create(back);
+    lv_label_set_text(bl, LV_SYMBOL_LEFT "  ZURUECK");
+    lv_obj_set_style_text_font(bl, F_XS, 0);
+    lv_obj_center(bl);
+    lv_obj_add_event_cb(back, on_set_sub_back_clicked, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *t = lv_label_create(scr);
+    lv_label_set_text(t, title);
     lv_obj_set_style_text_color(t, SSC_C_ACCENT, 0);
     lv_obj_set_style_text_font(t, F_MD, 0);
     lv_obj_set_style_text_letter_space(t, 3, 0);
-    lv_obj_align(t, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_align(t, LV_ALIGN_TOP_LEFT, 110, 4);
+}
 
-    /* Scrollbarer body */
-    lv_obj_t *body = lv_obj_create(scr_settings);
+/* Sub-screen body-card: scrollable column-flex.                         */
+static lv_obj_t *make_sub_body(lv_obj_t *scr)
+{
+    lv_obj_t *body = lv_obj_create(scr);
     style_card(body);
-    lv_obj_set_size(body, 456, 388);
-    lv_obj_align(body, LV_ALIGN_TOP_LEFT, 0, 36);
+    lv_obj_set_size(body, 456, 432);
+    lv_obj_align(body, LV_ALIGN_TOP_LEFT, 0, 40);
     lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(body, 10, 0);
     lv_obj_set_style_pad_all(body, 14, 0);
     lv_obj_add_flag(body, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(body, LV_DIR_VER);
+    return body;
+}
 
-    /* ---- Saunameister-Presets (ganz oben - tagesgeschaeft) ---- */
-    section_title(body, "SAUNAMEISTER");
-    lv_obj_t *op_hint = lv_label_create(body);
-    lv_label_set_text(op_hint, "namen komma-getrennt (max 24)");
-    lv_obj_set_style_text_color(op_hint, SSC_C_TEXT_FAINT, 0);
-    lv_obj_set_style_text_font(op_hint, F_XS, 0);
+/* Back-handler: alle sub-screens kommen ueber denselben handler zum
+ * scr_settings (main) zurueck.                                          */
+static void on_set_sub_back_clicked(lv_event_t *e)
+{
+    lv_scr_load_anim(scr_settings, LV_SCR_LOAD_ANIM_OVER_RIGHT, 220, 0, false);
+}
 
-    set_operators_ta = lv_textarea_create(body);
-    lv_obj_set_size(set_operators_ta, 420, 120);
-    lv_obj_set_style_bg_color(set_operators_ta, SSC_C_ELEVATED, 0);
-    lv_obj_set_style_text_color(set_operators_ta, SSC_C_TEXT, 0);
-    lv_textarea_set_placeholder_text(set_operators_ta, "Thomas, Alexander, Robert, ...");
+/* Cat-button-handlers: bauen sub-screen on-demand, dann nav. */
+static void on_cat_verbindung_clicked(lv_event_t *e) {
+    build_set_verbindung();
+    lv_scr_load_anim(scr_set_verbindung, LV_SCR_LOAD_ANIM_OVER_LEFT, 220, 0, false);
+}
+static void on_cat_zeit_clicked(lv_event_t *e) {
+    build_set_zeit();
+    lv_scr_load_anim(scr_set_zeit, LV_SCR_LOAD_ANIM_OVER_LEFT, 220, 0, false);
+}
+static void on_cat_anzeige_clicked(lv_event_t *e) {
+    build_set_anzeige();
+    lv_scr_load_anim(scr_set_anzeige, LV_SCR_LOAD_ANIM_OVER_LEFT, 220, 0, false);
+}
+static void on_cat_export_clicked(lv_event_t *e) {
+    build_set_export();
+    lv_scr_load_anim(scr_set_export, LV_SCR_LOAD_ANIM_OVER_LEFT, 220, 0, false);
+}
+static void on_cat_operators_clicked(lv_event_t *e) {
+    build_set_operators();
+    lv_scr_load_anim(scr_set_operators, LV_SCR_LOAD_ANIM_OVER_LEFT, 220, 0, false);
+}
+static void on_cat_diag_clicked(lv_event_t *e) {
+    build_set_diag();
+    diag_refresh_snapshots();
+    lv_scr_load_anim(scr_set_diag, LV_SCR_LOAD_ANIM_OVER_LEFT, 220, 0, false);
+}
+static void on_cat_speicher_clicked(lv_event_t *e) {
+    build_set_speicher();
+    diag_refresh_snapshots();
+    lv_scr_load_anim(scr_set_speicher, LV_SCR_LOAD_ANIM_OVER_LEFT, 220, 0, false);
+}
+static void on_cat_danger_clicked(lv_event_t *e) {
+    build_set_danger();
+    lv_scr_load_anim(scr_set_danger, LV_SCR_LOAD_ANIM_OVER_LEFT, 220, 0, false);
+}
 
-    lv_obj_t *op_apply = lv_btn_create(body);
-    style_primary_btn(op_apply);
-    lv_obj_set_size(op_apply, 420, 42);
-    lv_obj_t *opl = lv_label_create(op_apply);
-    lv_label_set_text(opl, LV_SYMBOL_OK "  SAUNAMEISTER SPEICHERN");
-    lv_obj_set_style_text_font(opl, F_SM, 0);
-    lv_obj_center(opl);
-    lv_obj_add_event_cb(op_apply, on_operators_apply_clicked,
-                        LV_EVENT_CLICKED, NULL);
+/* ======================================================================= */
+/*  Sub-Screen Builders (lazy)                                             */
+/* ======================================================================= */
 
-    lv_obj_t *sep0 = lv_obj_create(body);
-    lv_obj_remove_style_all(sep0);
-    lv_obj_set_size(sep0, 420, 1);
-    lv_obj_set_style_bg_color(sep0, SSC_C_BORDER, 0);
-    lv_obj_set_style_bg_opa(sep0, LV_OPA_COVER, 0);
+static void build_set_verbindung(void)
+{
+    if (scr_set_verbindung) return;
+    scr_set_verbindung = lv_obj_create(NULL);
+    style_screen(scr_set_verbindung);
+    make_sub_header(scr_set_verbindung, "VERBINDUNG");
+    lv_obj_t *body = make_sub_body(scr_set_verbindung);
 
-    /* ---- WLAN-Eingabe: SSID + Passwort + Verbinden ---- */
+    make_toggle_row(body, "WLAN AKTIV", &set_wifi_enabled_sw,
+                    "wenn aus: kein wifi, keine cloud-features. "
+                    "manuelle zeit bleibt erhalten.",
+                    g_ssc_settings.wifi_enabled,
+                    on_set_wifi_enabled_changed);
+
     section_title(body, "WLAN");
     set_wifi_info = lv_label_create(body);
     lv_label_set_text(set_wifi_info, "status: unbekannt");
@@ -2640,18 +2963,108 @@ static void build_settings(void) {
     lv_obj_add_event_cb(wifi_connect, on_wifi_connect_clicked,
                         LV_EVENT_CLICKED, NULL);
 
-    lv_obj_t *sep1 = lv_obj_create(body);
-    lv_obj_remove_style_all(sep1);
-    lv_obj_set_size(sep1, 420, 1);
-    lv_obj_set_style_bg_color(sep1, SSC_C_BORDER, 0);
-    lv_obj_set_style_bg_opa(sep1, LV_OPA_COVER, 0);
+    lv_obj_t *kb = kb_create(scr_set_verbindung);
+    kb_attach(set_wifi_ssid_ta, kb);
+    kb_attach(set_wifi_pw_ta,   kb);
+}
 
-    /* HINWEIS: Die Supersauna.club-API-Section ist nach unten verschoben
-     * und ausgegraut ("ZUKUNFTS-FEATURE"), siehe weiter unten nach INFO.
-     * Die globalen set_http_*-Variablen werden trotzdem dort allokiert
-     * damit on_http_apply_clicked / existierende Callbacks nicht segfaulten. */
+static void build_set_zeit(void)
+{
+    if (scr_set_zeit) return;
+    scr_set_zeit = lv_obj_create(NULL);
+    style_screen(scr_set_zeit);
+    make_sub_header(scr_set_zeit, "ZEIT");
+    lv_obj_t *body = make_sub_body(scr_set_zeit);
 
-    /* ---- MariaDB ---- */
+    make_toggle_row(body, "NTP AUTO-SYNC", &set_ntp_enabled_sw,
+                    "wenn aus: zeit nur manuell setzbar, kein netzwerk-sync.",
+                    g_ssc_settings.ntp_enabled,
+                    on_set_ntp_enabled_changed);
+
+    lv_obj_t *time_set_btn = lv_btn_create(body);
+    style_primary_btn(time_set_btn);
+    lv_obj_set_size(time_set_btn, 420, 42);
+    lv_obj_t *tsl = lv_label_create(time_set_btn);
+    lv_label_set_text(tsl, LV_SYMBOL_EDIT "  ZEIT MANUELL SETZEN");
+    lv_obj_set_style_text_font(tsl, F_SM, 0);
+    lv_obj_center(tsl);
+    lv_obj_add_event_cb(time_set_btn, on_settings_time_manual_clicked,
+                        LV_EVENT_CLICKED, NULL);
+
+    /* zeit-source/age + boot-counter sind jetzt unter "DIAGNOSE" */
+    lv_obj_t *hint = lv_label_create(body);
+    lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(hint,
+        "zeit-quelle, sync-alter und boot-counter siehe DIAGNOSE.");
+    lv_obj_set_style_text_color(hint, SSC_C_TEXT_FAINT, 0);
+    lv_obj_set_style_text_font(hint, F_XS, 0);
+    lv_obj_set_width(hint, 420);
+}
+
+static void build_set_anzeige(void)
+{
+    if (scr_set_anzeige) return;
+    scr_set_anzeige = lv_obj_create(NULL);
+    style_screen(scr_set_anzeige);
+    make_sub_header(scr_set_anzeige, "ANZEIGE");
+    lv_obj_t *body = make_sub_body(scr_set_anzeige);
+
+    make_toggle_row(body, "GERAET (INTERN) AM DASHBOARD",
+                    &set_dash_intern_sw,
+                    "aus: temperatur/feuchte/co2-kachel verschwindet, "
+                    "letzte sessions waechst nach oben.",
+                    g_ssc_settings.dash_intern_visible,
+                    on_set_dash_intern_changed);
+
+    section_title(body, "HELLIGKEIT");
+
+    lv_obj_t *brow = lv_obj_create(body);
+    lv_obj_remove_style_all(brow);
+    lv_obj_set_size(brow, 420, 40);
+    lv_obj_set_flex_flow(brow, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(brow, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(brow, LV_OBJ_FLAG_SCROLLABLE);
+
+    set_brightness_slider = lv_slider_create(brow);
+    lv_obj_set_size(set_brightness_slider, 320, 18);
+    lv_slider_set_range(set_brightness_slider,
+                        SSC_BRIGHTNESS_MIN, SSC_BRIGHTNESS_MAX);
+    lv_slider_set_value(set_brightness_slider,
+                        g_ssc_settings.brightness_pct, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(set_brightness_slider, SSC_C_ELEVATED, 0);
+    lv_obj_set_style_bg_color(set_brightness_slider, SSC_C_ACCENT, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(set_brightness_slider, SSC_C_ACCENT, LV_PART_KNOB);
+    lv_obj_add_event_cb(set_brightness_slider, on_set_brightness_changed,
+                        LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(set_brightness_slider, on_set_brightness_released,
+                        LV_EVENT_RELEASED, NULL);
+
+    set_brightness_lbl = lv_label_create(brow);
+    char buf[12];
+    snprintf(buf, sizeof(buf), "%u %%", g_ssc_settings.brightness_pct);
+    lv_label_set_text(set_brightness_lbl, buf);
+    lv_obj_set_style_text_font(set_brightness_lbl, F_SM, 0);
+    lv_obj_set_style_text_color(set_brightness_lbl, SSC_C_TEXT, 0);
+
+    lv_obj_t *bri_hint = lv_label_create(body);
+    lv_label_set_long_mode(bri_hint, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(bri_hint,
+        "min 5%, max 100%. echtes off macht der geraete-power-knopf "
+        "(slider haelt display immer sichtbar).");
+    lv_obj_set_width(bri_hint, 420);
+    lv_obj_set_style_text_color(bri_hint, SSC_C_TEXT_FAINT, 0);
+    lv_obj_set_style_text_font(bri_hint, F_XS, 0);
+}
+
+static void build_set_export(void)
+{
+    if (scr_set_export) return;
+    scr_set_export = lv_obj_create(NULL);
+    style_screen(scr_set_export);
+    make_sub_header(scr_set_export, "DATEN-EXPORT");
+    lv_obj_t *body = make_sub_body(scr_set_export);
+
     section_title(body, "MARIADB");
     kv_label(body, "AKTIV");
     set_db_enabled_sw = lv_switch_create(body);
@@ -2675,46 +3088,20 @@ static void build_settings(void) {
     kv_label(body, "TABELLE (legacy sensor_data)");
     set_db_table_ta = make_textarea(body, "sensor_data", false);
 
-    lv_obj_t *sep3 = lv_obj_create(body);
-    lv_obj_remove_style_all(sep3);
-    lv_obj_set_size(sep3, 420, 1);
-    lv_obj_set_style_bg_color(sep3, SSC_C_BORDER, 0);
-    lv_obj_set_style_bg_opa(sep3, LV_OPA_COVER, 0);
+    lv_obj_t *sep = lv_obj_create(body);
+    lv_obj_remove_style_all(sep);
+    lv_obj_set_size(sep, 420, 16);
+    lv_obj_set_style_bg_opa(sep, LV_OPA_TRANSP, 0);
 
-    /* ---- Info ---- */
-
-    section_title(body, "INFO");
-    lv_obj_t *info = lv_label_create(body);
-    lv_label_set_text(info,
-        "Super Sauna Club - Sauna Logger\n"
-        "Version " SSC_APP_VERSION "\n"
-        "Open Source | Apache 2.0\n"
-        "supersauna.club | Oberes Piestingtal\n"
-        "SenseCAP D1S | ESP32-S3 + RP2040\n"
-        "KI-assistierte Entwicklung");
-    lv_obj_set_style_text_color(info, SSC_C_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(info, F_XS, 0);
-
-    /* ---- ZUKUNFTS-FEATURE: supersauna.club API (ausgegraut) ------------
-     * Endpoint zum Push von Session-Daten an ein zentrales Vereins-
-     * Dashboard. Server-Seite existiert noch nicht, daher visuell
-     * disabled. Variablen werden angelegt damit on_http_apply_clicked
-     * nicht auf NULL greift - Klick macht aber nichts Sinnvolles. */
-    lv_obj_t *sep_future = lv_obj_create(body);
-    lv_obj_remove_style_all(sep_future);
-    lv_obj_set_size(sep_future, 420, 24);
-    lv_obj_set_style_bg_opa(sep_future, LV_OPA_TRANSP, 0);
-
-    section_title(body, "ZUKUNFTS-FEATURE:\nSUPERSAUNA.CLUB API");
-
-    lv_obj_t *future_hint = lv_label_create(body);
-    lv_label_set_long_mode(future_hint, LV_LABEL_LONG_WRAP);
-    lv_label_set_text(future_hint,
+    section_title(body, "ZUKUNFT: SUPERSAUNA.CLUB API");
+    lv_obj_t *fhint = lv_label_create(body);
+    lv_label_set_long_mode(fhint, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(fhint,
         "Automatischer Push der Session-Daten an das Vereins-Dashboard. "
-        "Server noch in Planung - UI aktuell nur Platzhalter.");
-    lv_obj_set_style_text_color(future_hint, SSC_C_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(future_hint, F_XS, 0);
-    lv_obj_set_width(future_hint, 420);
+        "Server in planung - UI placeholder.");
+    lv_obj_set_style_text_color(fhint, SSC_C_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(fhint, F_XS, 0);
+    lv_obj_set_width(fhint, 420);
 
     kv_label(body, "AKTIV");
     set_http_enabled_sw = lv_switch_create(body);
@@ -2744,44 +3131,275 @@ static void build_settings(void) {
     lv_obj_add_state(http_apply, LV_STATE_DISABLED);
     lv_obj_set_style_opa(http_apply, LV_OPA_40, 0);
 
-    /* ---- v0.2.7: ZEIT + DIAGNOSE --------------------------------- */
-    lv_obj_t *sep_diag = lv_obj_create(body);
-    lv_obj_remove_style_all(sep_diag);
-    lv_obj_set_size(sep_diag, 420, 24);
-    lv_obj_set_style_bg_opa(sep_diag, LV_OPA_TRANSP, 0);
+    lv_obj_t *kb = kb_create(scr_set_export);
+    kb_attach(set_db_host_ta,     kb);
+    kb_attach(set_db_user_ta,     kb);
+    kb_attach(set_db_pw_ta,       kb);
+    kb_attach(set_db_database_ta, kb);
+    kb_attach(set_db_table_ta,    kb);
+    kb_attach(set_http_url_ta,    kb);
+    kb_attach(set_http_token_ta,  kb);
+}
 
-    section_title(body, "ZEIT + DIAGNOSE");
+static void build_set_operators(void)
+{
+    if (scr_set_operators) return;
+    scr_set_operators = lv_obj_create(NULL);
+    style_screen(scr_set_operators);
+    make_sub_header(scr_set_operators, "SAUNAMEISTER");
+    lv_obj_t *body = make_sub_body(scr_set_operators);
 
+    lv_obj_t *op_hint = lv_label_create(body);
+    lv_label_set_text(op_hint, "namen komma-getrennt (max 24 zeichen)");
+    lv_obj_set_style_text_color(op_hint, SSC_C_TEXT_FAINT, 0);
+    lv_obj_set_style_text_font(op_hint, F_XS, 0);
+
+    set_operators_ta = lv_textarea_create(body);
+    lv_obj_set_size(set_operators_ta, 420, 120);
+    lv_obj_set_style_bg_color(set_operators_ta, SSC_C_ELEVATED, 0);
+    lv_obj_set_style_text_color(set_operators_ta, SSC_C_TEXT, 0);
+    lv_textarea_set_placeholder_text(set_operators_ta,
+        "Thomas, Alexander, Robert, ...");
+
+    lv_obj_t *op_apply = lv_btn_create(body);
+    style_primary_btn(op_apply);
+    lv_obj_set_size(op_apply, 420, 42);
+    lv_obj_t *opl = lv_label_create(op_apply);
+    lv_label_set_text(opl, LV_SYMBOL_OK "  SAUNAMEISTER SPEICHERN");
+    lv_obj_set_style_text_font(opl, F_SM, 0);
+    lv_obj_center(opl);
+    lv_obj_add_event_cb(op_apply, on_operators_apply_clicked,
+                        LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *kb = kb_create(scr_set_operators);
+    kb_attach(set_operators_ta, kb);
+
+    /* v0.3.0: presets aus cache nachziehen falls schon geladen.        */
+    apply_operator_presets_to_widgets();
+}
+
+static void build_set_diag(void)
+{
+    if (scr_set_diag) return;
+    scr_set_diag = lv_obj_create(NULL);
+    style_screen(scr_set_diag);
+    make_sub_header(scr_set_diag, "DIAGNOSE");
+    lv_obj_t *body = make_sub_body(scr_set_diag);
+
+    section_title(body, "ZEIT-STATUS");
     set_diag_label = lv_label_create(body);
     lv_label_set_long_mode(set_diag_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(set_diag_label, 420);
     lv_obj_set_style_text_color(set_diag_label, SSC_C_TEXT_MUTED, 0);
     lv_obj_set_style_text_font(set_diag_label, F_XS, 0);
-    /* initial-text wird gleich von settings_update_diag_label gefuellt */
     lv_label_set_text(set_diag_label,
         "ZEIT-QUELLE: ...\n"
         "BOOT-COUNTER ESP32: -   LETZTER RESET: -\n"
         "BOOT-COUNTER RP2040: -  LETZTER RESET: -");
     settings_update_diag_label();
 
-    lv_obj_t *time_set_btn = lv_btn_create(body);
-    style_primary_btn(time_set_btn);
-    lv_obj_set_size(time_set_btn, 420, 42);
-    lv_obj_t *tsl = lv_label_create(time_set_btn);
-    lv_label_set_text(tsl, LV_SYMBOL_EDIT "  ZEIT MANUELL SETZEN");
-    lv_obj_set_style_text_font(tsl, F_SM, 0);
-    lv_obj_center(tsl);
-    lv_obj_add_event_cb(time_set_btn, on_settings_time_manual_clicked,
+    section_title(body, "HEAP");
+    set_heap_label = lv_label_create(body);
+    lv_label_set_long_mode(set_heap_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(set_heap_label, 420);
+    lv_obj_set_style_text_color(set_heap_label, SSC_C_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(set_heap_label, F_XS, 0);
+    lv_label_set_text(set_heap_label, "DRAM/PSRAM laden ...");
+
+    section_title(body, "FIRMWARE");
+    lv_obj_t *info = lv_label_create(body);
+    lv_label_set_long_mode(info, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(info,
+        "Super Sauna Club - Sauna Logger\n"
+        "Version " SSC_APP_VERSION " | Build " __DATE__ " " __TIME__ "\n"
+        "Open Source | Apache 2.0\n"
+        "supersauna.club | Oberes Piestingtal\n"
+        "SenseCAP D1S | ESP32-S3 + RP2040\n"
+        "KI-assistierte Entwicklung");
+    lv_obj_set_width(info, 420);
+    lv_obj_set_style_text_color(info, SSC_C_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(info, F_XS, 0);
+}
+
+/* v0.3.0: SPEICHER submenu - "AUS SD WIEDERHERSTELLEN" handler.
+ * Triggert SSC_CMD_LIST_SESSIONS an RP2040, der streamt META_RESP
+ * pro session zurueck, ESP32 ingested in NVS-cache.                 */
+static void on_set_recover_sd_clicked(lv_event_t *e)
+{
+    indicator_session_request_sd_list();
+    if (set_speicher_label) {
+        lv_label_set_text(set_speicher_label,
+            "anfrage an RP2040 gesendet ...\n"
+            "antworten kommen async, history-liste refresh in paar sek.");
+    }
+}
+
+/* v0.3.0+: einmaliger fix fuer die 6 sessions die vor dem TZ-fix
+ * recovered wurden. Wipe NVS, kicke alte JSON-sidecars von SD,
+ * resync laeuft mit synthesize_meta_from_csv (TZ-korrekt), dann
+ * wird operator/aufguss aus dem hardcoded mapping nachgepatcht.    */
+static void do_fix_legacy_sessions(void *user_data) {
+    (void)user_data;
+    esp_err_t e = esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
+                                    VIEW_EVENT_HISTORY_FIX_LEGACY,
+                                    NULL, 0, pdMS_TO_TICKS(200));
+    if (e != ESP_OK) ESP_LOGE(TAG, "fix_legacy post failed: %d", e);
+    if (set_speicher_label) {
+        lv_label_set_text(set_speicher_label,
+            "fix laeuft ... ~10 sekunden.\n"
+            "history-liste refreshed automatisch wenn fertig.");
+    }
+}
+
+static void on_set_fix_legacy_clicked(lv_event_t *e) {
+    (void)e;
+    show_confirm("ALTE SESSIONS REPARIEREN",
+                 "fix fuer die 6 v0.3-recovered sessions:\n"
+                 "- uhrzeit aus dateinamen neu berechnen (TZ-fix)\n"
+                 "- saunameister aus mapping setzen\n"
+                 "messdaten in CSV bleiben unveraendert.",
+                 "JA, FIXEN", do_fix_legacy_sessions, NULL);
+}
+
+static void build_set_speicher(void)
+{
+    if (scr_set_speicher) return;
+    scr_set_speicher = lv_obj_create(NULL);
+    style_screen(scr_set_speicher);
+    make_sub_header(scr_set_speicher, "SPEICHER");
+    lv_obj_t *body = make_sub_body(scr_set_speicher);
+
+    section_title(body, "SD-KARTE / SESSIONS");
+    set_speicher_label = lv_label_create(body);
+    lv_label_set_long_mode(set_speicher_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(set_speicher_label, 420);
+    lv_obj_set_style_text_color(set_speicher_label, SSC_C_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(set_speicher_label, F_XS, 0);
+    lv_label_set_text(set_speicher_label, "lade ...");
+
+    /* v0.3.0: hybrid-storage recovery button - SD ist authoritative,
+     * NVS-cache wird hier auf nachfrage neu aus SD gefuellt.         */
+    lv_obj_t *recover_btn = lv_btn_create(body);
+    style_primary_btn(recover_btn);
+    lv_obj_set_size(recover_btn, 420, 42);
+    lv_obj_t *rl = lv_label_create(recover_btn);
+    lv_label_set_text(rl, LV_SYMBOL_REFRESH "  AUS SD WIEDERHERSTELLEN");
+    lv_obj_set_style_text_font(rl, F_SM, 0);
+    lv_obj_center(rl);
+    lv_obj_add_event_cb(recover_btn, on_set_recover_sd_clicked,
                         LV_EVENT_CLICKED, NULL);
 
-    /* ---- DANGER ZONE (ganz unten, extra abstand, rot markiert) ---- */
-    lv_obj_t *sep_dz = lv_obj_create(body);
-    lv_obj_remove_style_all(sep_dz);
-    lv_obj_set_size(sep_dz, 420, 24);
-    lv_obj_set_style_bg_opa(sep_dz, LV_OPA_TRANSP, 0);
+    /* v0.3.0+: einmaliger legacy-fix-button (TZ + operator-namen). */
+    lv_obj_t *fix_btn = lv_btn_create(body);
+    style_primary_btn(fix_btn);
+    lv_obj_set_size(fix_btn, 420, 42);
+    lv_obj_set_style_bg_color(fix_btn, lv_color_hex(0x4a4a2a), 0);
+    lv_obj_set_style_bg_color(fix_btn, lv_color_hex(0x6a6a3a), LV_STATE_PRESSED);
+    lv_obj_t *fl = lv_label_create(fix_btn);
+    lv_label_set_text(fl, LV_SYMBOL_REFRESH "  ALTE SESSIONS REPARIEREN");
+    lv_obj_set_style_text_font(fl, F_SM, 0);
+    lv_obj_center(fl);
+    lv_obj_add_event_cb(fix_btn, on_set_fix_legacy_clicked,
+                        LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *hint = lv_label_create(body);
+    lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(hint,
+        "RP2040 enumeriert /sessions/, sendet metadata pro file.\n"
+        "fehlende sessions werden in den NVS-cache aufgenommen,\n"
+        "vorhandene unveraendert gelassen (non-destructive).\n\n"
+        "voller dateizugriff per USB-CDC am RP2040:\n"
+        "  ?L         -> liste aller /sessions/-files\n"
+        "  ?D <name>  -> CSV-content auf serial dumpen");
+    lv_obj_set_width(hint, 420);
+    lv_obj_set_style_text_color(hint, SSC_C_TEXT_FAINT, 0);
+    lv_obj_set_style_text_font(hint, F_XS, 0);
+}
+
+/* Snapshot-refresh fuer DIAGNOSE + SPEICHER labels. Wird beim oeffnen
+ * der jeweiligen sub-screens aufgerufen. settings_update_diag_label
+ * fuellt set_diag_label automatisch (event-getrieben). Hier filen wir
+ * heap + speicher-stats die nur on-demand gebraucht werden.            */
+static void diag_refresh_snapshots(void)
+{
+    if (set_heap_label) {
+        char buf[160];
+        snprintf(buf, sizeof(buf),
+                 "DRAM:  %u byte free  (groesster block %u)\n"
+                 "PSRAM: %u byte free  (groesster block %u)",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+        lv_label_set_text(set_heap_label, buf);
+    }
+    if (set_speicher_label) {
+        char buf[160];
+        snprintf(buf, sizeof(buf),
+                 "Sessions in der Historie: %u\n"
+                 "(SD-karten-status liegt RP2040-seitig - per ?L abfragbar)",
+                 (unsigned)hist_cache_count);
+        lv_label_set_text(set_speicher_label, buf);
+    }
+}
+
+static void build_set_danger(void)
+{
+    if (scr_set_danger) return;
+    scr_set_danger = lv_obj_create(NULL);
+    style_screen(scr_set_danger);
+    make_sub_header(scr_set_danger, "DANGER ZONE");
+    lv_obj_t *body = make_sub_body(scr_set_danger);
+
+    /* v0.3.0: weniger destruktive cleanup-card oberhalb der danger-zone.
+     * Loescht nur sessions mit peak<40C - das waren per definition
+     * tests/heizungs-checks. Loescht aus NVS UND von der SD-karte.    */
+    lv_obj_t *tc_card = lv_obj_create(body);
+    lv_obj_set_size(tc_card, 420, 200);
+    lv_obj_set_style_bg_color(tc_card, lv_color_hex(0x2a2010), 0);
+    lv_obj_set_style_bg_opa(tc_card, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(tc_card, 1, 0);
+    lv_obj_set_style_border_color(tc_card, lv_color_hex(0x8a6a3a), 0);
+    lv_obj_set_style_radius(tc_card, SSC_RADIUS_CARD, 0);
+    lv_obj_set_style_pad_all(tc_card, 12, 0);
+    lv_obj_clear_flag(tc_card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(tc_card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(tc_card, 6, 0);
+
+    lv_obj_t *tc_t = lv_label_create(tc_card);
+    lv_label_set_text(tc_t, LV_SYMBOL_TRASH "  TEST-SESSIONS LOESCHEN");
+    lv_obj_set_style_text_color(tc_t, lv_color_hex(0xffc880), 0);
+    lv_obj_set_style_text_font(tc_t, F_MD, 0);
+    lv_obj_set_style_text_letter_space(tc_t, 1, 0);
+
+    lv_obj_t *tc_body = lv_label_create(tc_card);
+    lv_label_set_long_mode(tc_body, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(tc_body,
+        "loescht alle sessions mit peak-temp unter 40 grad.\n"
+        "diese sind per definition keine echten saunen.\n"
+        "wirkt auf NVS UND SD-karte.");
+    lv_obj_set_style_text_color(tc_body, SSC_C_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(tc_body, F_XS, 0);
+    lv_obj_set_width(tc_body, 396);
+
+    lv_obj_t *tc_btn = lv_btn_create(tc_card);
+    lv_obj_set_size(tc_btn, 396, 48);
+    lv_obj_set_style_bg_color(tc_btn, lv_color_hex(0x5c4a1e), 0);
+    lv_obj_set_style_bg_color(tc_btn, lv_color_hex(0x7a6228), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(tc_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(tc_btn, SSC_RADIUS_BTN, 0);
+    lv_obj_set_style_border_width(tc_btn, 1, 0);
+    lv_obj_set_style_border_color(tc_btn, lv_color_hex(0xa08040), 0);
+    lv_obj_t *tc_btn_l = lv_label_create(tc_btn);
+    lv_label_set_text(tc_btn_l, LV_SYMBOL_TRASH "  TEST-SESSIONS PRUEFEN");
+    lv_obj_set_style_text_color(tc_btn_l, lv_color_hex(0xfff0d0), 0);
+    lv_obj_set_style_text_font(tc_btn_l, F_SM, 0);
+    lv_obj_center(tc_btn_l);
+    lv_obj_add_event_cb(tc_btn, on_wipe_test_sessions_clicked,
+                        LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *dz_card = lv_obj_create(body);
-    lv_obj_set_size(dz_card, 420, 128);
+    lv_obj_set_size(dz_card, 420, 200);
     lv_obj_set_style_bg_color(dz_card, lv_color_hex(0x2a1010), 0);
     lv_obj_set_style_bg_opa(dz_card, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(dz_card, 1, 0);
@@ -2790,25 +3408,25 @@ static void build_settings(void) {
     lv_obj_set_style_pad_all(dz_card, 12, 0);
     lv_obj_clear_flag(dz_card, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(dz_card, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(dz_card, 4, 0);
+    lv_obj_set_style_pad_row(dz_card, 6, 0);
 
     lv_obj_t *dz_t = lv_label_create(dz_card);
-    lv_label_set_text(dz_t, LV_SYMBOL_WARNING "  DANGER ZONE");
+    lv_label_set_text(dz_t, LV_SYMBOL_WARNING "  ALLE SESSIONS LOESCHEN");
     lv_obj_set_style_text_color(dz_t, lv_color_hex(0xff8080), 0);
     lv_obj_set_style_text_font(dz_t, F_MD, 0);
-    lv_obj_set_style_text_letter_space(dz_t, 2, 0);
+    lv_obj_set_style_text_letter_space(dz_t, 1, 0);
 
     lv_obj_t *dz_body = lv_label_create(dz_card);
     lv_label_set_long_mode(dz_body, LV_LABEL_LONG_WRAP);
     lv_label_set_text(dz_body,
         "kann nicht rueckgaengig gemacht werden.\n"
-        "alle sessions in der historie verschwinden (SD bleibt).");
+        "alle sessions in der historie verschwinden (CSVs auf SD bleiben).");
     lv_obj_set_style_text_color(dz_body, SSC_C_TEXT_MUTED, 0);
     lv_obj_set_style_text_font(dz_body, F_XS, 0);
     lv_obj_set_width(dz_body, 396);
 
     lv_obj_t *wipe_btn = lv_btn_create(dz_card);
-    lv_obj_set_size(wipe_btn, 396, 40);
+    lv_obj_set_size(wipe_btn, 396, 48);
     lv_obj_set_style_bg_color(wipe_btn, lv_color_hex(0x5c1e1e), 0);
     lv_obj_set_style_bg_color(wipe_btn, lv_color_hex(0x7a2828), LV_STATE_PRESSED);
     lv_obj_set_style_bg_opa(wipe_btn, LV_OPA_COVER, 0);
@@ -2816,36 +3434,71 @@ static void build_settings(void) {
     lv_obj_set_style_border_width(wipe_btn, 1, 0);
     lv_obj_set_style_border_color(wipe_btn, lv_color_hex(0xa04040), 0);
     lv_obj_t *wipe_l = lv_label_create(wipe_btn);
-    lv_label_set_text(wipe_l, LV_SYMBOL_TRASH "  ALLE SESSIONS LOESCHEN");
+    lv_label_set_text(wipe_l, LV_SYMBOL_TRASH "  JETZT LOESCHEN");
     lv_obj_set_style_text_color(wipe_l, lv_color_hex(0xffd0d0), 0);
     lv_obj_set_style_text_font(wipe_l, F_SM, 0);
     lv_obj_center(wipe_l);
-    lv_obj_add_event_cb(wipe_btn, on_wipe_all_clicked,
-                        LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(wipe_btn, on_wipe_all_clicked, LV_EVENT_CLICKED, NULL);
+}
 
-    /* Back-button */
+/* ======================================================================= */
+/*  Main Settings Screen - Kategorie-Liste                                 */
+/* ======================================================================= */
+
+static void build_settings(void)
+{
+    scr_settings = lv_obj_create(NULL);
+    style_screen(scr_settings);
+
+    lv_obj_t *t = lv_label_create(scr_settings);
+    lv_label_set_text(t, "EINSTELLUNGEN");
+    lv_obj_set_style_text_color(t, SSC_C_ACCENT, 0);
+    lv_obj_set_style_text_font(t, F_MD, 0);
+    lv_obj_set_style_text_letter_space(t, 3, 0);
+    lv_obj_align(t, LV_ALIGN_TOP_LEFT, 0, 8);
+
+    /* HOME-button als kleines icon top-right - verhindert mis-taps die
+     * vorher den ganzen-screen-breiten back-button am bottom getroffen
+     * haben.                                                            */
     lv_obj_t *back = lv_btn_create(scr_settings);
     style_ghost_btn(back);
-    lv_obj_set_size(back, 456, 34);
-    lv_obj_align(back, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_size(back, 70, 32);
+    lv_obj_align(back, LV_ALIGN_TOP_RIGHT, 0, 0);
     lv_obj_t *lb = lv_label_create(back);
-    lv_label_set_text(lb, LV_SYMBOL_LEFT "  ZURUECK");
+    lv_label_set_text(lb, LV_SYMBOL_HOME);
     lv_obj_set_style_text_font(lb, F_SM, 0);
     lv_obj_center(lb);
     lv_obj_add_event_cb(back, on_settings_back_clicked, LV_EVENT_CLICKED, NULL);
 
-    /* On-Screen Keyboard fuer alle Settings-Textareas. */
-    set_keyboard = kb_create(scr_settings);
-    kb_attach(set_wifi_ssid_ta,   set_keyboard);
-    kb_attach(set_wifi_pw_ta,     set_keyboard);
-    kb_attach(set_http_url_ta,    set_keyboard);
-    kb_attach(set_http_token_ta,  set_keyboard);
-    kb_attach(set_db_host_ta,     set_keyboard);
-    kb_attach(set_db_user_ta,     set_keyboard);
-    kb_attach(set_db_pw_ta,       set_keyboard);
-    kb_attach(set_db_database_ta, set_keyboard);
-    kb_attach(set_db_table_ta,    set_keyboard);
-    kb_attach(set_operators_ta,   set_keyboard);
+    /* Kategorie-liste fuellt jetzt fast den ganzen screen (kein bottom-
+     * back-btn mehr).                                                   */
+    lv_obj_t *list = lv_obj_create(scr_settings);
+    style_card(list);
+    lv_obj_set_size(list, 472, 436);
+    lv_obj_align(list, LV_ALIGN_TOP_LEFT, 0, 40);
+    lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(list, 8, 0);
+    lv_obj_set_style_pad_all(list, 10, 0);
+    lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(list, LV_DIR_VER);
+
+    /* Saunameister oben - tagesgeschaeft. */
+    make_cat_btn(list, LV_SYMBOL_EDIT,     "SAUNAMEISTER",
+                 "operator-namen liste",          on_cat_operators_clicked);
+    make_cat_btn(list, LV_SYMBOL_WIFI,     "VERBINDUNG",
+                 "wlan ein/aus, ssid + passwort", on_cat_verbindung_clicked);
+    make_cat_btn(list, LV_SYMBOL_REFRESH,  "ZEIT",
+                 "ntp auto-sync, manuell setzen", on_cat_zeit_clicked);
+    make_cat_btn(list, LV_SYMBOL_IMAGE,    "ANZEIGE",
+                 "geraet-intern, helligkeit",     on_cat_anzeige_clicked);
+    make_cat_btn(list, LV_SYMBOL_UPLOAD,   "DATEN-EXPORT",
+                 "mariadb, supersauna api",       on_cat_export_clicked);
+    make_cat_btn(list, LV_SYMBOL_SD_CARD,  "SPEICHER",
+                 "sd-karte, sessions, USB-export", on_cat_speicher_clicked);
+    make_cat_btn(list, LV_SYMBOL_SETTINGS, "DIAGNOSE",
+                 "zeit, heap, version, hardware", on_cat_diag_clicked);
+    make_cat_btn(list, LV_SYMBOL_TRASH,    "DANGER ZONE",
+                 "alle sessions loeschen",        on_cat_danger_clicked);
 }
 
 /* ======================================================================= */
@@ -3257,10 +3910,14 @@ static void rebuild_operator_dropdown(void) {
 }
 
 static void on_operator_presets(const struct view_data_operator_presets *p) {
-    if (!sum_operator_dd) return;
+    /* v0.3.0: cache IMMER setzen, auch wenn die widgets noch lazy
+     * sind. Frueherer early-return bei !sum_operator_dd hat dazu
+     * gefuehrt, dass der cache nie gefuellt wurde wenn der user
+     * vor dem ersten summary-screen ins settings/saunameister
+     * navigiert ist - dropdown blieb auf "-" und textarea leer.   */
     s_preset_cache = *p;
     s_preset_cache_valid = true;
-    rebuild_operator_dropdown();
+    if (sum_operator_dd) rebuild_operator_dropdown();
     /* Textarea mit komma-format befuellen (leichter zum editieren als
      * newline-format, per user-request).                             */
     if (set_operators_ta) {
@@ -3273,18 +3930,35 @@ static void on_operator_presets(const struct view_data_operator_presets *p) {
     }
 }
 
+/* v0.3.0: nach dem lazy-build von dropdown/textarea muessen die
+ * presets aus dem cache nachgezogen werden - sonst bleiben die
+ * widgets leer wenn presets schon vor build geladen wurden.       */
+static void apply_operator_presets_to_widgets(void) {
+    if (s_preset_cache_valid) on_operator_presets(&s_preset_cache);
+}
+
 /* ======================================================================= */
 /*   Clock-Tick (UI-Timer, alle 10 s)                                        */
 /* ======================================================================= */
 
+/* v0.2.14: helper - kennt auch die sub-settings-screens.                */
+static bool ui_sauna_is_known_screen(lv_obj_t *s)
+{
+    return s == scr_home || s == scr_live || s == scr_summary ||
+           s == scr_history || s == scr_detail || s == scr_settings ||
+           s == scr_set_verbindung || s == scr_set_zeit ||
+           s == scr_set_anzeige || s == scr_set_export ||
+           s == scr_set_operators || s == scr_set_diag ||
+           s == scr_set_danger || s == scr_set_speicher;
+}
+
 /* Watchdog-timer: prueft ob der aktuelle screen einer unserer sauna-
  * screens ist. Wenn nicht (legacy hat was geladen), scr_home erzwingen.
- * Nach dem ersten erfolg wird sich selbst entfernt.                  */
+ * v0.2.14: kennt jetzt auch die submenu-screens - sonst wuerden user
+ * die ein cat-btn klicken nach 2 sek zurueck zum home gezwungen.       */
 static void scr_watchdog_tick(lv_timer_t *t) {
     lv_obj_t *cur = lv_scr_act();
-    if (cur == scr_home || cur == scr_live || cur == scr_summary ||
-        cur == scr_history || cur == scr_detail || cur == scr_settings) {
-        /* alles gut - watchdog kann sich nach einer minute beruhigen */
+    if (ui_sauna_is_known_screen(cur)) {
         return;
     }
     ESP_LOGW(TAG, "watchdog: legacy screen aktiv - force scr_home");
@@ -3299,12 +3973,20 @@ static void clock_tick(lv_timer_t *t) {
      * koennen ob mein sauna-UI ueberhaupt laeuft.                */
     lv_obj_t *cur = lv_scr_act();
     const char *sname =
-        (cur == scr_home)     ? "HOME" :
-        (cur == scr_live)     ? "LIVE" :
-        (cur == scr_summary)  ? "SUMMARY" :
-        (cur == scr_history)  ? "HISTORY" :
-        (cur == scr_detail)   ? "DETAIL" :
-        (cur == scr_settings) ? "SETTINGS" : "LEGACY!!";
+        (cur == scr_home)             ? "HOME" :
+        (cur == scr_live)             ? "LIVE" :
+        (cur == scr_summary)          ? "SUMMARY" :
+        (cur == scr_history)          ? "HISTORY" :
+        (cur == scr_detail)           ? "DETAIL" :
+        (cur == scr_settings)         ? "SETTINGS" :
+        (cur == scr_set_verbindung)   ? "SET-VERBINDUNG" :
+        (cur == scr_set_zeit)         ? "SET-ZEIT" :
+        (cur == scr_set_anzeige)      ? "SET-ANZEIGE" :
+        (cur == scr_set_export)       ? "SET-EXPORT" :
+        (cur == scr_set_operators)    ? "SET-OPERATORS" :
+        (cur == scr_set_diag)         ? "SET-DIAG" :
+        (cur == scr_set_danger)       ? "SET-DANGER" :
+        (cur == scr_set_speicher)     ? "SET-SPEICHER" : "LEGACY!!";
     ESP_LOGI(TAG, "heartbeat: scr=%s running=%d", sname, live_running);
 
     /* v0.2.7: last-active-screen in NVS persistieren. v0.2.12: zusaetzlich
@@ -3391,15 +4073,22 @@ static void on_view_event(void *arg, esp_event_base_t base,
             const struct view_data_time_state *ts = ev_data;
             g_ui_time_src       = ts->source;
             g_ui_time_last_sync = ts->last_sync_ts;
-            /* Badge aktualisieren: sichtbar wenn source nicht NTP_SYNCED
-             * oder wenn letzte sync > 10 min alt.                        */
+            /* v0.2.14: warnung NUR bei wirklich-unbekannter zeit zeigen.
+             * Manuell gesetzte zeit ist eine bewusste user-entscheidung
+             * (z.b. wifi-frei betrieb auf powerbank) - keine warnung
+             * dafuer. Auch NTP-synced ohne taegliches re-sync ist OK.
+             * Warn nur bei NVS-fallback, compile-time oder NTP-sehr-stale
+             * (>24h). Sonst rotes ! im profi-produkt unangemessen.       */
             time_t nowt = 0; time(&nowt);
-            bool stale = (ts->source != TIME_SRC_NTP_SYNCED) ||
-                         (ts->last_sync_ts == 0) ||
-                         ((nowt - ts->last_sync_ts) > 600);
+            bool warn =
+                (ts->source == TIME_SRC_NVS_FALLBACK) ||
+                (ts->source == TIME_SRC_COMPILE_TIME) ||
+                (ts->source == TIME_SRC_NTP_SYNCED &&
+                 ts->last_sync_ts > 0 &&
+                 (nowt - ts->last_sync_ts) > 86400);
             if (home_clock_warn) {
-                if (stale) lv_obj_clear_flag(home_clock_warn, LV_OBJ_FLAG_HIDDEN);
-                else       lv_obj_add_flag(home_clock_warn,   LV_OBJ_FLAG_HIDDEN);
+                if (warn) lv_obj_clear_flag(home_clock_warn, LV_OBJ_FLAG_HIDDEN);
+                else      lv_obj_add_flag(home_clock_warn,   LV_OBJ_FLAG_HIDDEN);
             }
             settings_update_diag_label();
         }

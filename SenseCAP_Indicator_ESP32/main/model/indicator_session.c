@@ -43,6 +43,15 @@
 
 static const char *TAG = "SESSION";
 
+/* v0.3.0: forward-decls fuer hybrid-storage helpers, damit on_session_save
+ * und SESSION_EDIT-handler sie weiter oben im file rufen koennen.       */
+static void meta_pack_to_wire(const struct view_data_session_meta *src,
+                              ssc_meta_wire_t *dst);
+static void meta_unpack_from_wire(const ssc_meta_wire_t *src,
+                                  struct view_data_session_meta *dst);
+static void on_sd_meta_resp(const ssc_meta_wire_t *w);
+static void on_sd_meta_done(uint16_t count);
+
 /* ======================================================================= */
 /* Konfiguration                                                            */
 /* ======================================================================= */
@@ -235,6 +244,11 @@ static uint16_t samples_linearize(struct view_data_session_sample *out,
 /* Wir halten uns an den in indicator_sensor.c definierten
  * SSC_CMD_SESSION_*-Kommandosatz. Payload-Encoder hier.  */
 #define SSC_CMD_SESSION_START    0xA4
+/* v0.3.0: hybrid-storage cmd-codes - matched in indicator_sensor.c. */
+#define SSC_CMD_LIST_SESSIONS         0xA9
+#define SSC_CMD_SESSION_META_PUSH     0xAA
+#define SSC_CMD_SESSION_DELETE_FILE   0xAB
+#define SSC_CMD_SESSION_DELETE_JSON   0xAC
 #define SSC_CMD_SESSION_AUFGUSS  0xA5
 #define SSC_CMD_SESSION_END      0xA6
 #define SSC_CMD_SD_READBACK      0xA7
@@ -467,6 +481,22 @@ static void on_session_save(const struct view_data_session_meta *m_in) {
         ESP_LOGI(TAG, "session %s in NVS gespeichert", meta.id);
     }
 
+    /* v0.3.0: Hybrid-storage push - auch JSON-sidecar auf SD schreiben
+     * (RP2040-managed). Damit ist SD die authoritative source und
+     * NVS-loss kann via SD-list-rebuild aufgeholt werden.              */
+    {
+        ssc_meta_wire_t w;
+        meta_pack_to_wire(&meta, &w);
+        int rp = indicator_sensor_rp2040_cmd(SSC_CMD_SESSION_META_PUSH,
+                                             &w, sizeof(w));
+        if (rp < 0) {
+            ESP_LOGW(TAG, "META_PUSH to RP2040 failed rc=%d (NVS still ok)",
+                     rp);
+        } else {
+            ESP_LOGI(TAG, "META_PUSH to RP2040 ok (%d byte sent)", rp);
+        }
+    }
+
     /* 2)+3) Mariadb-finalize + HTTP-export aus dem save-pfad entfernt.
      * Die synchronen Network-Calls blockierten den Event-Task und
      * fuehrten bei Stack-Overflow zum Crash. Session-Save ist jetzt
@@ -480,6 +510,160 @@ static void on_session_save(const struct view_data_session_meta *m_in) {
     s_ctx.state = SESSION_IDLE;
     UNLOCK();
     ESP_LOGI(TAG, "session-save flow done, back to IDLE (nvs_ok=%d)", rs == 0);
+}
+
+/* v0.3.0: pack ESP32-internal meta-record into UART wire-format. Klemmt
+ * die strings auf das wire-format-limit. Empfangsseitig (RP2040) kommt
+ * der gleiche packed struct an.                                        */
+static void meta_pack_to_wire(const struct view_data_session_meta *src,
+                              ssc_meta_wire_t *dst)
+{
+    memset(dst, 0, sizeof(*dst));
+    strncpy(dst->id, src->id, sizeof(dst->id) - 1);
+    dst->start_ts = (int32_t)src->start_ts;
+    dst->end_ts   = (int32_t)src->end_ts;
+    strncpy(dst->operator_tag, src->operator_tag, sizeof(dst->operator_tag) - 1);
+    strncpy(dst->aufguss_headline, src->aufguss_headline,
+            sizeof(dst->aufguss_headline) - 1);
+    dst->participants = src->participants;
+    strncpy(dst->notes, src->notes, sizeof(dst->notes) - 1);
+    dst->peak_temp     = src->peak_temp;
+    dst->peak_rh       = src->peak_rh;
+    dst->aufguss_count = src->aufguss_count;
+}
+
+/* Inverse: wire-format -> internal record. */
+static void meta_unpack_from_wire(const ssc_meta_wire_t *src,
+                                  struct view_data_session_meta *dst)
+{
+    memset(dst, 0, sizeof(*dst));
+    strncpy(dst->id, src->id, SSC_SESSION_ID_LEN - 1);
+    dst->start_ts = (time_t)src->start_ts;
+    dst->end_ts   = (time_t)src->end_ts;
+    strncpy(dst->operator_tag, src->operator_tag, SSC_OPERATOR_MAXLEN - 1);
+    strncpy(dst->aufguss_headline, src->aufguss_headline,
+            SSC_AUFGUSS_NAME_MAXLEN - 1);
+    dst->participants = src->participants;
+    strncpy(dst->notes, src->notes, SSC_NOTES_MAXLEN - 1);
+    dst->peak_temp     = src->peak_temp;
+    dst->peak_rh       = src->peak_rh;
+    dst->aufguss_count = src->aufguss_count;
+}
+
+/* v0.3.0: ein einzelner SD->ESP META_RESP, sofort in NVS einsortieren
+ * falls noch nicht vorhanden. Update-pfad nicht implementiert - wenn
+ * NVS schon ein record fuer die id hat, gewinnt der NVS-record (SD-
+ * recovery bleibt non-destructive).                                   */
+static void on_sd_meta_resp(const ssc_meta_wire_t *w)
+{
+    if (!w || w->id[0] == 0) return;
+    struct view_data_session_meta existing = {0};
+    int rc = indicator_session_store_get(w->id, &existing);
+    if (rc == 0) {
+        ESP_LOGD(TAG, "SD_META_RESP id=%s already in NVS - skip", w->id);
+        return;
+    }
+    struct view_data_session_meta meta;
+    meta_unpack_from_wire(w, &meta);
+    int rs = indicator_session_store_append(&meta);
+    ESP_LOGI(TAG, "SD_META_RESP recovered id=%s rc=%d (peak %.1fC %.1f%%)",
+             meta.id, rs, meta.peak_temp, meta.peak_rh);
+}
+
+/* v0.3.0+: legacy-fix mapping. Hard-coded fuer die 6 sessions die vor
+ * dem TZ-fix recovered wurden. start_ts kommt automatisch korrekt aus
+ * der re-synthesize beim resync (TZ-fix ist seit v0.3.0 in RP2040).
+ * Hier nur die operator/aufguss-zuordnung anwenden.                    */
+struct legacy_fix_entry {
+    char id[SSC_SESSION_ID_LEN];
+    char operator_tag[SSC_OPERATOR_MAXLEN];
+    char aufguss_headline[SSC_AUFGUSS_NAME_MAXLEN];
+};
+static const struct legacy_fix_entry s_legacy_fix[] = {
+    {"S20260427_164658", "Kevin",       ""},
+    {"S20260427_180047", "Bernhard G.", ""},
+    {"S20260427_191623", "Bernhard V.", ""},
+    {"S20260427_201327", "Thomas",      ""},
+    {"S20260504_170646", "",            ""},
+    {"S20260504_191051", "Bernhard V.", "Partysauna"},
+};
+static bool s_legacy_fix_pending = false;
+
+static void on_sd_meta_done(uint16_t count)
+{
+    ESP_LOGI(TAG, "SD_META_DONE: %u sessions enumerated from SD - "
+             "history-list refresh queued", (unsigned)count);
+
+    /* v0.3.0+: legacy-fix-flow phase 2. Nach dem resync ist NVS jetzt
+     * mit korrekten zeiten gefuellt (synthesize_meta_from_csv im RP2040
+     * mit TZ-fix). Pro mapping-eintrag: operator+aufguss patchen und
+     * neue JSON-sidecar an SD pushen.                                  */
+    if (s_legacy_fix_pending) {
+        s_legacy_fix_pending = false;
+        size_t total = sizeof(s_legacy_fix) / sizeof(s_legacy_fix[0]);
+        uint16_t patched = 0;
+        for (size_t i = 0; i < total; i++) {
+            const struct legacy_fix_entry *f = &s_legacy_fix[i];
+            if (f->operator_tag[0] == 0 && f->aufguss_headline[0] == 0) {
+                ESP_LOGI(TAG, "fix_legacy[%u] id=%s -> kein patch (leer)",
+                         (unsigned)i, f->id);
+                continue;
+            }
+            struct view_data_session_meta m;
+            int rc = indicator_session_store_get(f->id, &m);
+            if (rc != 0) {
+                ESP_LOGW(TAG, "fix_legacy[%u] id=%s nicht in NVS gefunden rc=%d",
+                         (unsigned)i, f->id, rc);
+                continue;
+            }
+            strncpy(m.operator_tag, f->operator_tag,
+                    SSC_OPERATOR_MAXLEN - 1);
+            m.operator_tag[SSC_OPERATOR_MAXLEN - 1] = 0;
+            strncpy(m.aufguss_headline, f->aufguss_headline,
+                    SSC_AUFGUSS_NAME_MAXLEN - 1);
+            m.aufguss_headline[SSC_AUFGUSS_NAME_MAXLEN - 1] = 0;
+            int us = indicator_session_store_update(&m);
+            ssc_meta_wire_t w;
+            meta_pack_to_wire(&m, &w);
+            int rp = indicator_sensor_rp2040_cmd(SSC_CMD_SESSION_META_PUSH,
+                                                 &w, sizeof(w));
+            ESP_LOGI(TAG, "fix_legacy[%u] id=%s op='%s' update=%d push=%d",
+                     (unsigned)i, f->id, f->operator_tag, us, rp);
+            patched++;
+            vTaskDelay(pdMS_TO_TICKS(40));
+        }
+        ESP_LOGW(TAG, "fix_legacy: %u/%u sessions gepatched",
+                 (unsigned)patched, (unsigned)total);
+    }
+
+    /* History-liste neu rendern damit UI die wiederhergestellten
+     * eintraege sieht.                                              */
+    esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
+                      VIEW_EVENT_HISTORY_LIST_REQ, NULL, 0,
+                      pdMS_TO_TICKS(50));
+}
+
+/* v0.3.0+: legacy-fix-flow phase 1. NVS leer machen, alle JSONs auf
+ * SD weg (damit synthesize_meta_from_csv re-laeuft mit TZ-fix), dann
+ * resync triggern. Phase 2 (operator-patch) macht on_sd_meta_done.   */
+static void start_legacy_fix(void) {
+    ESP_LOGW(TAG, "fix_legacy: starting - wipe NVS + drop SD-JSONs + resync");
+    LOCK();
+    s_readback_active = false;
+    UNLOCK();
+    indicator_session_store_wipe();
+    size_t total = sizeof(s_legacy_fix) / sizeof(s_legacy_fix[0]);
+    for (size_t i = 0; i < total; i++) {
+        const struct legacy_fix_entry *f = &s_legacy_fix[i];
+        int rp = indicator_sensor_rp2040_cmd(
+                    SSC_CMD_SESSION_DELETE_JSON,
+                    f->id,
+                    (uint16_t)strnlen(f->id, SSC_SESSION_ID_LEN) + 1);
+        ESP_LOGI(TAG, "fix_legacy: del-json %s rc=%d", f->id, rp);
+        vTaskDelay(pdMS_TO_TICKS(40));
+    }
+    s_legacy_fix_pending = true;
+    indicator_session_request_sd_list();
 }
 
 static void on_session_discard(void) {
@@ -848,7 +1032,10 @@ static void on_view_event(void *arg, esp_event_base_t base,
             const char *id = (const char *)ev_data;
             int rc = indicator_session_store_delete(id);
             ESP_LOGI(TAG, "HISTORY_DELETE id='%s' rc=%d", id, rc);
-            /* History-liste aktualisieren damit UI die row weg sieht. */
+            /* v0.3.0+: SD-side auch loeschen damit storage konsistent
+             * bleibt. RP2040 entfernt /sessions/<id>.csv + .json. */
+            (void)indicator_sensor_rp2040_cmd(SSC_CMD_SESSION_DELETE_FILE,
+                                              id, (uint16_t)strnlen(id, SSC_SESSION_ID_LEN) + 1);
             on_history_list_req();
         }
         break;
@@ -865,16 +1052,84 @@ static void on_view_event(void *arg, esp_event_base_t base,
         on_history_list_req();
         break;
     }
+    case VIEW_EVENT_HISTORY_FIX_LEGACY:
+        start_legacy_fix();
+        break;
+    case VIEW_EVENT_HISTORY_WIPE_TEST: {
+        /* v0.3.0+: atomar alle sessions mit peak<40C loeschen (NVS+SD).
+         * Vorher: UI hat n× HISTORY_DELETE gepostet, jeder handler hat
+         * on_history_list_req() retriggert -> kaskade von HISTORY_LIST
+         * broadcasts in den LVGL-thread -> UI hung. Jetzt komplett im
+         * model, am ende EIN broadcast.                                */
+        ESP_LOGW(TAG, "WIPE_TEST: loesche sessions mit peak<40C");
+        LOCK();
+        s_readback_active = false;
+        UNLOCK();
+
+        /* IDs vorher sammeln - delete invalidiert die liste-indizes,
+         * deshalb erst snapshot, dann iterieren. 32 ist die liste-cap
+         * der UI-pagination, deckt alle praktisch relevanten faelle. */
+        enum { WIPE_TEST_CAP = 32 };
+        static struct view_data_session_meta wt_items[WIPE_TEST_CAP];
+        struct view_data_session_list list = {0};
+        list.items = wt_items;
+        int lc = indicator_session_store_list(&list, 0, WIPE_TEST_CAP);
+        if (lc != 0) {
+            ESP_LOGE(TAG, "wipe_test: store_list rc=%d", lc);
+            on_history_list_req();
+            break;
+        }
+        char ids[WIPE_TEST_CAP][SSC_SESSION_ID_LEN];
+        uint16_t n = 0;
+        for (uint16_t i = 0; i < list.count && n < WIPE_TEST_CAP; i++) {
+            const struct view_data_session_meta *m = &list.items[i];
+            if (!isnan(m->peak_temp) && m->peak_temp < 40.0f) {
+                strncpy(ids[n], m->id, SSC_SESSION_ID_LEN);
+                ids[n][SSC_SESSION_ID_LEN - 1] = 0;
+                n++;
+            }
+        }
+        ESP_LOGI(TAG, "wipe_test: %u kandidaten gefunden (peak<40C)",
+                 (unsigned)n);
+
+        for (uint16_t i = 0; i < n; i++) {
+            int rc = indicator_session_store_delete(ids[i]);
+            ESP_LOGI(TAG, "wipe_test del[%u] id='%s' rc=%d",
+                     (unsigned)i, ids[i], rc);
+            (void)indicator_sensor_rp2040_cmd(SSC_CMD_SESSION_DELETE_FILE,
+                                              ids[i],
+                                              (uint16_t)strnlen(ids[i],
+                                                  SSC_SESSION_ID_LEN) + 1);
+            /* Kurzer yield damit UART-tx + NVS-erase nicht den watchdog
+             * triggern bei vielen sessions hintereinander.              */
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+        /* Genau EIN history-list-rebroadcast am ende. */
+        on_history_list_req();
+        break;
+    }
     case VIEW_EVENT_SESSION_EDIT: {
         if (!ev_data) break;
         const struct view_data_session_meta *m =
             (const struct view_data_session_meta *)ev_data;
         int rc = indicator_session_store_update(m);
         ESP_LOGI(TAG, "SESSION_EDIT id=%s rc=%d", m->id, rc);
-        /* Refresh history damit UI die neuen werte sieht. */
-        if (rc == 0) on_history_list_req();
+        /* v0.3.0: edit auch nach SD pushen damit SD-truth aktuell bleibt. */
+        if (rc == 0) {
+            ssc_meta_wire_t w;
+            meta_pack_to_wire(m, &w);
+            (void)indicator_sensor_rp2040_cmd(SSC_CMD_SESSION_META_PUSH,
+                                              &w, sizeof(w));
+            on_history_list_req();
+        }
         break;
     }
+    case VIEW_EVENT_SD_META_RESP:
+        if (ev_data) on_sd_meta_resp((const ssc_meta_wire_t *)ev_data);
+        break;
+    case VIEW_EVENT_SD_META_DONE:
+        if (ev_data) on_sd_meta_done(*(const uint16_t *)ev_data);
+        break;
     default:
         break;
     }
@@ -916,7 +1171,11 @@ int indicator_session_init(void) {
         VIEW_EVENT_SESSION_DISCARD,
         VIEW_EVENT_HISTORY_LIST_REQ, VIEW_EVENT_HISTORY_DETAIL_REQ,
         VIEW_EVENT_HISTORY_DELETE, VIEW_EVENT_HISTORY_WIPE_ALL,
+        VIEW_EVENT_HISTORY_WIPE_TEST,
+        VIEW_EVENT_HISTORY_FIX_LEGACY,
         VIEW_EVENT_SESSION_EDIT,
+        /* v0.3.0: hybrid-storage SD->NVS rebuild stream */
+        VIEW_EVENT_SD_META_RESP, VIEW_EVENT_SD_META_DONE,
     };
     for (size_t i = 0; i < sizeof(listened) / sizeof(listened[0]); i++) {
         err = esp_event_handler_register_with(
@@ -971,5 +1230,31 @@ int indicator_session_init(void) {
     esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
                       VIEW_EVENT_HISTORY_LIST_REQ, NULL, 0,
                       pdMS_TO_TICKS(100));
+
+    /* v0.3.0: hybrid-storage initial sync - SD-list von RP2040 anfragen.
+     * Esp_timer feuert in 3s, gibt RP2040 zeit hochzukommen + UART-stack
+     * stable zu sein. Antwort kommt async als META_RESP-stream + DONE.  */
+    {
+        static esp_timer_handle_t s_sd_list_timer = NULL;
+        if (s_sd_list_timer == NULL) {
+            const esp_timer_create_args_t args = {
+                .callback = (esp_timer_cb_t)indicator_session_request_sd_list,
+                .name = "ssc_sd_list_initial",
+            };
+            esp_timer_create(&args, &s_sd_list_timer);
+            /* 5s gibt RP2040 zeit zum boot + UART-stack stable. */
+            esp_timer_start_once(s_sd_list_timer, 5 * 1000 * 1000ULL);
+        }
+    }
     return 0;
+}
+
+/* v0.3.0: oeffentliche API damit user-trigger (z.b. SPEICHER-submenu-
+ * button "AUS SD WIEDERHERSTELLEN") jederzeit eine neue list-anfrage
+ * feuern kann. RP2040 antwortet stream META_RESP -> on_sd_meta_resp
+ * fuellt NVS, on_sd_meta_done broadcasted HISTORY_LIST_REQ.            */
+void indicator_session_request_sd_list(void)
+{
+    int rc = indicator_sensor_rp2040_cmd(SSC_CMD_LIST_SESSIONS, NULL, 0);
+    ESP_LOGI(TAG, "SD list request sent rc=%d", rc);
 }

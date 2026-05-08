@@ -12,6 +12,7 @@
 #include "indicator_model.h"
 #include "indicator_view.h"
 #include "indicator_storage.h"
+#include "indicator_ssc_settings.h"
 #include "view_data.h"
 #include "app_version.h"
 //#include "indicator_controller.h"
@@ -98,6 +99,9 @@ void app_main(void)
     /* v0.2.7: Reset-Reason + Boot-Counter SOFORT capturen. NVS-init muss
      * vorher laufen, deshalb kommt es noch vor bsp_board_init.           */
     indicator_storage_init();
+    /* v0.2.14: settings-struct laden BEVOR model startet damit wifi/time-
+     * init die toggles respektieren koennen.                             */
+    ssc_settings_init();
     esp_reset_reason_t g_reset_reason = esp_reset_reason();
     uint32_t g_boot_count = __boot_counter_tick_and_get();
     g_boot_info.boot_count   = g_boot_count;
@@ -157,6 +161,10 @@ void app_main(void)
 
     indicator_model_init();
     indicator_controller_init();
+
+    /* v0.2.14: settings runtime-apply NACH model+controller-init. wifi/
+     * time/backlight gehen jetzt in den state den die toggles vorgeben. */
+    ssc_settings_apply_runtime();
 
     /* v0.2.14: heap-observability nach init + periodisch.
      * Hintergrund: am 2026-05-04 hatten wir nach init nur 4559 byte

@@ -149,6 +149,19 @@ static void __time_sync_stop(void)
     sntp_stop();
 }
 
+/* v0.2.14: oeffentliche API fuer settings-toggle "NTP ON/OFF".
+ * en=false: sntp_stop - manuelle zeit bleibt erhalten, wird nicht
+ *           ueberschrieben.
+ * en=true:  sntp_init - poll laeuft sobald wifi up ist.              */
+void indicator_time_set_ntp_enabled(bool en)
+{
+    if (en) {
+        __time_sync_enable();
+    } else {
+        __time_sync_stop();
+    }
+}
+
 static void __time_zone_set(struct view_data_time_cfg *p_cfg)
 {
     char zone_str[64] = {0};
@@ -199,9 +212,13 @@ static void __time_zone_set(struct view_data_time_cfg *p_cfg)
 
 static void __time_cfg(struct view_data_time_cfg *p_cfg, bool set_time)
 {
+    /* v0.2.14: TZ IMMER setzen (auch im manual-mode) - ohne TZ-env
+     * defaultet mktime/localtime auf UTC was die manuelle zeit-eingabe
+     * verschiebt. __time_zone_set ist idempotent.                     */
+    __time_zone_set(p_cfg);
+
     if( p_cfg->auto_update ) {
         __time_sync_enable();
-        __time_zone_set(p_cfg); 
     } else {
         __time_sync_stop();
         struct timeval timestamp = { p_cfg->time, 0 };
@@ -321,8 +338,20 @@ static void __view_event_handler(void* handler_args, esp_event_base_t base, int3
             tmv.tm_hour = m->hour;
             tmv.tm_min  = m->minute;
             tmv.tm_sec  = m->sec;
-            /* mktime arbeitet in local-time unter aktueller TZ. Der User
-             * sieht seine lokale Wand-Uhr im Dialog, also ist das richtig. */
+            /* v0.2.14 BUG-FIX: tm_isdst=-1 sagt mktime "guess DST aus den
+             * TZ-rules". Vorher war tm_isdst=0 (struct nullinit) und
+             * mktime nahm winter-zeit (CET) an - das hat im sommer (CEST)
+             * die uhr 1h zu spaet gesetzt (17:23 -> display 18:23).
+             * v0.2.14 ZUSATZ: Falls TZ-env nicht gesetzt war (auto_update=
+             * false plus net_zone leer), explizit Vienna setzen damit
+             * mktime nicht UTC annimmt (17:23 -> display 19:23).         */
+            const char *cur_tz = getenv("TZ");
+            if (!cur_tz || !cur_tz[0]) {
+                setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
+                tzset();
+                ESP_LOGW(TAG, "TIME_MANUAL_SET: TZ war leer - default Vienna");
+            }
+            tmv.tm_isdst = -1;
             time_t ts = mktime(&tmv);
             if (ts < 1700000000) {
                 ESP_LOGW(TAG, "TIME_MANUAL_SET: unplausible ts=%ld - ignored", (long)ts);
@@ -400,7 +429,11 @@ static void __time_state_persist_if_trusted(void)
     }
 
     struct time_state_nvs rec = {0};
-    rec.version = 1;
+    /* v0.2.14: bump zu v2. v1-records wurden eventuell mit falscher TZ
+     * geschrieben (mktime nahm UTC an wenn TZ nicht gesetzt war oder
+     * tm_isdst=0 in CEST-zeit). Auf load ignorieren wir v1 - user muss
+     * einmalig zeit neu setzen mit der gefixten firmware.              */
+    rec.version = 2;
     rec.src = src;
     rec.last_sync_ts = (int64_t)now;
 
@@ -434,7 +467,14 @@ static void __time_state_load_and_apply_fallback(void)
     struct time_state_nvs rec = {0};
     size_t len = sizeof(rec);
     esp_err_t err = indicator_storage_read(TIME_STATE_STORAGE, &rec, &len);
-    if (err == ESP_OK && len == sizeof(rec) && rec.version == 1 &&
+    if (err == ESP_OK && len == sizeof(rec) && rec.version == 1) {
+        /* v0.2.14: legacy v1-record - eventuell mit falscher TZ
+         * geschrieben. Verwerfen damit user explizit neu setzen muss.   */
+        ESP_LOGW(TAG, "time NVS v1 verworfen (firmware-update) - "
+                      "bitte zeit manuell neu setzen.");
+        err = ESP_ERR_NVS_NOT_FOUND;
+    }
+    if (err == ESP_OK && len == sizeof(rec) && rec.version == 2 &&
         rec.last_sync_ts > 1700000000) {
         /* Sanity: NVS-Zeit muss mind so neu wie compile-time minus 7 Tage
          * sein (wenn's viel aelter ist, hat der User das Geraet lang

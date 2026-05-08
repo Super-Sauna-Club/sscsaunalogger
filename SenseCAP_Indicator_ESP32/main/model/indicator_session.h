@@ -42,6 +42,20 @@ void indicator_session_rx_sd_chunk(const uint8_t *payload, size_t n);
  */
 bool indicator_session_is_active(void);
 
+/**
+ * @brief v0.3.0: Hybrid-Storage SD-list trigger.
+ *
+ * Schickt SSC_CMD_LIST_SESSIONS an den RP2040. Der streamt dann pro
+ * SD-session ein PKT_TYPE_SESSION_META_RESP zurueck, abschliessend
+ * ein META_DONE mit count. ESP32-seitig werden die metadata async
+ * via VIEW_EVENT_SD_META_RESP-handler in NVS einsortiert (nur wenn
+ * id noch nicht da ist - non-destructive).
+ *
+ * Wird einmal automatisch 3s nach init gefeuert. UI kann manuell
+ * triggern fuer expliziten "AUS SD WIEDERHERSTELLEN"-button.
+ */
+void indicator_session_request_sd_list(void);
+
 #ifdef __cplusplus
 }
 #endif

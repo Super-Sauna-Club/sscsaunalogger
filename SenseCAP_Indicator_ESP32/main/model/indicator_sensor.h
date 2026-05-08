@@ -22,10 +22,10 @@ int indicator_sensor_get_data(struct view_data_sensor *out_data);
  *
  * @param cmd    Kommando-Typcode (z.B. SSC_CMD_SESSION_START)
  * @param data   Zeiger auf Payload oder NULL
- * @param len    Anzahl Payload-Bytes (max 30)
+ * @param len    Anzahl Payload-Bytes (max 510 in v0.3.0)
  * @return       >=0: Anzahl versendeter Bytes, <0: Fehler
  */
-int indicator_sensor_rp2040_cmd(uint8_t cmd, const void *data, uint8_t len);
+int indicator_sensor_rp2040_cmd(uint8_t cmd, const void *data, uint16_t len);
 
 #ifdef __cplusplus
 }

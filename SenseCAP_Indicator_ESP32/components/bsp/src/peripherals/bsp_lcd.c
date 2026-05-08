@@ -22,6 +22,18 @@
 #include "lcd_panel_st7796.h"
 #include "lcd_panel_st7789.h"
 #include "sdkconfig.h"
+#include "driver/ledc.h"
+
+/* v0.2.14: backlight via LEDC-PWM statt plain GPIO. Erlaubt brightness-
+ * slider in den settings. Channel 0 / timer 0 / 5 kHz / 10-bit (1024). */
+#define BSP_BL_LEDC_TIMER     LEDC_TIMER_0
+#define BSP_BL_LEDC_CHANNEL   LEDC_CHANNEL_0
+#define BSP_BL_LEDC_MODE      LEDC_LOW_SPEED_MODE
+#define BSP_BL_LEDC_FREQ      5000
+#define BSP_BL_LEDC_RES_BITS  LEDC_TIMER_10_BIT
+#define BSP_BL_LEDC_DUTY_MAX  ((1U << 10) - 1U)
+static bool bsp_bl_ledc_inited = false;
+static int  bsp_bl_active_high = 1;
 
 static const char *TAG = "bsp_lcd";
 
@@ -280,15 +292,37 @@ esp_err_t bsp_lcd_init(void)
         xTaskCreate(lcd_task, "lcd_task", 2048, NULL, CONFIG_LCD_TASK_PRIORITY, &lcd_task_handle);
 #endif
 
-    // Configure LCD backlight IO.
+    // v0.2.14: backlight via LEDC-PWM (statt plain GPIO).
     if (GPIO_NUM_NC != brd->GPIO_LCD_BL) {
-        gpio_config_t bk_gpio_config = {
-            .mode = GPIO_MODE_OUTPUT,
-            /*!< Prevent left shift negtive value warning */
-            .pin_bit_mask = brd->GPIO_LCD_BL > 0 ? 1ULL << brd->GPIO_LCD_BL : 0ULL,
+        bsp_bl_active_high = brd->GPIO_LCD_BL_ON ? 1 : 0;
+
+        ledc_timer_config_t tcfg = {
+            .speed_mode      = BSP_BL_LEDC_MODE,
+            .timer_num       = BSP_BL_LEDC_TIMER,
+            .duty_resolution = BSP_BL_LEDC_RES_BITS,
+            .freq_hz         = BSP_BL_LEDC_FREQ,
+            .clk_cfg         = LEDC_AUTO_CLK,
         };
-        gpio_config(&bk_gpio_config);
-        gpio_set_level(brd->GPIO_LCD_BL, brd->GPIO_LCD_BL_ON);
+        esp_err_t e = ledc_timer_config(&tcfg);
+        if (e != ESP_OK) {
+            ESP_LOGE(TAG, "ledc_timer_config: %d", e);
+        } else {
+            ledc_channel_config_t ccfg = {
+                .gpio_num   = brd->GPIO_LCD_BL,
+                .speed_mode = BSP_BL_LEDC_MODE,
+                .channel    = BSP_BL_LEDC_CHANNEL,
+                .timer_sel  = BSP_BL_LEDC_TIMER,
+                .intr_type  = LEDC_INTR_DISABLE,
+                .duty       = bsp_bl_active_high ? BSP_BL_LEDC_DUTY_MAX : 0,
+                .hpoint     = 0,
+            };
+            e = ledc_channel_config(&ccfg);
+            if (e != ESP_OK) {
+                ESP_LOGE(TAG, "ledc_channel_config: %d", e);
+            } else {
+                bsp_bl_ledc_inited = true;
+            }
+        }
     }
 
     screen_clear(0x00ff);
@@ -351,11 +385,25 @@ esp_err_t bsp_lcd_set_cb(bool (*trans_done_cb)(void *), void *data)
 
 esp_err_t bsp_lcd_set_backlight(bool en)
 {
+    return bsp_lcd_set_backlight_pct(en ? 100 : 0);
+}
+
+esp_err_t bsp_lcd_set_backlight_pct(uint8_t pct)
+{
     const board_res_desc_t *brd = bsp_board_get_description();
-    if (GPIO_NUM_NC == brd->GPIO_LCD_BL) {
-        return ESP_ERR_NOT_SUPPORTED;
+    if (GPIO_NUM_NC == brd->GPIO_LCD_BL) return ESP_ERR_NOT_SUPPORTED;
+    if (!bsp_bl_ledc_inited) {
+        /* fallback: ledc nicht initialisiert (z.B. wenn bsp_lcd_init noch
+         * nicht durch ist). Plain GPIO-set wenigstens auf "an" setzen.    */
+        return gpio_set_level(brd->GPIO_LCD_BL,
+                              pct > 0 ? brd->GPIO_LCD_BL_ON : !brd->GPIO_LCD_BL_ON);
     }
-    return gpio_set_level(brd->GPIO_LCD_BL, en ? brd->GPIO_LCD_BL_ON : !brd->GPIO_LCD_BL_ON);
+    if (pct > 100) pct = 100;
+    uint32_t on_duty  = ((uint32_t)pct * BSP_BL_LEDC_DUTY_MAX) / 100U;
+    uint32_t duty     = bsp_bl_active_high ? on_duty : (BSP_BL_LEDC_DUTY_MAX - on_duty);
+    esp_err_t e = ledc_set_duty(BSP_BL_LEDC_MODE, BSP_BL_LEDC_CHANNEL, duty);
+    if (e != ESP_OK) return e;
+    return ledc_update_duty(BSP_BL_LEDC_MODE, BSP_BL_LEDC_CHANNEL);
 }
 
 #if CONFIG_LCD_LVGL_FULL_REFRESH || CONFIG_LCD_LVGL_DIRECT_MODE

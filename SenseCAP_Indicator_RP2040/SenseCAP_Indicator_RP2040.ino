@@ -31,7 +31,7 @@
 #include "hardware/watchdog.h"    /* watchdog_caused_reboot() fuer post-crash diagnose */
 
 #define DEBUG 0
-#define VERSION "ssc-v0.2.14"
+#define VERSION "ssc-v0.3.0"
 /* v0.2.7: EEPROM layout. 256 B reserviert, erste 8B belegt.
  *  [0..3] uint32_t magic = 0x55AA5AA5
  *  [4..7] uint32_t boot_count                                      */
@@ -130,6 +130,45 @@ static inline void slogf(const char *lbl, float v, int decimals = 2) {
 /* v0.2.7: ESP32 fragt RP2040-Bootstatus an, RP antwortet mit 0xC3 */
 #define PKT_TYPE_CMD_GET_RP_STATUS      0xA8  /* kein payload */
 #define PKT_TYPE_RP_STATUS              0xC3  /* 5B: [boot_count:4B][reset_reason:1B] */
+
+/* v0.3.0: hybrid storage protocol - SD ist authoritative, NVS auf ESP32
+ * ist nur cache. ESP32 fragt LIST_SESSIONS, RP2040 streamt META_RESP
+ * pro session, abschliessend META_DONE. ESP32 sendet META_PUSH bei
+ * jedem session-save, RP2040 schreibt /sessions/<id>.json.            */
+#define PKT_TYPE_CMD_LIST_SESSIONS       0xA9  /* kein payload */
+#define PKT_TYPE_CMD_SESSION_META_PUSH   0xAA  /* payload: ssc_meta_wire_t */
+#define PKT_TYPE_CMD_SESSION_DELETE_FILE 0xAB  /* payload: id (24B null-term) */
+#define PKT_TYPE_CMD_SESSION_DELETE_JSON 0xAC  /* payload: id (24B null-term), nur .json sidecar */
+#define PKT_TYPE_SESSION_META_RESP       0xC4  /* payload: ssc_meta_wire_t */
+#define PKT_TYPE_SESSION_META_DONE       0xC5  /* 2B: count */
+
+/* Wire-struct fuer hybrid-storage. MUSS byte-identisch zu ssc_meta_wire_t
+ * im ESP32 view_data.h sein. Alle ints little-endian, packed.          */
+typedef struct __attribute__((packed)) {
+    char     id[24];
+    int32_t  start_ts;
+    int32_t  end_ts;
+    char     operator_tag[16];
+    char     aufguss_headline[48];
+    uint16_t participants;
+    char     notes[192];
+    float    peak_temp;
+    float    peak_rh;
+    uint8_t  aufguss_count;
+    uint8_t  _reserved[3];
+} ssc_meta_wire_t;
+
+/* Forward-decls hier explizit damit arduino-cli's auto-prototype-
+ * generator nicht versucht prototypen mit ssc_meta_wire_t-typ vor
+ * der typedef einzufuegen (knallt sonst beim build).               */
+static int  write_session_json(const ssc_meta_wire_t *m);
+static int  read_session_json(const char *id, ssc_meta_wire_t *out);
+static int  synthesize_meta_from_csv(const char *id, ssc_meta_wire_t *out);
+static void send_session_meta(const ssc_meta_wire_t *m);
+static void handle_list_sessions(void);
+static void handle_session_meta_push(const uint8_t *payload, size_t len);
+static void handle_session_delete_file(const uint8_t *payload, size_t len);
+static void handle_session_delete_json(const uint8_t *payload, size_t len);
 
 /* ------------------------------------------------------------------ */
 /* Geraete-Objekte                                                    */
@@ -856,6 +895,338 @@ static void session_path_from_id(const char *id) {
     snprintf(g_session_path, sizeof(g_session_path), "/sessions/%s.csv", id);
 }
 
+/* ================================================================== */
+/* v0.3.0: Hybrid-Storage Helpers (JSON sidecar / synthesize / stream) */
+/* ================================================================== */
+
+/* JSON-string-feld extrahieren. Sucht "key":" und kopiert bis zum
+ * naechsten ungeskippten ". Schreibt nul-terminiert in dst. Bei nicht-
+ * gefunden bleibt dst unveraendert (NICHT genullt). Sehr schmal -
+ * unterstuetzt keine \\-escapes ausser einfacher \" - reicht fuer
+ * unsere felder.                                                       */
+static void json_extract_str(const char *src, const char *key,
+                             char *dst, size_t dst_sz) {
+    char needle[40];
+    snprintf(needle, sizeof(needle), "\"%s\":\"", key);
+    const char *p = strstr(src, needle);
+    if (!p) return;
+    p += strlen(needle);
+    size_t i = 0;
+    while (*p && *p != '"' && i < dst_sz - 1) {
+        if (*p == '\\' && *(p+1)) { p++; }
+        dst[i++] = *p++;
+    }
+    dst[i] = 0;
+}
+
+/* JSON int feld: sucht "key": und parst long danach. */
+static long json_extract_long(const char *src, const char *key, long def) {
+    char needle[40];
+    snprintf(needle, sizeof(needle), "\"%s\":", key);
+    const char *p = strstr(src, needle);
+    if (!p) return def;
+    p += strlen(needle);
+    while (*p == ' ') p++;
+    return atol(p);
+}
+
+static float json_extract_float(const char *src, const char *key, float def) {
+    char needle[40];
+    snprintf(needle, sizeof(needle), "\"%s\":", key);
+    const char *p = strstr(src, needle);
+    if (!p) return def;
+    p += strlen(needle);
+    while (*p == ' ') p++;
+    return (float)atof(p);
+}
+
+/* Schreibt /sessions/<id>.json mit der wire-struct. Strings werden
+ * minimal escaped: " -> ' (vermeidet broken JSON), \ -> /. Reicht
+ * fuer human-readable-export, kein tooling-perfect JSON.              */
+static void json_escape_str(const char *in, char *out, size_t out_sz) {
+    size_t i = 0;
+    while (*in && i < out_sz - 1) {
+        char c = *in++;
+        if (c == '"' || c == '\\') c = '\'';   /* simplify */
+        else if (c < 0x20) c = ' ';            /* control chars */
+        out[i++] = c;
+    }
+    out[i] = 0;
+}
+
+static int write_session_json(const ssc_meta_wire_t *m) {
+    if (!sd_init_flag) return -1;
+    char path[64];
+    snprintf(path, sizeof(path), "/sessions/%s.json", m->id);
+    if (SD.exists(path)) SD.remove(path);
+    File f = SD.open(path, FILE_WRITE);
+    if (!f) return -2;
+
+    char esc_op[32];   json_escape_str(m->operator_tag,     esc_op,  sizeof(esc_op));
+    char esc_au[80];   json_escape_str(m->aufguss_headline, esc_au,  sizeof(esc_au));
+    char esc_no[300];  json_escape_str(m->notes,            esc_no,  sizeof(esc_no));
+
+    char buf[700];
+    int n = snprintf(buf, sizeof(buf),
+        "{\"id\":\"%s\","
+        "\"start_ts\":%ld,"
+        "\"end_ts\":%ld,"
+        "\"operator\":\"%s\","
+        "\"aufguss_headline\":\"%s\","
+        "\"participants\":%u,"
+        "\"notes\":\"%s\","
+        "\"peak_temp\":%.2f,"
+        "\"peak_rh\":%.2f,"
+        "\"aufguss_count\":%u}\n",
+        m->id,
+        (long)m->start_ts,
+        (long)m->end_ts,
+        esc_op, esc_au,
+        (unsigned)m->participants,
+        esc_no,
+        (double)m->peak_temp,
+        (double)m->peak_rh,
+        (unsigned)m->aufguss_count);
+    if (n > 0) f.write((const uint8_t*)buf, (size_t)n);
+    f.close();
+    return 0;
+}
+
+/* Liest /sessions/<id>.json und fuellt out mit den feldern. id wird
+ * vom caller bereits gesetzt (kommt aus filename-enumeration).        */
+static int read_session_json(const char *id, ssc_meta_wire_t *out) {
+    if (!sd_init_flag) return -1;
+    char path[64];
+    snprintf(path, sizeof(path), "/sessions/%s.json", id);
+    File f = SD.open(path, FILE_READ);
+    if (!f) return -2;
+    char buf[700];
+    size_t n = f.read((uint8_t*)buf, sizeof(buf) - 1);
+    f.close();
+    if (n == 0) return -3;
+    buf[n] = 0;
+
+    memset(out, 0, sizeof(*out));
+    strncpy(out->id, id, sizeof(out->id) - 1);
+    out->start_ts     = (int32_t)json_extract_long (buf, "start_ts", 0);
+    out->end_ts       = (int32_t)json_extract_long (buf, "end_ts",   0);
+    out->participants = (uint16_t)json_extract_long(buf, "participants", 0);
+    out->peak_temp    = json_extract_float(buf, "peak_temp", 0.0f);
+    out->peak_rh      = json_extract_float(buf, "peak_rh",   0.0f);
+    out->aufguss_count= (uint8_t)json_extract_long (buf, "aufguss_count", 0);
+    json_extract_str(buf, "operator",          out->operator_tag,     sizeof(out->operator_tag));
+    json_extract_str(buf, "aufguss_headline",  out->aufguss_headline, sizeof(out->aufguss_headline));
+    json_extract_str(buf, "notes",             out->notes,            sizeof(out->notes));
+    return 0;
+}
+
+/* Recovery-pfad: kein .json sidecar - rekonstruiere metadata aus dem
+ * CSV-content. start_ts kommt aus dem id-format, peaks + end-zeit aus
+ * dem letzten sample, aufguss_count aus den marker-spalten.            */
+static int synthesize_meta_from_csv(const char *id, ssc_meta_wire_t *out) {
+    if (!sd_init_flag) return -1;
+    char path[64];
+    snprintf(path, sizeof(path), "/sessions/%s.csv", id);
+    File f = SD.open(path, FILE_READ);
+    if (!f) return -2;
+
+    memset(out, 0, sizeof(*out));
+    strncpy(out->id, id, sizeof(out->id) - 1);
+
+    /* start_ts aus filename "S<YYYYMMDD>_<HHMMSS>". Die zeit ist
+     * lokale-zeit-bei-aufnahme (aus ESP32-clock) - wir interpretieren
+     * sie als local time und mktime mit isdst=-1 macht die DST-rules.
+     *
+     * v0.3.0+: TZ env auf RP2040 ist standardmaessig leer -> mktime
+     * defaultet auf UTC, nimmt input also FAELSCHLICH als UTC an. Wenn
+     * filename "20:13" CEST war, wird start_ts dann 20:13 UTC = 22:13
+     * CEST display - 2h zu spaet. Fix: TZ einmalig setzen bevor mktime
+     * laeuft. CET-1CEST,... ist Vienna mit DST-rules.                  */
+    static bool s_tz_set = false;
+    if (!s_tz_set) {
+        setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
+        tzset();
+        s_tz_set = true;
+    }
+    if (id[0] == 'S' && strlen(id) >= 16) {
+        struct tm tmv = {0};
+        char tmp[5];
+        strncpy(tmp, id + 1, 4); tmp[4] = 0; tmv.tm_year = atoi(tmp) - 1900;
+        strncpy(tmp, id + 5, 2); tmp[2] = 0; tmv.tm_mon  = atoi(tmp) - 1;
+        strncpy(tmp, id + 7, 2); tmp[2] = 0; tmv.tm_mday = atoi(tmp);
+        strncpy(tmp, id + 10, 2); tmp[2] = 0; tmv.tm_hour = atoi(tmp);
+        strncpy(tmp, id + 12, 2); tmp[2] = 0; tmv.tm_min  = atoi(tmp);
+        strncpy(tmp, id + 14, 2); tmp[2] = 0; tmv.tm_sec  = atoi(tmp);
+        tmv.tm_isdst = -1;
+        out->start_ts = (int32_t)mktime(&tmv);
+    }
+
+    /* CSV durchscannen: t_elapsed, temp, rh, aufguss(opt-string).
+     * Header ueberspringen, peaks tracken, letztes t_elapsed merken,
+     * jede non-leere aufguss-spalte = +1.                            */
+    char line[96];
+    int line_idx = 0;
+    float peak_t = -1000.0f, peak_rh = -1000.0f;
+    uint32_t last_t = 0;
+    uint32_t aufg_count = 0;
+
+    while (f.available()) {
+        size_t len = f.readBytesUntil('\n', line, sizeof(line) - 1);
+        line[len] = 0;
+        if (len == 0) break;
+        if (line_idx++ == 0) continue;  /* header */
+
+        char *p = line;
+        uint32_t t_el = (uint32_t)atol(p);
+        char *c = strchr(p, ','); if (!c) continue;
+        float temp = (float)atof(c + 1);
+        c = strchr(c + 1, ','); if (!c) continue;
+        float rh = (float)atof(c + 1);
+        c = strchr(c + 1, ',');
+        if (c && *(c + 1) != 0 && *(c + 1) != '\r') aufg_count++;
+
+        if (temp > peak_t)  peak_t  = temp;
+        if (rh   > peak_rh) peak_rh = rh;
+        last_t = t_el;
+        if ((line_idx & 0x3FF) == 0) rp2040.wdt_reset();
+    }
+    f.close();
+
+    if (peak_t  < -500.0f) peak_t  = 0.0f;
+    if (peak_rh < -500.0f) peak_rh = 0.0f;
+    out->peak_temp = peak_t;
+    out->peak_rh   = peak_rh;
+    out->end_ts    = out->start_ts + (int32_t)last_t;
+    out->aufguss_count = (uint8_t)(aufg_count > 255 ? 255 : aufg_count);
+    return 0;
+}
+
+/* Eine session-meta als framed packet senden.                          */
+static void send_session_meta(const ssc_meta_wire_t *m) {
+    uint8_t pkt[1 + sizeof(ssc_meta_wire_t)];
+    pkt[0] = PKT_TYPE_SESSION_META_RESP;
+    memcpy(pkt + 1, m, sizeof(*m));
+    raw_packet_send(pkt, sizeof(pkt));
+}
+
+/* CMD-handler: enumeriert /sessions/, sendet pro CSV ein META_RESP
+ * (json wenn vorhanden, sonst synthesize), abschliessend META_DONE.    */
+static void handle_list_sessions(void) {
+    uint16_t count = 0;
+    if (sd_init_flag) {
+        File dir = SD.open("/sessions");
+        if (dir) {
+            File entry;
+            while ((entry = dir.openNextFile())) {
+                const char *name = entry.name();
+                bool is_csv = (name && strstr(name, ".csv") != NULL);
+                if (!is_csv) { entry.close(); continue; }
+                char id[24] = {0};
+                size_t cp = strlen(name);
+                if (cp >= sizeof(id)) cp = sizeof(id) - 1;
+                memcpy(id, name, cp);
+                /* trailing .csv strippen */
+                char *dot = strstr(id, ".csv");
+                if (dot) *dot = 0;
+                /* Skip leere/komische ids (e.g. ".csv" -> "") */
+                if (id[0] == 0) { entry.close(); continue; }
+                entry.close();
+
+                ssc_meta_wire_t meta;
+                int r = read_session_json(id, &meta);
+                if (r != 0) {
+                    if (synthesize_meta_from_csv(id, &meta) != 0) continue;
+                }
+                send_session_meta(&meta);
+                count++;
+                rp2040.wdt_reset();
+                /* Kleine pause damit ESP32-rx nicht ueberlauft. */
+                delay(5);
+            }
+            dir.close();
+        }
+    }
+    uint8_t done[3];
+    done[0] = PKT_TYPE_SESSION_META_DONE;
+    done[1] = (uint8_t)(count & 0xFF);
+    done[2] = (uint8_t)((count >> 8) & 0xFF);
+    raw_packet_send(done, sizeof(done));
+    Serial.print(LOG_TAG); Serial.print("LIST_SESSIONS sent ");
+    Serial.print(count); Serial.println(" entries");
+}
+
+/* CMD-handler: ESP32 schickt eine session-meta - JSON sidecar schreiben. */
+static void handle_session_meta_push(const uint8_t *payload, size_t len) {
+    if (len < sizeof(ssc_meta_wire_t)) return;
+    ssc_meta_wire_t m;
+    memcpy(&m, payload, sizeof(m));
+    m.id[sizeof(m.id) - 1] = 0;
+    if (m.id[0] == 0) return;
+    int rc = write_session_json(&m);
+    Serial.print(LOG_TAG); Serial.print("META_PUSH "); Serial.print(m.id);
+    Serial.print(" rc="); Serial.println(rc);
+}
+
+/* CMD-handler: ESP32 will eine session vollstaendig loeschen - CSV +
+ * JSON sidecar aus /sessions/ entfernen. Eingabe: id (24 byte null-term).
+ * Schluckt safety-checks: leere id ablehnen, nur [A-Za-z0-9_-] erlauben.   */
+static void handle_session_delete_file(const uint8_t *payload, size_t len) {
+    if (!sd_init_flag || len < 1) return;
+    char id[24] = {0};
+    size_t cp = (len < sizeof(id) - 1) ? len : sizeof(id) - 1;
+    memcpy(id, payload, cp);
+    id[cp] = 0;
+    if (id[0] == 0) return;
+    /* Pfad-injection abwehren: nur safe chars. */
+    for (size_t i = 0; id[i]; i++) {
+        char c = id[i];
+        bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                  (c >= '0' && c <= '9') || c == '_' || c == '-';
+        if (!ok) {
+            Serial.print(LOG_TAG); Serial.print("DELETE rejected unsafe id: ");
+            Serial.println(id);
+            return;
+        }
+    }
+    char path[60];
+    int csv_ok = -1, json_ok = -1;
+    snprintf(path, sizeof(path), "/sessions/%s.csv", id);
+    if (SD.exists(path)) csv_ok = SD.remove(path) ? 0 : -1;
+    snprintf(path, sizeof(path), "/sessions/%s.json", id);
+    if (SD.exists(path)) json_ok = SD.remove(path) ? 0 : -1;
+    Serial.print(LOG_TAG); Serial.print("DELETE id="); Serial.print(id);
+    Serial.print(" csv="); Serial.print(csv_ok);
+    Serial.print(" json="); Serial.println(json_ok);
+}
+
+/* v0.3.0+: nur das .json sidecar loeschen (csv bleibt). Wird vom ESP32
+ * fuer den legacy-fix verwendet: alte JSONs mit kaputtem start_ts werden
+ * weggeworfen, beim naechsten LIST laeuft synthesize_meta_from_csv mit
+ * dem TZ-fix und gibt korrekte zeiten zurueck.                          */
+static void handle_session_delete_json(const uint8_t *payload, size_t len) {
+    if (!sd_init_flag || len < 1) return;
+    char id[24] = {0};
+    size_t cp = (len < sizeof(id) - 1) ? len : sizeof(id) - 1;
+    memcpy(id, payload, cp);
+    id[cp] = 0;
+    if (id[0] == 0) return;
+    for (size_t i = 0; id[i]; i++) {
+        char c = id[i];
+        bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                  (c >= '0' && c <= '9') || c == '_' || c == '-';
+        if (!ok) {
+            Serial.print(LOG_TAG); Serial.print("DELJSON rejected unsafe id: ");
+            Serial.println(id);
+            return;
+        }
+    }
+    char path[60];
+    snprintf(path, sizeof(path), "/sessions/%s.json", id);
+    int json_ok = SD.exists(path) ? (SD.remove(path) ? 0 : -1) : -2;
+    Serial.print(LOG_TAG); Serial.print("DELJSON id="); Serial.print(id);
+    Serial.print(" json="); Serial.println(json_ok);
+}
+
 static bool session_ensure_dir(void) {
     if (!sd_init_flag) return false;
     if (SD.exists("/sessions")) {
@@ -1195,6 +1566,30 @@ static void onPacketReceived(const uint8_t *buffer, size_t size) {
     case PKT_TYPE_CMD_GET_RP_STATUS:
         /* v0.2.7: ESP32 fragt nach Boot-Counter + Reset-Reason */
         rp2040_send_status();
+        break;
+
+    case PKT_TYPE_CMD_LIST_SESSIONS:
+        /* v0.3.0: hybrid storage - alle session-metadata aus /sessions/
+         * lesen und an ESP32 streamen. Falls .json sidecar fehlt, aus
+         * CSV synthesisieren.                                          */
+        handle_list_sessions();
+        break;
+
+    case PKT_TYPE_CMD_SESSION_META_PUSH:
+        /* v0.3.0: ESP32 schickt finale session-metadata - JSON sidecar
+         * neben /sessions/<id>.csv schreiben.                          */
+        handle_session_meta_push(buffer + 1, size - 1);
+        break;
+
+    case PKT_TYPE_CMD_SESSION_DELETE_FILE:
+        /* v0.3.0+: ESP32 loescht eine session - CSV + JSON-sidecar
+         * von SD entfernen damit storage konsistent bleibt.            */
+        handle_session_delete_file(buffer + 1, size - 1);
+        break;
+
+    case PKT_TYPE_CMD_SESSION_DELETE_JSON:
+        /* v0.3.0+: legacy-fix - nur JSON sidecar weg, csv bleibt.      */
+        handle_session_delete_json(buffer + 1, size - 1);
         break;
 
     default:

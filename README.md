@@ -74,12 +74,14 @@ Eine **Session** beginnt mit einem Druck auf `START` am Display und endet mit `S
 ## Funktionen
 
 - **Sekündliche Aufzeichnung** von Kabinentemperatur, Luftfeuchte und Aufguss-Markern; doppelte Abtastrate (2 Hz) für 120 s nach jedem Aufguss.
-- **Touch-bedienbares UI** mit Live-Kurve, History-Liste, Detail-Charts und Settings — komplett offline ohne Smartphone bedienbar.
-- **Roh-CSV pro Session** auf SD-Karte, parallel Metadaten in NVS für die Geräte-Historie (~400 Sessions).
+- **Touch-bedienbares UI** mit Live-Kurve, History-Liste, Detail-Charts und kategorisierten Settings-Submenüs — komplett offline ohne Smartphone bedienbar.
+- **Hybride Speicher-Architektur:** SD-Karte ist Quelle der Wahrheit (Roh-CSV + JSON-Sidecar pro Session), ESP32-NVS dient als schneller Cache für die Geräte-Historie. Verlorenes NVS lässt sich jederzeit per Knopfdruck aus der SD wiederherstellen.
 - **Saunameister-Verwaltung** mit Stammgäste-Liste; häufige Operatoren werden im Dropdown automatisch nach oben sortiert.
 - **MariaDB-Export** mit Auto-CREATE-TABLE und 100er-Batch-Inserts (optional, in Settings konfigurierbar).
-- **NTP-Zeitsynchronisation** mit Europe/Vienna-Default und manuellem Setz-Modal als Fallback ohne WLAN.
-- **Crash-Diagnose direkt am Display** — Boot-Counter und Reset-Reason beider Prozessoren in den Settings sichtbar.
+- **USB-CDC-Datenexport** am RP2040 (`?L`, `?D <id>`) — Session-CSVs ohne SD-Karten-Entnahme zum Host kopieren.
+- **NTP-Zeitsynchronisation** mit Europe/Vienna-Default (DST-aware) und manuellem Setz-Modal als Fallback ohne WLAN.
+- **PWM-Display-Helligkeit** (5–100 %) per Slider live einstellbar, Wert NVS-persistent.
+- **Crash-Diagnose direkt am Display** — Boot-Counter und Reset-Reason beider Prozessoren, Heap-Status und Zeit-Quelle in der Diagnose-Section sichtbar.
 - **Watchdog-gesicherte Sensor-Firmware** auf dem RP2040 mit I²C-Bus-Recovery und Sanity-Range-Checks gegen geglitchte Werte.
 
 ## Hardware
@@ -334,11 +336,17 @@ COBS-gerahmt über UART1 @ 115200 baud, Pakete in der Form `[Typ (1 B)] [Payload
 | `0xA6` | `SESSION_END` | — | ESP32 → RP |
 | `0xA7` | `SD_READBACK` | 32 B (req_id, sid, offset, max_len) | ESP32 → RP |
 | `0xA8` | `GET_RP_STATUS` | — | ESP32 → RP |
+| `0xA9` | `LIST_SESSIONS` | — | ESP32 → RP |
+| `0xAA` | `SESSION_META_PUSH` | 302 B `ssc_meta_wire_t` | ESP32 → RP |
+| `0xAB` | `SESSION_DELETE_FILE` | ≤ 24 B Session-ID | ESP32 → RP |
+| `0xAC` | `SESSION_DELETE_JSON` | ≤ 24 B Session-ID (nur Sidecar) | ESP32 → RP |
 | `0xBF` | `SAUNA_TEMP` | 4 B Float (°C) | RP → ESP32 |
 | `0xC0` | `SAUNA_RH` | 4 B Float (%) | RP → ESP32 |
 | `0xC1` | `SD_READBACK_CHUNK` | 13 B Header + Daten | RP → ESP32 |
 | `0xC2` | `PROBE_STATE` | 2 B (probe_type, sd_init) | RP → ESP32 |
 | `0xC3` | `RP_STATUS` | 5 B (boot_count, reset_reason) | RP → ESP32 |
+| `0xC4` | `SESSION_META_RESP` | 302 B `ssc_meta_wire_t` | RP → ESP32 |
+| `0xC5` | `SESSION_META_DONE` | 2 B Anzahl der gestreamten Sessions | RP → ESP32 |
 
 Live-Sensorwerte kommen via `0xBF`/`0xC0` bei jedem Tick als Push vom RP2040 — der ESP32 polled nicht. Historische Sessions werden chunkweise per `SD_READBACK` zurückgelesen und in einem PSRAM-Akkumulator zusammengebaut, bevor der Detail-Chart gerendert wird.
 
@@ -389,14 +397,18 @@ Der RP2040-Sketch ist bewusst monolithisch — eine einzige `.ino`-Datei mit kla
 
 ### Einstellungen (Zahnrad)
 
-| Bereich | Inhalt |
+Die Settings sind seit v0.3.0 als kategorisierte Submenüs aufgebaut — eine Hauptliste mit sieben Bereichen, in jeden tappt man hinein:
+
+| Submenü | Inhalt |
 |---|---|
-| Saunameister-Liste | Stammgäste-Namen für das Operator-Dropdown |
-| WLAN | SSID + Passwort, in NVS gespeichert |
-| MariaDB | Endpunkt + Credentials (per Default deaktiviert) |
-| Info | Version, Open-Source-Hinweis |
-| Zeit + Diagnose | Live-Zeit-Quelle, Boot-Counter beider Chips, letzte Reset-Reason, Button für manuelles Setzen der Uhr |
-| Danger Zone | Komplett-Wipe der Session-Metadaten (CSVs auf SD bleiben physisch) |
+| Saunameister | Stammgäste-Namen für das Operator-Dropdown (komma-getrennt) |
+| Verbindung | WLAN-SSID + Passwort, in NVS gespeichert |
+| Zeit | NTP-Auto-Sync-Toggle, Button für manuelles Setzen mit Datum + Uhrzeit (DST-korrekt) |
+| Anzeige | Helligkeits-Slider (PWM), „Gerät intern" anzeigen-Toggle für die Vorraum-Kachel |
+| Daten-Export | MariaDB-Endpunkt + Credentials, Push-Intervall (per Default deaktiviert) |
+| Diagnose | Zeit-Quelle, Boot-Counter beider Chips, letzte Reset-Reason, DRAM-/PSRAM-Heap, Firmware-Info |
+| Speicher | History-Statistik, Buttons „AUS SD WIEDERHERSTELLEN" (NVS aus SD-CSV+JSON neu aufbauen) und „ALTE SESSIONS REPARIEREN" |
+| Danger Zone | „TEST-SESSIONS LÖSCHEN" (Peak < 40 °C, NVS + SD), „ALLE SESSIONS LÖSCHEN" (NVS-Wipe; CSVs auf SD bleiben) |
 
 ## Datenformat
 
@@ -421,6 +433,42 @@ t_elapsed_s,temp,rh,aufguss
 | `temp` | Kabinentemperatur in °C |
 | `rh` | relative Luftfeuchte in % |
 | `aufguss` | Marker-Name in genau der Zeile, in der der Aufguss-Button gedrückt wurde |
+
+### JSON-Sidecar (v0.3.0+)
+
+Neben jeder `<session_id>.csv` legt der RP2040 eine kompakte `<session_id>.json` mit den Metadaten ab — Saunameister, Aufguss-Headline, Teilnehmerzahl, Notizen, Peak-Werte und Zeitstempel. Das macht die SD-Karte zur Source-of-Truth: ein NVS-Verlust auf dem ESP32 (z. B. nach Bootloop-Recovery) lässt sich per *Settings → Speicher → AUS SD WIEDERHERSTELLEN* in Sekunden vollständig wiederherstellen.
+
+```json
+{
+  "id": "S20260504_191051",
+  "start_ts": 1778262651,
+  "end_ts": 1778263500,
+  "operator": "Bernhard V.",
+  "aufguss_headline": "Partysauna",
+  "participants": 6,
+  "peak_temp": 92.3,
+  "peak_rh": 38.5,
+  "aufguss_count": 3,
+  "notes": ""
+}
+```
+
+### USB-CDC-Export auf dem RP2040
+
+Während das Gerät läuft, lassen sich Session-Files direkt vom Host ziehen — ohne SD-Karten-Entnahme:
+
+```
+?L                 → listet /sessions/ als "[SAUNA] FILE name size"
+?D <filename>      → dumpt CSV/JSON zwischen DUMP_BEGIN/DUMP_END markern
+```
+
+Beispiel mit dem mitgelieferten Chart-Renderer `tools/csv_to_chart.py`:
+
+```bash
+python3 -c "import serial, time; s=serial.Serial('/dev/ttyACM0',115200,timeout=1); s.write(b'?D S20260504_191051.csv\n'); time.sleep(8); print(s.read(20000).decode('utf-8','replace'))" > raw.txt
+# DUMP_BEGIN/DUMP_END-Block manuell extrahieren oder per script
+python3 tools/csv_to_chart.py --csv-dir ./out --out-dir ./out
+```
 
 ### MariaDB-Schema
 
@@ -464,7 +512,7 @@ Die Firmware ist gegen die typischen Fehlerquellen einer Saunaumgebung ausgelegt
 Detaillierte Health-Logs erscheinen im RP2040-Serial-Output:
 
 ```
-[SAUNA] BOOT ssc-v0.2.8 reset_reason=POWER/NORMAL boot_count=1
+[SAUNA] BOOT ssc-v0.3.0 reset_reason=POWER/NORMAL boot_count=1
 [SAUNA] I2C-Scan (boot): 0x38 0x44 0x59 0x62
 [SAUNA] SD: initialisiert
 [SAUNA] SHT3x ready @ 0x44: 24.53 degC, 32.10 %RH

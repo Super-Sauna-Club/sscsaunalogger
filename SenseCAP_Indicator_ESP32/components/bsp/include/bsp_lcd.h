@@ -77,6 +77,20 @@ esp_err_t bsp_spi_lcd_deinit(void);
  */
 esp_err_t bsp_lcd_set_backlight(bool en);
 
+/**
+ * @brief Set backlight brightness (PWM via LEDC)
+ *
+ * @param pct 0..100. Werte unter 1 schalten den BL komplett ab,
+ *            ueber 100 werden auf 100 geclamped. Backend ist LEDC
+ *            channel 0 / timer 0, 5 kHz, 10-bit (1024 levels).
+ *
+ * @return
+ *    - ESP_OK: Success
+ *    - ESP_ERR_NOT_SUPPORTED: kein BL-GPIO konfiguriert
+ *    - Others: Fail
+ */
+esp_err_t bsp_lcd_set_backlight_pct(uint8_t pct);
+
 #if CONFIG_LCD_LVGL_FULL_REFRESH || CONFIG_LCD_LVGL_DIRECT_MODE
 /**
  * @brief Get two frame buffers created by rgb lcd

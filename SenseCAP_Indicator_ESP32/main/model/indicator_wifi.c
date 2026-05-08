@@ -246,10 +246,10 @@ static void __wifi_cfg_restore(void)
     esp_wifi_restore();
 }
 
-static void __wifi_shutdown(void) 
+static void __wifi_shutdown(void)
 {
     _g_wifi_model.is_cfg = false;  //disable reconnect
-    
+
     struct view_data_wifi_st st = {0};
     st.is_connected = false;
     st.is_connecting = false;
@@ -259,6 +259,25 @@ static void __wifi_shutdown(void)
     esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_ST, &st, sizeof(struct view_data_wifi_st ), pdMS_TO_TICKS(50));
 
     esp_wifi_stop();
+}
+
+/* v0.2.14: oeffentliche API fuer settings-toggle "WLAN ON/OFF".
+ * en=false: shutdown (esp_wifi_stop + is_cfg=false damit task nicht
+ *           reconnected).
+ * en=true:  esp_wifi_start; auto-reconnect uebernimmt die existierenden
+ *           credentials wenn vorhanden. is_cfg bleibt false bis user
+ *           explizit "VERBINDEN" druckt - sonst wuerde reconnect-loop
+ *           die kurz nach reboot kaputten APs hammern.                */
+void indicator_wifi_set_enabled(bool en)
+{
+    if (en) {
+        esp_err_t err = esp_wifi_start();
+        if (err != ESP_OK && err != ESP_ERR_WIFI_NOT_INIT) {
+            ESP_LOGW(TAG, "wifi_start in enable: %d", err);
+        }
+    } else {
+        __wifi_shutdown();
+    }
 }
 
 static void __ping_end(esp_ping_handle_t hdl, void *args)

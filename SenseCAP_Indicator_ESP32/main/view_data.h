@@ -181,6 +181,27 @@ struct view_data_session_meta {
     uint8_t  aufguss_count;
 };
 
+/* v0.3.0: hybrid-storage wire-struct. UART-protokoll-format zwischen
+ * ESP32 und RP2040 fuer META_RESP/META_PUSH. MUSS byte-identisch zum
+ * ssc_meta_wire_t in SenseCAP_Indicator_RP2040.ino sein. Packed,
+ * little-endian. 302 bytes total. Nicht zu verwechseln mit
+ * view_data_session_meta - das ist der ESP32-interne speicher-record
+ * mit ggf. abweichenden feld-laengen.                                 */
+struct __attribute__((packed)) ssc_meta_wire {
+    char     id[24];
+    int32_t  start_ts;
+    int32_t  end_ts;
+    char     operator_tag[16];
+    char     aufguss_headline[48];
+    uint16_t participants;
+    char     notes[192];
+    float    peak_temp;
+    float    peak_rh;
+    uint8_t  aufguss_count;
+    uint8_t  _reserved[3];
+};
+typedef struct ssc_meta_wire ssc_meta_wire_t;
+
 /* Live-Sample: pro Sekunde vom Session-Modul an die View gepusht. */
 struct view_data_session_live {
     uint32_t t_elapsed_s;
@@ -307,6 +328,8 @@ enum {
     VIEW_EVENT_HISTORY_DETAIL_CHUNK,    // struct view_data_session_samples_chunk
     VIEW_EVENT_HISTORY_DELETE,          // char id[SSC_SESSION_ID_LEN]
     VIEW_EVENT_HISTORY_WIPE_ALL,        // NULL  (alle sessions aus NVS loeschen)
+    VIEW_EVENT_HISTORY_WIPE_TEST,       // NULL  (alle sessions mit peak<40C, NVS+SD)
+    VIEW_EVENT_HISTORY_FIX_LEGACY,      // NULL  (one-shot fix: TZ + operator-namen v0.3 recovered)
     VIEW_EVENT_HISTORY_DETAIL_DONE,     // struct view_data_session_detail_done  (alle chunks empfangen)
     VIEW_EVENT_SESSION_EDIT,            // struct view_data_session_meta  (edit-mode save)
 
@@ -323,6 +346,10 @@ enum {
     VIEW_EVENT_TIME_MANUAL_SET,         // struct view_data_time_manual
     VIEW_EVENT_BOOT_INFO,               // struct view_data_boot_info (ESP32)
     VIEW_EVENT_RP_BOOT_INFO,            // struct view_data_rp_boot_info (vom RP2040)
+
+    /* === v0.3.0: Hybrid-Storage SD<->NVS sync ========================= */
+    VIEW_EVENT_SD_META_RESP,            // ssc_meta_wire_t  (RP -> ESP, ein eintrag)
+    VIEW_EVENT_SD_META_DONE,            // uint16_t         (count)
 
     VIEW_EVENT_ALL,
 };

@@ -75,6 +75,12 @@ enum  pkt_type {
     /* v0.2.7: RP2040-Status (boot_count + last_reset_reason).
      * Payload: [4B boot_count LE][1B reset_reason] */
     PKT_TYPE_RP_STATUS = 0xC3,
+
+    /* v0.3.0: hybrid-storage. RP2040 streamt session-metadata aus SD-
+     * /sessions/-files an ESP32 zurueck. RESP per session, DONE am ende.
+     * Payload RESP: ssc_meta_wire_t (302 byte). Payload DONE: [2B count]. */
+    PKT_TYPE_SESSION_META_RESP = 0xC4,
+    PKT_TYPE_SESSION_META_DONE = 0xC5,
 };
 
 /* Session-Steuerung ESP -> RP (als defines, damit sie ausserhalb des
@@ -87,6 +93,12 @@ enum  pkt_type {
 /* v0.2.7: anfrage an RP2040 nach boot-status (reset-reason + boot-count).
  * Antwort kommt als 0xC3 mit 5B payload.                                  */
 #define SSC_CMD_GET_RP_STATUS    0xA8
+
+/* v0.3.0: hybrid storage commands - SD-list + meta-push + delete. */
+#define SSC_CMD_LIST_SESSIONS         0xA9
+#define SSC_CMD_SESSION_META_PUSH     0xAA
+#define SSC_CMD_SESSION_DELETE_FILE   0xAB
+#define SSC_CMD_SESSION_DELETE_JSON   0xAC
 
 
 struct sensor_present_data
@@ -1126,35 +1138,59 @@ static int __data_parse_handle(uint8_t *p_data, ssize_t len)
             break;
         }
 
+        case PKT_TYPE_SESSION_META_RESP: {
+            /* v0.3.0: ein session-meta record vom RP2040 (aus SD).
+             * Sofort als event posten - indicator_session ingestiert
+             * in NVS. Wir queuen via portMAX_DELAY weil viele packets
+             * schnell kommen koennen und drop = verlorene session.    */
+            if (len < 1 + (ssize_t)sizeof(ssc_meta_wire_t)) break;
+            ssc_meta_wire_t meta;
+            memcpy(&meta, &p_data[1], sizeof(meta));
+            meta.id[sizeof(meta.id) - 1] = 0;
+            (void)esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
+                                    VIEW_EVENT_SD_META_RESP, &meta, sizeof(meta),
+                                    portMAX_DELAY);
+            break;
+        }
+
+        case PKT_TYPE_SESSION_META_DONE: {
+            /* v0.3.0: end-of-stream marker. Payload: [2B count LE]. */
+            if (len < 3) break;
+            uint16_t count = (uint16_t)p_data[1] | ((uint16_t)p_data[2] << 8);
+            (void)esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
+                                    VIEW_EVENT_SD_META_DONE, &count, sizeof(count),
+                                    portMAX_DELAY);
+            break;
+        }
+
         default:
             break;
     }
 
 }
 
-static int __cmd_send(uint8_t cmd, void *p_data, uint8_t len);  /* fwd decl */
+static int __cmd_send(uint8_t cmd, void *p_data, uint16_t len);  /* fwd decl */
 
-int indicator_sensor_rp2040_cmd(uint8_t cmd, const void *data, uint8_t len)
+int indicator_sensor_rp2040_cmd(uint8_t cmd, const void *data, uint16_t len)
 {
     return __cmd_send(cmd, (void *)data, len);
 }
 
-static int __cmd_send(uint8_t cmd, void *p_data, uint8_t len)
+static int __cmd_send(uint8_t cmd, void *p_data, uint16_t len)
 {
-    /* 80 statt 32 damit sauna-commands mit groesserem payload durchkommen:
-     *   AUFGUSS   = 48 B name (payload)
-     *   SD_READBACK = 32 B (req_id + session_id + offset + len)
-     * Das alte limit 31 hat AUFGUSS + SD_READBACK kommentarlos verworfen
-     * -> keine aufguss-marker in der CSV, kein detail-chart im replay.
-     * COBS-overhead max ceil(N/254)+1 ≈ 2 B bei 64 B -> 80 reicht.       */
-    uint8_t buf[80] = {0};
-    uint8_t data[80] = {0};
+    /* v0.3.0: 512 byte buffers fuer hybrid-storage META_PUSH (302 byte
+     * wire-struct + cmd-byte + COBS-overhead). Stack-frame waechst
+     * +1 KB (acceptable - comm-task hat 4 KB stack in PSRAM).
+     * Vorher 80 byte was AUFGUSS (48) + SD_READBACK (32) deckt aber
+     * fuer ssc_meta_wire_t zu klein war.                              */
+    uint8_t buf[512] = {0};
+    uint8_t data[512] = {0};
 
-    if (len > 78) {
+    if (len > 510) {
         return -1;
     }
-    
-    uint8_t index =1;
+
+    uint16_t index = 1;
 
     data[0] = cmd;
 
