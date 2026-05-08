@@ -999,12 +999,11 @@ static void home_update_recent(const struct view_data_session_list *list) {
             else               snprintf(dur, sizeof(dur), "%ldh%02ld",
                                         sec / 3600, (sec % 3600) / 60);
         }
-        snprintf(peak, sizeof(peak), "%s%s%.0f C  %.0f%%  %u aufg.",
+        snprintf(peak, sizeof(peak), "%s%s%.0f C  %.0f%%",
                  dur[0] ? dur : "",
                  dur[0] ? "  " : "",
                  isnan(m->peak_temp) ? 0.0f : m->peak_temp,
-                 isnan(m->peak_rh)   ? 0.0f : m->peak_rh,
-                 (unsigned)m->aufguss_count);
+                 isnan(m->peak_rh)   ? 0.0f : m->peak_rh);
         lv_obj_t *row = lv_list_add_btn(home_recent_list, NULL, head);
         lv_obj_set_style_bg_color(row, SSC_C_SURFACE, 0);
         lv_obj_set_style_bg_color(row, SSC_C_ELEVATED, LV_STATE_PRESSED);
@@ -1896,12 +1895,11 @@ static void history_apply(const struct view_data_session_list *L) {
             else                 snprintf(dur, sizeof(dur), "%ldh%02ld",
                                           sec / 3600, (sec % 3600) / 60);
         }
-        snprintf(peak, sizeof(peak), "%s%s%.0f C  %.0f%%   %u",
+        snprintf(peak, sizeof(peak), "%s%s%.0f C  %.0f%%",
                  dur[0] ? dur : "",
                  dur[0] ? "   " : "",
                  isnan(m->peak_temp) ? 0.0f : m->peak_temp,
-                 isnan(m->peak_rh)   ? 0.0f : m->peak_rh,
-                 (unsigned)m->aufguss_count);
+                 isnan(m->peak_rh)   ? 0.0f : m->peak_rh);
         lv_label_set_text(right, peak);
         lv_obj_set_style_text_color(right, SSC_C_TEXT_MUTED, 0);
         lv_obj_set_style_text_font(right, F_SM, 0);
