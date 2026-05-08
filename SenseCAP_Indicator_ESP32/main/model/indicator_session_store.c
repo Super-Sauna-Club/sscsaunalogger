@@ -257,28 +257,49 @@ int indicator_session_store_list(struct view_data_session_list *out,
     out->start_index = start_index;
     out->count = 0;
 
-    /* Wir liefern die Liste in reverse-chronologischer Reihenfolge:
-     * neueste zuerst. Die NVS-Slots sind chronologisch aufsteigend,
-     * also laufen wir rueckwaerts.                                   */
-    uint16_t remaining = count;
+    /* v0.3.0+: ALLE slots laden, dann nach start_ts desc sortieren,
+     * dann das gewuenschte fenster ausgeben. Vorher: simple slot-
+     * reverse-order, was bei SD-recovery (append-order != chronolog)
+     * sessions falsch sortiert hat - testsession nach recovery lag
+     * zwischen alten sessions oben/unten je nach append-zeitpunkt. */
     if (start_index >= total) { nvs_close(h); UNLOCK(); return 0; }
 
-    for (uint16_t i = 0; i < remaining; i++) {
-        uint16_t logical = start_index + i;
-        if (logical >= total) break;
-        uint16_t slot = total - 1 - logical;
+    /* Alle slots in einen temp-buffer laden. Bounded durch UI-cap
+     * (out->items hat capacity 32 als haupt-konsument).             */
+    static struct view_data_session_meta tmp[32];
+    uint16_t loaded = 0;
+    uint16_t cap_tmp = sizeof(tmp) / sizeof(tmp[0]);
+    for (uint16_t slot = 0; slot < total && loaded < cap_tmp; slot++) {
         char key[8];
         key_for_slot(slot, key, sizeof(key));
         size_t sz = sizeof(struct view_data_session_meta);
-        esp_err_t err = nvs_get_blob(h, key, &out->items[out->count], &sz);
+        esp_err_t err = nvs_get_blob(h, key, &tmp[loaded], &sz);
         if (err == ESP_OK && sz == sizeof(struct view_data_session_meta)) {
-            out->count++;
+            loaded++;
         } else {
             ESP_LOGW(TAG, "skip broken slot %u: %d", slot, err);
         }
     }
     nvs_close(h);
     UNLOCK();
+
+    /* Insertion-sort by start_ts desc (newest first). N <= 32, OK. */
+    for (uint16_t i = 1; i < loaded; i++) {
+        struct view_data_session_meta key = tmp[i];
+        int j = (int)i - 1;
+        while (j >= 0 && tmp[j].start_ts < key.start_ts) {
+            tmp[j + 1] = tmp[j];
+            j--;
+        }
+        tmp[j + 1] = key;
+    }
+
+    /* Pagination: start_index..start_index+count nach sort kopieren. */
+    for (uint16_t i = 0; i < count; i++) {
+        uint16_t logical = start_index + i;
+        if (logical >= loaded) break;
+        out->items[out->count++] = tmp[logical];
+    }
     return 0;
 }
 
