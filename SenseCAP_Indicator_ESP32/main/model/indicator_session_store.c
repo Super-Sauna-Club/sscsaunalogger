@@ -266,7 +266,7 @@ int indicator_session_store_list(struct view_data_session_list *out,
 
     /* Alle slots in einen temp-buffer laden. Bounded durch UI-cap
      * (out->items hat capacity 32 als haupt-konsument).             */
-    static struct view_data_session_meta tmp[32];
+    EXT_RAM_BSS_ATTR static struct view_data_session_meta tmp[32];
     uint16_t loaded = 0;
     uint16_t cap_tmp = sizeof(tmp) / sizeof(tmp[0]);
     for (uint16_t slot = 0; slot < total && loaded < cap_tmp; slot++) {

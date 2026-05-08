@@ -59,7 +59,9 @@ static void on_sd_meta_done(uint16_t count);
 /* Maximale Session-Dauer im RAM: 60 min a 1 Hz. Reicht fuer 99 % aller
  * Saunagaenge; laengere Sessions ueberschreiben den Ringbuffer ab dem
  * Ende (SD behaelt den vollstaendigen Verlauf).                        */
-#define SSC_LIVE_SAMPLES_MAX  3600
+/* v0.3.1: 7200. 7200 × 12 byte = 86 KB in PSRAM (heap_caps_malloc
+ * unten). Bei 2Hz reicht das 1h, bei 1Hz 2h.                        */
+#define SSC_LIVE_SAMPLES_MAX  7200
 
 /* Maximal die letzten N Chunks pro History-Detail-Request weiterleiten. */
 #define SSC_READBACK_CHUNK_TIMEOUT_MS 5000
@@ -681,7 +683,7 @@ static void on_history_list_req(void) {
     /* Bis zu 32 Eintraege in einem Rutsch liefern - das ist die
      * Seitengroesse fuer die UI-History-Liste. Die View scrollt
      * ggf. weiter und fragt dann mit start_index>0 nach.        */
-    static struct view_data_session_meta items[32];
+    EXT_RAM_BSS_ATTR static struct view_data_session_meta items[32];
     struct view_data_session_list list = {0};
     list.items = items;
     int rc = indicator_session_store_list(&list, 0, 32);
@@ -1070,7 +1072,7 @@ static void on_view_event(void *arg, esp_event_base_t base,
          * deshalb erst snapshot, dann iterieren. 32 ist die liste-cap
          * der UI-pagination, deckt alle praktisch relevanten faelle. */
         enum { WIPE_TEST_CAP = 32 };
-        static struct view_data_session_meta wt_items[WIPE_TEST_CAP];
+        EXT_RAM_BSS_ATTR static struct view_data_session_meta wt_items[WIPE_TEST_CAP];
         struct view_data_session_list list = {0};
         list.items = wt_items;
         int lc = indicator_session_store_list(&list, 0, WIPE_TEST_CAP);
