@@ -59,12 +59,7 @@ static void on_sd_meta_done(uint16_t count);
 /* Maximale Session-Dauer im RAM: 60 min a 1 Hz. Reicht fuer 99 % aller
  * Saunagaenge; laengere Sessions ueberschreiben den Ringbuffer ab dem
  * Ende (SD behaelt den vollstaendigen Verlauf).                        */
-/* v0.3.1: 7200 statt 3600. Mit 2 Hz dauerhaft reicht 3600 nur fuer
- * 30 min, 7200 reicht 1 h. Bei 1 h+ sessions wird ueberschuss als
- * ringbuffer ueberschrieben (live-screen zeigt eh nur die letzten
- * 3 min - der buffer ist fuer den summary/detail-chart relevant).
- * 7200 × 12 byte = 86 KB in PSRAM.                                  */
-#define SSC_LIVE_SAMPLES_MAX  7200
+#define SSC_LIVE_SAMPLES_MAX  3600
 
 /* Maximal die letzten N Chunks pro History-Detail-Request weiterleiten. */
 #define SSC_READBACK_CHUNK_TIMEOUT_MS 5000
