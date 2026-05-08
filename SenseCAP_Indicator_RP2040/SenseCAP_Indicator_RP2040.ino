@@ -82,7 +82,10 @@ static void session_recovery_scan(void);
 /* ------------------------------------------------------------------ */
 /* Runtime-Parameter                                                  */
 /* ------------------------------------------------------------------ */
-#define SSC_INTERVAL_NORMAL_MS   1000   /* 1 Hz Messzyklus idle          */
+#define SSC_INTERVAL_NORMAL_MS    500   /* 2 Hz dauerhaft (v0.3.1: war
+                                         * 1 Hz mit aufguss-boost - jetzt
+                                         * dauer-2Hz weil aufguss-button
+                                         * komplett raus ist).          */
 /* SCD41 sitzt direkt neben dem ESP32 auf der PCB - Abwaerme der CPU
  * + des LCD-Panels bringt ca. 7-8 °C Offset (Kalibrier-Messung mit
  * externem SHT35 als Referenz: intern=31.1 C, extern=23.5 C).       */

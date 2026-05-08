@@ -200,7 +200,11 @@ static lv_chart_series_t *detail_ser_rh;
 static lv_chart_series_t *detail_ser_aufg;  /* aufguss-marker als spikes */
 /* 3600 points = 1h bei 1-Hz-sampling. Bei laengeren sessions macht
  * die decimation im akkumulator den step. */
-#define DETAIL_CHART_POINTS 3600
+/* v0.3.1: 7200 statt 3600 - bei 2Hz reicht 3600 nur 30 min, 7200
+ * gibt 1 h spielraum. Drueber hinaus dropped der ingest weiter
+ * samples (anfang bleibt, ende fehlt im chart - CSV ist trotzdem
+ * komplett auf SD).                                                 */
+#define DETAIL_CHART_POINTS 7200
 
 /* Akkumulator fuer den readback: samples kommen in chunks rein, wir
  * sammeln alle hier und schreiben sie EINMAL am ende in den chart
@@ -1195,11 +1199,12 @@ static void build_live(void) {
     lv_obj_set_style_text_font(live_timer_val, F_MD, 0);
     lv_obj_align(live_timer_val, LV_ALIGN_CENTER, 0, 0);
 
+    /* v0.3.1: aufguss-counter im LIVE-screen ausgeblendet - aufguss-
+     * button ist auch weg, niemand klickt das in der heissen sauna.
+     * Object bleibt erhalten weil andere code-pfade es referenzieren. */
     live_aufguss_count_val = lv_label_create(top);
-    lv_label_set_text(live_aufguss_count_val, "0 Aufg.");
-    lv_obj_set_style_text_color(live_aufguss_count_val, SSC_C_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(live_aufguss_count_val, F_XS, 0);
-    lv_obj_align(live_aufguss_count_val, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_label_set_text(live_aufguss_count_val, "");
+    lv_obj_add_flag(live_aufguss_count_val, LV_OBJ_FLAG_HIDDEN);
 
     /* Value-Zeile: Temp | RH | Peak */
     lv_obj_t *vrow = lv_obj_create(scr_live);
@@ -1367,19 +1372,14 @@ static void build_live(void) {
     lv_obj_add_event_cb(live_start_btn, on_live_start_clicked,
                         LV_EVENT_CLICKED, NULL);
 
-    /* AUFGUSS (nur im RUNNING-state sichtbar) - gleiche Position wie Starten */
+    /* v0.3.1: aufguss-button entfernt. Niemand verlaesst die heisse
+     * sauna um zu druecken. RP2040 sampled jetzt dauerhaft 2 Hz, das
+     * gibt scharfe RH-spikes auch ohne marker. Das object existiert
+     * weiter (live_set_button_states etc referenzieren es), bleibt
+     * permanent hidden.                                                */
     live_aufguss_btn = lv_btn_create(arow);
-    style_primary_btn(live_aufguss_btn);
-    lv_obj_set_size(live_aufguss_btn, 200, 60);
-    lv_obj_t *la = lv_label_create(live_aufguss_btn);
-    /* Klarerer Text: "AUFGUSS MARKIEREN" - es wird ein Zeitstempel-
-     * Marker gesetzt (der Aufguss-Name wird spaeter im Summary
-     * eingegeben). Der Counter oben rechts zaehlt hoch.            */
-    lv_label_set_text(la, LV_SYMBOL_PLUS "  AUFGUSS MARKIEREN");
-    lv_obj_set_style_text_font(la, F_MD, 0);
-    lv_obj_center(la);
-    lv_obj_add_event_cb(live_aufguss_btn, on_live_aufguss_clicked,
-                        LV_EVENT_CLICKED, NULL);
+    lv_obj_add_flag(live_aufguss_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_size(live_aufguss_btn, 0, 0);
 
     /* STOPPEN (nur im RUNNING-state) */
     live_stop_btn = lv_btn_create(arow);
@@ -1641,10 +1641,14 @@ static void build_summary(void) {
     lv_spinbox_set_range(sum_participants_sb, 0, 99);
     lv_obj_add_flag(sum_participants_sb, LV_OBJ_FLAG_HIDDEN);
 
-    /* --- Zelle rechts: AUFGUSS-ANZAHL --- */
+    /* --- Zelle rechts: AUFGUSS-ANZAHL ---
+     * v0.3.1: ausgeblendet. RP2040 macht 2 Hz dauerhaft und der
+     * aufguss-marker-button im LIVE-screen ist weg. Anzahl wird nicht
+     * mehr manuell erfasst (eh nicht zuverlaessig).                    */
     lv_obj_t *ac_col = lv_obj_create(pa_row);
     lv_obj_remove_style_all(ac_col);
-    lv_obj_set_size(ac_col, 200, 90);
+    lv_obj_set_size(ac_col, 0, 0);
+    lv_obj_add_flag(ac_col, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(ac_col, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *ac_l = lv_label_create(ac_col);
