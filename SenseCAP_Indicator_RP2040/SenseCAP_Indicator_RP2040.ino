@@ -31,7 +31,7 @@
 #include "hardware/watchdog.h"    /* watchdog_caused_reboot() fuer post-crash diagnose */
 
 #define DEBUG 0
-#define VERSION "ssc-v0.3.0"
+#define VERSION "ssc-v0.3.3"
 /* v0.2.7: EEPROM layout. 256 B reserviert, erste 8B belegt.
  *  [0..3] uint32_t magic = 0x55AA5AA5
  *  [4..7] uint32_t boot_count                                      */
@@ -1072,6 +1072,11 @@ static int synthesize_meta_from_csv(const char *id, ssc_meta_wire_t *out) {
     float peak_t = -1000.0f, peak_rh = -1000.0f;
     uint32_t last_t = 0;
     uint32_t aufg_count = 0;
+    /* v0.3.3: WDT zeit-basiert (alle ~1.5s) statt zeilen-basiert (alle 1024).
+     * Bei langen sessions (sauna 60min @ 2Hz = 7200 zeilen) konnte SD-read
+     * mit FATFS-blockwechseln 10ms/zeile kosten -> 1024 zeilen = 10s
+     * zwischen WDT-feeds -> reboot bei WDT_TIMEOUT < 10s.                 */
+    uint32_t last_wdt_ms = millis();
 
     while (f.available()) {
         size_t len = f.readBytesUntil('\n', line, sizeof(line) - 1);
@@ -1091,7 +1096,10 @@ static int synthesize_meta_from_csv(const char *id, ssc_meta_wire_t *out) {
         if (temp > peak_t)  peak_t  = temp;
         if (rh   > peak_rh) peak_rh = rh;
         last_t = t_el;
-        if ((line_idx & 0x3FF) == 0) rp2040.wdt_reset();
+        if ((uint32_t)(millis() - last_wdt_ms) > 1500) {
+            rp2040.wdt_reset();
+            last_wdt_ms = millis();
+        }
     }
     f.close();
 

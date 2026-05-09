@@ -895,13 +895,25 @@ int indicator_mariadb_init(void)
         return -1;
     }
 
-    /* Create export timer */
+    /* Create export timer.
+     * v0.3.3: war ESP_ERROR_CHECK -> abort bei DRAM-druck. mariadb ist
+     * optional, init laeuft aber bei JEDEM boot ueber indicator_model.c.
+     * Bei knappem DRAM (gleicher trigger wie v0.3.2 wifi-NO_MEM) wuerde
+     * das einen bootloop ausloesen. Graceful fail: db-task laeuft weiter,
+     * timer-getriebener export ist bis zum reboot deaktiviert.            */
     const esp_timer_create_args_t timer_args = {
         .callback = __export_timer_callback,
         .arg = NULL,
         .name = "mariadb_export"
     };
-    ESP_ERROR_CHECK(esp_timer_create(&timer_args, &__g_export_timer));
+    esp_err_t err = esp_timer_create(&timer_args, &__g_export_timer);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_timer_create fehlgeschlagen: %s - mariadb-export deaktiviert",
+                 esp_err_to_name(err));
+        __g_export_timer = NULL;
+        __g_initialized = true;  /* db-task + manuelle exports bleiben nutzbar */
+        return -1;
+    }
 
     /* Start timer if enabled */
     __update_timer();

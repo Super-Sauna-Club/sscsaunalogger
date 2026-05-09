@@ -175,14 +175,44 @@ static void __ip_event_handler(void* arg, esp_event_base_t event_base,
 
 static int __wifi_scan(wifi_ap_record_t *p_ap_info, uint16_t number)
 {
-    uint16_t ap_count;
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
-    ESP_ERROR_CHECK(esp_wifi_start());
-    esp_wifi_scan_start(NULL, true);
-    ESP_ERROR_CHECK(esp_wifi_scan_get_ap_num(&ap_count));
-    ESP_ERROR_CHECK(esp_wifi_scan_get_ap_records(&number, p_ap_info));
+    /* v0.3.3: alle ESP_ERROR_CHECKs durch graceful return ersetzt.
+     * Wifi-scan ist UI-feature (settings -> wlan -> scan-list). Unter
+     * DRAM-druck (gleicher trigger wie v0.3.2 wifi-init) konnten die
+     * esp_wifi_*-calls failen und ESP_ERROR_CHECK -> abort -> reboot.
+     * Jetzt: scan gibt -1 zurueck, UI zeigt leere liste, kein crash.    */
+    uint16_t ap_count = 0;
+    esp_err_t err;
+
+    /* Bei jedem fehler return 0 (= keine APs gefunden). Caller (zeile ~543)
+     * castet result in uint16_t und nutzt es als loop-bound; -1 wuerde
+     * zu garbage-iteration ueber uninitialized ap_info[] fuehren.        */
+    err = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "scan: esp_wifi_set_mode fehlgeschlagen: %s", esp_err_to_name(err));
+        return 0;
+    }
+    err = esp_wifi_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "scan: esp_wifi_start fehlgeschlagen: %s", esp_err_to_name(err));
+        return 0;
+    }
+    err = esp_wifi_scan_start(NULL, true);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "scan: esp_wifi_scan_start fehlgeschlagen: %s", esp_err_to_name(err));
+        return 0;
+    }
+    err = esp_wifi_scan_get_ap_num(&ap_count);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "scan: esp_wifi_scan_get_ap_num fehlgeschlagen: %s", esp_err_to_name(err));
+        return 0;
+    }
+    err = esp_wifi_scan_get_ap_records(&number, p_ap_info);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "scan: esp_wifi_scan_get_ap_records fehlgeschlagen: %s", esp_err_to_name(err));
+        return 0;
+    }
     ESP_LOGI(TAG, " scan ap cont: %d", ap_count);
-    
+
     for (int i = 0; (i < number) && (i < ap_count); i++) {
         ESP_LOGI(TAG, "SSID: %s, RSSI:%d, Channel: %d", p_ap_info[i].ssid, p_ap_info[i].rssi, p_ap_info[i].primary);
     }
@@ -491,9 +521,23 @@ static void __indicator_wifi_task(void *p_arg)
                 wifi_retry_max = 3;
                 s_retry_num =0;
 
+                /* v0.3.3: war ESP_ERROR_CHECK -> abort. Periodischer
+                 * reconnect-tick alle 5s, bei DRAM-druck nach laengerer
+                 * uptime + heap-fragmentation konnte das einen reboot
+                 * ausloesen. Jetzt graceful: log + naechster tick
+                 * versucht es erneut.                                  */
                 esp_wifi_stop();
-                ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
-                ESP_ERROR_CHECK(esp_wifi_start());
+                esp_err_t err = esp_wifi_set_mode(WIFI_MODE_STA);
+                if (err != ESP_OK) {
+                    ESP_LOGE(TAG, "reconnect: set_mode fehlgeschlagen: %s",
+                             esp_err_to_name(err));
+                } else {
+                    err = esp_wifi_start();
+                    if (err != ESP_OK) {
+                        ESP_LOGE(TAG, "reconnect: wifi_start fehlgeschlagen: %s",
+                                 esp_err_to_name(err));
+                    }
+                }
             }
             _g_wifi_model.wifi_reconnect_cnt++;
         }
