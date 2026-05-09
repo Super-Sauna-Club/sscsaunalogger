@@ -956,28 +956,60 @@ static void session_worker(void *arg) {
                 /* retry_count NICHT resetten - sonst gilt das 10er-Limit nicht */
             }
 
-            /* v0.3.1 (2026-05-09): stall-tick 3->1 + retries 10->30. Vorher
-             * 30 sekunden warten bei chunk-loss, jetzt 1 sek/retry × 30
-             * versuche = max ~30 s (gleicher safety-cap), aber bei
-             * intermittentem loss kommt der erste retry nach 1 s statt 3 s
-             * und die wahrscheinlichkeit dass alle versuche fehlschlagen
-             * sinkt drastisch. Symptom-fix fuer "session laedt nur partial". */
-            if (stall_ticks >= 1 || time_up) {
+            /* v0.3.1 (2026-05-09 update): nach root-cause-fix (UART-rx-buf
+             * 1024 -> 8192) sollten stalls praktisch nicht mehr auftreten.
+             * Watchdog jetzt wieder konservativ: 2s/retry × 15 versuche
+             * = 30s max safety-cap. Schneller als das alte 3s/10 aber nicht
+             * mehr im retry-storm-bereich der heap-druck erzeugt hat.    */
+            /* v0.3.1 (2026-05-09 #2): auto-restart-mechanismus. Wenn 15
+             * retries erschoepft sind, einmal automatisch on_history_
+             * detail_req mit selber sid triggern - simuliert das was der
+             * user manuell als "raus + wieder rein" gemacht hat. Cleart
+             * den RP2040 g_rbk_ds_sid-cache und faengt frisch an. Max 3
+             * auto-restarts pro session-id, dann erst partial-DONE.    */
+            static char     last_sid_seen[SSC_SESSION_ID_LEN] = {0};
+            static uint8_t  restart_count_for_sid = 0;
+            if (strncmp(sid_copy, last_sid_seen, SSC_SESSION_ID_LEN) != 0) {
+                strncpy(last_sid_seen, sid_copy, SSC_SESSION_ID_LEN - 1);
+                last_sid_seen[SSC_SESSION_ID_LEN - 1] = 0;
+                restart_count_for_sid = 0;
+            }
+            if (stall_ticks >= 2 || time_up) {
                 stall_ticks = 0;
-                if (!time_up && retry_count < 30) {
+                if (!time_up && retry_count < 15) {
                     retry_count++;
                     LOCK();
                     uint32_t retry_off = s_readback_next_off;
                     UNLOCK();
-                    ESP_LOGW(TAG, "RBK WATCHDOG: stall, retry %u/30 resume off=%u",
+                    ESP_LOGW(TAG, "RBK WATCHDOG: stall, retry %u/15 resume off=%u",
                              retry_count, (unsigned)retry_off);
                     rp_request_sd_readback(sid_copy, retry_off, 64);
+                } else if (!time_up && restart_count_for_sid < 3) {
+                    restart_count_for_sid++;
+                    ESP_LOGW(TAG, "RBK AUTO-RESTART %u/3 fuer sid=%s "
+                             "(simuliert raus+rein)",
+                             restart_count_for_sid, sid_copy);
+                    if (s_rbk_buf) {
+                        heap_caps_free(s_rbk_buf);
+                        s_rbk_buf = NULL;
+                        s_rbk_buf_size = 0;
+                    }
+                    LOCK();
+                    s_readback_active = false;
+                    UNLOCK();
+                    /* Counter selbst resetten - on_history_detail_req
+                     * setzt s_rbk_t_start_us neu, der naechste tick
+                     * registriert das via line ~933 und resettet auch.  */
+                    retry_count = 0;
+                    last_chunks = 0;
+                    on_history_detail_req(sid_copy);
                 } else {
                     if (time_up) {
                         ESP_LOGE(TAG, "RBK WATCHDOG: 60s Zeit-Limit erreicht, partial DONE (%u chunks)",
                                  (unsigned)chunks_rx_now);
                     } else {
-                        ESP_LOGE(TAG, "RBK WATCHDOG: 30 retries erschoepft, partial DONE");
+                        ESP_LOGE(TAG, "RBK WATCHDOG: 15 retries × %u restarts erschoepft, partial DONE",
+                                 restart_count_for_sid);
                     }
                     /* Partial-Parse: was bis hierhin im Buffer ist, der UI
                      * liefern - sonst bleibt "Lade Daten..." unnoetig. */

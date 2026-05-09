@@ -1231,7 +1231,15 @@ static void esp32_rp2040_comm_task(void *arg)
     };
     int intr_alloc_flags = 0;
 
-    ESP_ERROR_CHECK(uart_driver_install(ESP32_COMM_PORT_NUM, BUF_SIZE * 2, 0, 0, NULL, intr_alloc_flags));
+    /* v0.3.1 (2026-05-09): RX-buffer 1024 -> 8192. Bei session-detail-
+     * readbacks streamt der RP2040 COBS-encoded chunks (~213 byte each)
+     * im burst-modus zurueck. Bei 5 chunks gleichzeitig + parallelen
+     * sensor-events war der 1024-byte rx-buffer voll und neue packets
+     * wurden silent-dropped -> ESP32 wartete auf chunk der nie kam ->
+     * stall -> retry-storm -> heap-druck -> downstream-corruption in
+     * LVGL/comm-task panics. 8K rx-buffer faengt realistische bursts
+     * sicher ab.                                                     */
+    ESP_ERROR_CHECK(uart_driver_install(ESP32_COMM_PORT_NUM, BUF_SIZE * 16, 0, 0, NULL, intr_alloc_flags));
     ESP_ERROR_CHECK(uart_param_config(ESP32_COMM_PORT_NUM, &uart_config));
     ESP_ERROR_CHECK(uart_set_pin(ESP32_COMM_PORT_NUM, ESP32_RP2040_TXD, ESP32_RP2040_RXD, ESP32_RP2040_RTS, ESP32_RP2040_CTS));
 
