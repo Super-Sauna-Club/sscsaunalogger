@@ -18,19 +18,19 @@ Ein autarkes Mess- und Aufzeichnungsgerät, das Kabinentemperatur und Luftfeucht
 
 <img src="docs/images/device-with-chart.jpg" alt="sscsaunalogger während einer aktiven Sauna-Session — Kabine 83,7 °C" width="420" />
 
-<sub><i>Home-Screen während aktiver Session: Kabinen-Temperatur 83,7 °C, Vorraumwerte und CO₂, vorherige Session „Bernhard · 6 TN" in der History.</i></sub>
+<sub><i>Home-Screen während aktiver Session auf einem D1S: Kabinen-Temperatur 83,7 °C, links daneben die Vorraum-Kachel mit CO₂ aus dem internen SCD41 (auf einem D1 fehlt diese Kachel), vorherige Session „Bernhard · 6 TN" in der History.</i></sub>
 
 <br/><br/>
 
 <img src="docs/images/graph-15min-3aufgusse.jpg" alt="Detail-Chart der Session S20260427 auf dem Gerät — 15 min, Peak 85 °C, 3 Aufgüsse" width="420" />
 
-<sub><i>Detail-Chart auf dem Gerät: 15-min-Session mit Peak 85 °C und drei Aufguss-Spikes — direkt am Display sichtbar mit Buttons für BEARBEITEN, LÖSCHEN und ZURÜCK.</i></sub>
+<sub><i>Detail-Chart auf dem Gerät: 15-min-Session aus der v0.2.x-Zeit (drei manuelle Aufguss-Marker als Spikes sichtbar) — direkt am Display mit Buttons für BEARBEITEN, LÖSCHEN und ZURÜCK. Seit v0.3.1 wird ohne Live-Aufguss-Button aufgezeichnet, die charakteristischen RH-/Temp-Spikes bleiben in der Roh-CSV trotzdem erhalten und sehen identisch aus, nur ohne benannte Marker.</i></sub>
 
 <br/><br/>
 
 <img src="docs/images/session-1-bernhard.png" alt="Session 1 — Bernhard G., 27. April 2026" width="780" />
 
-<sub><i>Dieselben Daten als Web-Visualisierung — Peak 85,3 °C, mittlere Temperatur 82,0 °C, drei Aufgüsse über 15,9 min mit charakteristischem Feuchte-Anstieg auf 31,3 % RH.</i></sub>
+<sub><i>Dieselben Daten als Web-Visualisierung (mit `tools/csv_to_chart.py` gerendert) — Peak 85,3 °C, mittlere Temperatur 82,0 °C, drei Aufgüsse über 15,9 min mit charakteristischem Feuchte-Anstieg auf 31,3 % RH.</i></sub>
 
 </div>
 
@@ -397,7 +397,7 @@ Der RP2040-Sketch ist bewusst monolithisch — eine einzige `.ino`-Datei mit kla
 
 ### Einstellungen (Zahnrad)
 
-Die Settings sind seit v0.3.0 als kategorisierte Submenüs aufgebaut — eine Hauptliste mit sieben Bereichen, in jeden tappt man hinein:
+Die Settings sind seit v0.3.0 als kategorisierte Submenüs aufgebaut — eine Hauptliste mit acht Bereichen, in jeden tappt man hinein:
 
 | Submenü | Inhalt |
 |---|---|
@@ -506,10 +506,11 @@ Die Firmware ist gegen die typischen Fehlerquellen einer Saunaumgebung ausgelegt
 - **I²C-Bus-Recovery:** Vor jedem `Wire.begin()` macht die Firmware eine 9-Clock-Recovery-Sequenz, falls ein Slave SDA stuck-LOW hält. Damit löst sich ein Bus-Lock nach Brownout oder Kabel-Glitch ohne Reboot.
 - **Clock-Stretch-Timeout:** I²C-Reads brechen nach 25 ms ab und resetten den Controller, statt das System bis zur Standard-Wire-Stream-Timeout-Grenze (1 s) zu blockieren. Notwendig für Slaves am 2 m Kabel.
 - **Sanity-Range-Checks** auf alle SHT35-Messwerte: Werte außerhalb von −10 … +120 °C oder 0 … 105 % RH werden als Fehler verworfen, auch wenn die CRC stimmt — schützt vor seltenen Bit-Flips am langen Kabel.
-- **Heater-Cycle:** Wenn die Luftfeuchte länger als 60 s bei ≥ 60 % steht, triggert die Firmware den Sensor-internen Heater (33 mW, 1 s), um Polymer-Kondensat nach einem Aufguss zu lösen. Lockout 10 min, niemals während Boost.
+- **Heater-Cycle:** Wenn die Luftfeuchte länger als 60 s bei ≥ 60 % steht, triggert die Firmware den Sensor-internen Heater (33 mW, 1 s), um Polymer-Kondensat nach einem Aufguss zu lösen. Lockout 10 min nach jeder Auslösung, damit der Sensor sich vor dem nächsten Heizpuls wieder thermisch ausgleicht.
 - **NTP-Auto-Retry** bei jedem WLAN-Reconnect, NVS-persistierte Last-Known-Time als Boot-Fallback ohne RTC-Hardware. Ein Warn-Badge im Header zeigt, wenn die Uhrzeit nicht frisch synchronisiert ist.
 - **Boot-Counter und Reset-Reason** beider Prozessoren werden persistiert und in den Settings live angezeigt — bei einem Reboot ohne Eingriff sieht man sofort, welcher Chip gecrasht ist und ob es Watchdog, Brownout oder Panic war.
 - **NVS-Recovery mit Panic-Streak-Schutz:** RTC_NOINIT-Counter zählt aufeinanderfolgende Panics; bei Korruption (z. B. nach Brownout-Cluster) wird die NVS einmalig erased und neu initialisiert, ohne dass die SD-Daten verloren gehen. Ein hoher Threshold (100) verhindert versehentliches Auto-Erase bei einzelnen Crashes.
+- **WiFi-Init non-fatal (v0.3.2):** Falls `esp_wifi_init()` unter DRAM-Druck mit `ESP_ERR_NO_MEM` scheitert (allokiert standardmäßig 16 KB statische RX-Buffer im internen DRAM), bricht nur die WiFi-Initialisierung ab — der Sauna-Logger bootet weiter, Sessions/SD/UI sind komplett unabhängig von WiFi. Vorher hat ein WiFi-Init-Fehler per `ESP_ERROR_CHECK` einen `abort()` ausgelöst und das Gerät in einen chronischen Bootloop geschickt. Zusätzlich ist `CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM` auf 6 (statt Default 10) reduziert, was 6,4 KB DRAM proaktiv freischaufelt.
 - **DRAM-Headroom durch PSRAM-BSS-Migration:** Die großen Session-Meta-Caches (`view_data_session_meta[32]` × 4 = ~36 KB) leben via `EXT_RAM_BSS_ATTR` im PSRAM, was die Heap-Reserve im internen DRAM auf >70 KB hält. Der LVGL-Render-Pfad braucht den DRAM für Layout-/Style-Allokationen, die nicht in PSRAM dürfen.
 - **Großzügiger UART-RX-Buffer (8 KB):** Beim Streaming der Session-Detail-Chunks vom RP2040 zum ESP32 puffert der Driver bursts von mehreren COBS-encoded Paketen ohne Drops, auch wenn parallel Sensor-Events durchlaufen.
 - **Auto-Restart der Detail-Readbacks:** Falls ein Chunk-Stream nach 15 Retries hängt, triggert der ESP32 automatisch einen frischen Detail-Request (max. 3 × pro Session-ID), was den RP2040-seitigen Cache invalidiert und den Stream sauber neu startet — ohne dass der Nutzer manuell „raus + rein" navigieren muss.
@@ -546,7 +547,7 @@ Die Firmware deckt aktuell den Kernkreislauf — manuell starten, durchgehend mi
 | `reset_reason=POWER/NORMAL` in Schleife | Brownout | Auf Netzteil ≥ 2 A wechseln, USB-Hub entfernen, kurzes dickes Kabel |
 | `sd=0` dauerhaft | Karte nicht erkannt oder als exFAT formatiert | Karte in **FAT32** neu formatieren |
 | Touch reagiert nicht | Display-Flex-Verbindung | Display-Flex-Kabel neu einstecken, 2+ min stromlos lassen |
-| VOC-Index = NaN in den ersten 5 min | Erwartetes Verhalten | Warmup des Index-Algorithmus abwarten |
+| VOC-Index = NaN in den ersten 5 min (nur D1S) | Erwartetes Verhalten | Warmup des SGP40-Index-Algorithmus abwarten |
 | RH stuck bei 100 % nach Aufguss | Polymer-Kondensat | Heater-Cycle löst sich automatisch nach 60 s aus, Lockout 10 min |
 | Display schwarz nach ESP32-Flash | PSRAM-Patch fehlt | [Seeed-Wiki](https://wiki.seeedstudio.com/SenseCAP_Indicator_ESP32_Flash/) befolgen |
 | Uhrzeit beim Start falsch | Strom war weg, kein WLAN seither | Mit WLAN booten (NTP synct automatisch) oder *Settings → Zeit manuell setzen* |
