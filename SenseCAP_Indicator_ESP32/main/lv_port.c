@@ -52,7 +52,13 @@ void lv_port_init(void)
     lv_port_tick_init();
 
     lvgl_mutex = xSemaphoreCreateMutex();
-    xTaskCreate(lvgl_task, "lvgl_task", 4096 * 4, NULL, CONFIG_LCD_TASK_PRIORITY, &lvgl_task_handle);
+    /* v0.3.1: stack 16K -> 24K. Mit den flex-row-containern in den
+     * big_stat_cards ist die widget-hierarchy 1 ebene tiefer und
+     * bei layout-events feuert lv_event_send rekursive refr_obj-
+     * aufrufe -> 16K reicht nicht, return-address korrupt ->
+     * StoreProhibited mit EXCVADDR=garbage. 8KB extra DRAM aus
+     * dem nach EXT_RAM_BSS_ATTR-fix freien budget.                  */
+    xTaskCreate(lvgl_task, "lvgl_task", 4096 * 6, NULL, CONFIG_LCD_TASK_PRIORITY, &lvgl_task_handle);
 }
 
 void lv_port_sem_take(void)
@@ -362,10 +368,23 @@ static void lv_port_direct_mode_copy(void)
  */
 static void lvgl_task(void *args)
 {
+    /* v0.3.1: stack-watermark logging alle 30s. LV_PORT_TASK_DELAY_MS=5
+     * -> ~6000 iterations pro 30s. wenn watermark unter 4096 byte sinkt
+     * brauchen wir mehr stack. minimum-tracker erkennt peak-tiefen
+     * waehrend layout-recursion auch wenn der peak nur kurz war.       */
+    uint32_t hb = 0;
+    UBaseType_t wm_min = 0xFFFF;
     for (;;) {
         xSemaphoreTake(lvgl_mutex, portMAX_DELAY);
         lv_task_handler();
         xSemaphoreGive(lvgl_mutex);
+        UBaseType_t wm = uxTaskGetStackHighWaterMark(NULL);
+        if (wm < wm_min) wm_min = wm;
+        if (++hb >= 6000) {
+            ESP_LOGI(TAG, "lvgl-stack: cur-free=%u min-free=%u (of 24576)",
+                     (unsigned)wm, (unsigned)wm_min);
+            hb = 0;
+        }
         vTaskDelay(pdMS_TO_TICKS(LV_PORT_TASK_DELAY_MS));
     }
 }
