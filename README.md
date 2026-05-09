@@ -508,6 +508,11 @@ Die Firmware ist gegen die typischen Fehlerquellen einer Saunaumgebung ausgelegt
 - **Heater-Cycle:** Wenn die Luftfeuchte länger als 60 s bei ≥ 60 % steht, triggert die Firmware den Sensor-internen Heater (33 mW, 1 s), um Polymer-Kondensat nach einem Aufguss zu lösen. Lockout 10 min, niemals während Boost.
 - **NTP-Auto-Retry** bei jedem WLAN-Reconnect, NVS-persistierte Last-Known-Time als Boot-Fallback ohne RTC-Hardware. Ein Warn-Badge im Header zeigt, wenn die Uhrzeit nicht frisch synchronisiert ist.
 - **Boot-Counter und Reset-Reason** beider Prozessoren werden persistiert und in den Settings live angezeigt — bei einem Reboot ohne Eingriff sieht man sofort, welcher Chip gecrasht ist und ob es Watchdog, Brownout oder Panic war.
+- **NVS-Recovery mit Panic-Streak-Schutz:** RTC_NOINIT-Counter zählt aufeinanderfolgende Panics; bei Korruption (z. B. nach Brownout-Cluster) wird die NVS einmalig erased und neu initialisiert, ohne dass die SD-Daten verloren gehen. Ein hoher Threshold (100) verhindert versehentliches Auto-Erase bei einzelnen Crashes.
+- **DRAM-Headroom durch PSRAM-BSS-Migration:** Die großen Session-Meta-Caches (`view_data_session_meta[32]` × 4 = ~36 KB) leben via `EXT_RAM_BSS_ATTR` im PSRAM, was die Heap-Reserve im internen DRAM auf >70 KB hält. Der LVGL-Render-Pfad braucht den DRAM für Layout-/Style-Allokationen, die nicht in PSRAM dürfen.
+- **Großzügiger UART-RX-Buffer (8 KB):** Beim Streaming der Session-Detail-Chunks vom RP2040 zum ESP32 puffert der Driver bursts von mehreren COBS-encoded Paketen ohne Drops, auch wenn parallel Sensor-Events durchlaufen.
+- **Auto-Restart der Detail-Readbacks:** Falls ein Chunk-Stream nach 15 Retries hängt, triggert der ESP32 automatisch einen frischen Detail-Request (max. 3 × pro Session-ID), was den RP2040-seitigen Cache invalidiert und den Stream sauber neu startet — ohne dass der Nutzer manuell „raus + rein" navigieren muss.
+- **LVGL-Stack-Watermark** wird alle 30 s geloggt, damit Stack-Druck im Render-Pfad sichtbar wird, bevor er zu Korruption führt.
 
 Detaillierte Health-Logs erscheinen im RP2040-Serial-Output:
 
