@@ -603,58 +603,118 @@ int indicator_wifi_init(void)
     xTaskCreateWithCaps(&__indicator_wifi_task, "__indicator_wifi_task", 1024 * 5, NULL, 10, NULL, MALLOC_CAP_SPIRAM);
 
 
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    /* WiFi-init darf NICHT fatal sein. Hintergrund: am 2026-05-09
+     * gefunden dass esp_wifi_init() unter DRAM-druck regelmaessig
+     * mit ESP_ERR_NO_MEM scheitert (allokiert 10 statische rx-buffer
+     * a 1600 byte = 16KB im internen DRAM). Vorher per ESP_ERROR_CHECK
+     * gewrappt -> abort -> bootloop. Sauna-logger braucht WiFi nur
+     * fuer NTP-sync und settings-page; sessions/SD/UI laufen ohne.
+     * Bei fail: fruehzeitig raus, gerat bootet weiter ohne WiFi. */
+    esp_err_t ne = esp_netif_init();
+    if (ne != ESP_OK) {
+        ESP_LOGE(TAG, "esp_netif_init failed: %s - WiFi disabled, sauna-logger continues",
+                 esp_err_to_name(ne));
+        return -1;
+    }
+    esp_err_t ee = esp_event_loop_create_default();
+    if (ee != ESP_OK) {
+        ESP_LOGE(TAG, "esp_event_loop_create_default failed: %s - WiFi disabled",
+                 esp_err_to_name(ee));
+        return -1;
+    }
 
     esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    esp_err_t we = esp_wifi_init(&cfg);
+    if (we != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_init failed: %s - WiFi disabled, sauna-logger continues",
+                 esp_err_to_name(we));
+        return -1;
+    }
 
+    /* Defense-in-depth: alle weiteren WiFi-init-calls non-fatal.
+     * Falls einer fail't (theoretisch unter DRAM-druck moeglich) bricht
+     * indicator_wifi_init nur ab statt das geraet zu crashen. */
     esp_event_handler_instance_t instance_any_id;
     esp_event_handler_instance_t instance_got_ip;
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
+    esp_err_t err = esp_event_handler_instance_register(WIFI_EVENT,
                                                         ESP_EVENT_ANY_ID,
                                                         &__wifi_event_handler,
                                                         0,
-                                                        &instance_any_id));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
-                                                        IP_EVENT_STA_GOT_IP,
-                                                        &__ip_event_handler,
-                                                        0,
-                                                        &instance_got_ip));
+                                                        &instance_any_id);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "register WIFI_EVENT handler failed: %s", esp_err_to_name(err));
+        return -1;
+    }
+    err = esp_event_handler_instance_register(IP_EVENT,
+                                              IP_EVENT_STA_GOT_IP,
+                                              &__ip_event_handler,
+                                              0,
+                                              &instance_got_ip);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "register IP_EVENT handler failed: %s", esp_err_to_name(err));
+        return -1;
+    }
 
-
-    ESP_ERROR_CHECK(esp_event_handler_instance_register_with(view_event_handle, 
-                                                            VIEW_EVENT_BASE, VIEW_EVENT_WIFI_LIST_REQ, 
-                                                            __view_event_handler, NULL, NULL));
-
-    
-    ESP_ERROR_CHECK(esp_event_handler_instance_register_with(view_event_handle, 
-                                                            VIEW_EVENT_BASE, VIEW_EVENT_WIFI_CONNECT, 
-                                                            __view_event_handler, NULL, NULL));
-
-    ESP_ERROR_CHECK(esp_event_handler_instance_register_with(view_event_handle, 
-                                                            VIEW_EVENT_BASE, VIEW_EVENT_WIFI_CFG_DELETE, 
-                                                            __view_event_handler, NULL, NULL));
-
-    ESP_ERROR_CHECK(esp_event_handler_instance_register_with(view_event_handle, 
-                                                            VIEW_EVENT_BASE, VIEW_EVENT_SHUTDOWN, 
-                                                            __view_event_handler, NULL, NULL));
+    err = esp_event_handler_instance_register_with(view_event_handle,
+                                                   VIEW_EVENT_BASE, VIEW_EVENT_WIFI_LIST_REQ,
+                                                   __view_event_handler, NULL, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "register VIEW_EVENT_WIFI_LIST_REQ failed: %s", esp_err_to_name(err));
+        return -1;
+    }
+    err = esp_event_handler_instance_register_with(view_event_handle,
+                                                   VIEW_EVENT_BASE, VIEW_EVENT_WIFI_CONNECT,
+                                                   __view_event_handler, NULL, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "register VIEW_EVENT_WIFI_CONNECT failed: %s", esp_err_to_name(err));
+        return -1;
+    }
+    err = esp_event_handler_instance_register_with(view_event_handle,
+                                                   VIEW_EVENT_BASE, VIEW_EVENT_WIFI_CFG_DELETE,
+                                                   __view_event_handler, NULL, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "register VIEW_EVENT_WIFI_CFG_DELETE failed: %s", esp_err_to_name(err));
+        return -1;
+    }
+    err = esp_event_handler_instance_register_with(view_event_handle,
+                                                   VIEW_EVENT_BASE, VIEW_EVENT_SHUTDOWN,
+                                                   __view_event_handler, NULL, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "register VIEW_EVENT_SHUTDOWN failed: %s", esp_err_to_name(err));
+        return -1;
+    }
 
     wifi_config_t wifi_cfg;
     esp_wifi_get_config(WIFI_IF_STA, &wifi_cfg);
-   
+
     if (strlen((const char *) wifi_cfg.sta.ssid)) {
         _g_wifi_model.is_cfg = true;
         ESP_LOGI(TAG, "last config ssid: %s",  wifi_cfg.sta.ssid);
-        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-        ESP_ERROR_CHECK(esp_wifi_start());
+        err = esp_wifi_set_mode(WIFI_MODE_STA);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_wifi_set_mode failed: %s", esp_err_to_name(err));
+            return -1;
+        }
+        err = esp_wifi_start();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_wifi_start failed: %s - WiFi disabled", esp_err_to_name(err));
+            return -1;
+        }
     } else {
         ESP_LOGI(TAG, "Not config wifi, Entry wifi config screen");
         uint8_t screen = SCREEN_WIFI_CONFIG;
-        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-        ESP_ERROR_CHECK(esp_wifi_start());
+        err = esp_wifi_set_mode(WIFI_MODE_STA);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_wifi_set_mode failed: %s", esp_err_to_name(err));
+            return -1;
+        }
+        err = esp_wifi_start();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_wifi_start failed: %s - WiFi disabled", esp_err_to_name(err));
+            return -1;
+        }
         esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SCREEN_START, &screen, sizeof(screen), pdMS_TO_TICKS(50));
     }
 

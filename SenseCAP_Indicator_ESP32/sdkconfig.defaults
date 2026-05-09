@@ -12,8 +12,9 @@ CONFIG_SPIRAM_SPEED_120M=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
 CONFIG_SPIRAM_RODATA=y
-# v0.3.1: BSS-segment in PSRAM erlauben fuer EXT_RAM_BSS_ATTR -
-# spart ~36KB DRAM (4× view_data_session_meta arrays mit 32 entries).
+# 2026-05-09: NICHT entfernen. War in v0.3.1 hinzugefuegt um DRAM-druck
+# zu reduzieren (LVGL-fonts + session-meta arrays). Ohne diese flag
+# faellt DRAM auf <100 byte free was zu sofort-bootloop fuehrt.
 CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 CONFIG_SPIRAM_ALLOW_NOINIT_SEG_EXTERNAL_MEMORY=y
 
@@ -90,3 +91,12 @@ CONFIG_LV_FONT_MONTSERRAT_48=y
 # minimal-fix auf v0.2.8 baseline rausgepickt nachdem der vollstaendige
 # v0.3.2-stash wegen lvgl-mutex-race nicht direkt reapplybar war.
 CONFIG_I2C_BUS_DYNAMIC_CONFIG=n
+
+# 2026-05-09: WiFi static rx buffer count default 10 -> 6 reduzieren.
+# Hintergrund: esp_wifi_init() allokiert num*1600 byte im internen DRAM.
+# Mit default=10 (=16KB) crashed esp_wifi_init() reproduzierbar mit
+# ESP_ERR_NO_MEM auf diesem board (DRAM-budget zu knapp nach LVGL-fonts,
+# tasks, drivers). 6*1600=9.6KB ist fuer einen sauna-logger mehr als
+# genug (kein durchsatz-traffic, nur NTP + setup). Mit dieser config
+# bootet das geraet auch unter DRAM-druck zuverlaessig durch.
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
