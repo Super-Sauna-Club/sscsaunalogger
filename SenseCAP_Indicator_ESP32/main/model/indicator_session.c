@@ -956,22 +956,28 @@ static void session_worker(void *arg) {
                 /* retry_count NICHT resetten - sonst gilt das 10er-Limit nicht */
             }
 
-            if (stall_ticks >= 3 || time_up) {
+            /* v0.3.1 (2026-05-09): stall-tick 3->1 + retries 10->30. Vorher
+             * 30 sekunden warten bei chunk-loss, jetzt 1 sek/retry × 30
+             * versuche = max ~30 s (gleicher safety-cap), aber bei
+             * intermittentem loss kommt der erste retry nach 1 s statt 3 s
+             * und die wahrscheinlichkeit dass alle versuche fehlschlagen
+             * sinkt drastisch. Symptom-fix fuer "session laedt nur partial". */
+            if (stall_ticks >= 1 || time_up) {
                 stall_ticks = 0;
-                if (!time_up && retry_count < 10) {
+                if (!time_up && retry_count < 30) {
                     retry_count++;
                     LOCK();
                     uint32_t retry_off = s_readback_next_off;
                     UNLOCK();
-                    ESP_LOGW(TAG, "RBK WATCHDOG: stall, retry %u/10 resume off=%u",
+                    ESP_LOGW(TAG, "RBK WATCHDOG: stall, retry %u/30 resume off=%u",
                              retry_count, (unsigned)retry_off);
                     rp_request_sd_readback(sid_copy, retry_off, 64);
                 } else {
                     if (time_up) {
-                        ESP_LOGE(TAG, "RBK WATCHDOG: 5s Zeit-Limit erreicht, partial DONE (%u chunks)",
+                        ESP_LOGE(TAG, "RBK WATCHDOG: 60s Zeit-Limit erreicht, partial DONE (%u chunks)",
                                  (unsigned)chunks_rx_now);
                     } else {
-                        ESP_LOGE(TAG, "RBK WATCHDOG: 10 retries erschoepft, partial DONE");
+                        ESP_LOGE(TAG, "RBK WATCHDOG: 30 retries erschoepft, partial DONE");
                     }
                     /* Partial-Parse: was bis hierhin im Buffer ist, der UI
                      * liefern - sonst bleibt "Lade Daten..." unnoetig. */
