@@ -6,7 +6,7 @@
 
 **Open-Source-Datenlogger für die finnische Sauna**
 
-Ein autarkes Mess- und Aufzeichnungsgerät, das Kabinentemperatur, Luftfeuchte und Aufgüsse Sekunde für Sekunde dokumentiert — direkt am Gerät bedienbar, ohne App, ohne Cloud-Zwang. Aufzeichnung lokal als CSV auf SD-Karte, optional Push in eine MariaDB.
+Ein autarkes Mess- und Aufzeichnungsgerät, das Kabinentemperatur und Luftfeuchte mit 2 Hz aufzeichnet — direkt am Gerät bedienbar, ohne App, ohne Cloud-Zwang. Aufzeichnung lokal als CSV auf SD-Karte, optional Push in eine MariaDB.
 
 [Schnellstart](#schnellstart) · [Hardware](#hardware) · [Architektur](#architektur) · [Bedienung](#bedienung) · [Lizenz](#lizenz)
 
@@ -67,14 +67,15 @@ Ein autarkes Mess- und Aufzeichnungsgerät, das Kabinentemperatur, Luftfeuchte u
 
 Der **sscsaunalogger** ist eine Saunabetreiber-orientierte Firmware für den **SenseCAP Indicator D1/D1S**, eine Hardware-Plattform mit ESP32-S3-Hauptprozessor, RP2040-Sensor-Koprozessor, 4-Zoll-Touchdisplay und SD-Kartenslot. Aus der allgemeinen Indikator-Plattform wird damit ein dediziertes Aufzeichnungsgerät für Saunagänge.
 
-Das Gerät steht im **Vorraum** der Sauna. Ein Kabinen-Fühler — ein Sensirion SHT35 in einer IP68-Edelstahlhülle mit 2 m Silikon-Anschlusskabel — hängt durch die Wand in der Kabine und liefert Messwerte vom heißen Bereich. Interne Sensoren auf dem Indicator-Board messen zusätzlich CO₂ und Luftqualität im Vorraum.
+Das Gerät steht im **Vorraum** der Sauna. Ein Kabinen-Fühler — ein Sensirion SHT35 in einer IP68-Edelstahlhülle mit 2 m Silikon-Anschlusskabel — hängt durch die Wand in der Kabine und liefert Messwerte vom heißen Bereich. Auf der **D1S-Variante** kommen zusätzlich CO₂ (SCD41) und VOC (SGP40) aus den werkseitig verbauten Vorraum-Sensoren dazu; auf der einfacheren **D1-Variante** fehlen diese Sensoren komplett, der Logger arbeitet dann nur mit den Kabinen-Werten.
 
-Eine **Session** beginnt mit einem Druck auf `START` am Display und endet mit `STOPPEN`. Während der Session werden im Sekundentakt Messwerte erfasst und auf die SD-Karte geschrieben. Aufgüsse werden mit einem Knopfdruck markiert, wobei für 120 Sekunden auf doppelte Abtastrate umgeschaltet wird, damit der Temperatur- und Feuchte-Spike sauber aufgelöst wird. Nach dem Stoppen wird ein Formular für Saunameister, Teilnehmerzahl und Notizen gezeigt, und die Session-Metadaten landen in der Geräte-Historie.
+Eine **Session** beginnt mit einem Druck auf `START` am Display und endet mit `STOPPEN`. Während der Session werden Messwerte mit **2 Hz dauerhaft** (alle 500 ms) erfasst und auf die SD-Karte geschrieben — kein Boost-Modus, kein manueller Aufguss-Button, keine Unterbrechung der Auflösung. Nach dem Stoppen wird ein Formular für Saunameister, Teilnehmerzahl, Aufguss-Anzahl und Notizen gezeigt, und die Session-Metadaten landen in der Geräte-Historie.
 
 ## Funktionen
 
-- **Sekündliche Aufzeichnung** von Kabinentemperatur, Luftfeuchte und Aufguss-Markern; doppelte Abtastrate (2 Hz) für 120 s nach jedem Aufguss.
+- **2-Hz-Dauer-Aufzeichnung** von Kabinentemperatur und Luftfeuchte über die ganze Session — keine Boost-Phasen, keine Modus-Umschaltung. Aufgüsse werden post-hoc als Anzahl im Save-Formular eingetragen, die charakteristischen RH/Temp-Spikes bleiben in der Roh-CSV erhalten und sind im Detail-Chart gut sichtbar.
 - **Touch-bedienbares UI** mit Live-Kurve, History-Liste, Detail-Charts und kategorisierten Settings-Submenüs — komplett offline ohne Smartphone bedienbar.
+- **Detail-Chart-Puffer:** 7200 Slots im PSRAM, das deckt eine Stunde durchgehend in voller 2-Hz-Auflösung ab.
 - **Hybride Speicher-Architektur:** SD-Karte ist Quelle der Wahrheit (Roh-CSV + JSON-Sidecar pro Session), ESP32-NVS dient als schneller Cache für die Geräte-Historie. Verlorenes NVS lässt sich jederzeit per Knopfdruck aus der SD wiederherstellen.
 - **Saunameister-Verwaltung** mit Stammgäste-Liste; häufige Operatoren werden im Dropdown automatisch nach oben sortiert.
 - **MariaDB-Export** mit Auto-CREATE-TABLE und 100er-Batch-Inserts (optional, in Settings konfigurierbar).
@@ -92,7 +93,7 @@ Eine **Session** beginnt mit einem Druck auf `START` am Display und endet mit `S
 |---|---|
 | Hauptboard | Seeed [SenseCAP Indicator D1 oder D1S](https://www.seeedstudio.com/SenseCAP-Indicator-D1S-p-5643.html) — ESP32-S3 (240 MHz Dual-Core, 8 MB Flash, Octal-PSRAM), RP2040 (Dual-Cortex-M0+ @ 133 MHz), 4″ IPS 480×480 Touchdisplay (FT6336U) |
 | Externer Sauna-Fühler | Sensirion **SHT35** in IP68-Edelstahlhülle mit fest angegossenem 2 m Silikon-Kabel (200 °C-rated). Im Handel meist als „FS400-SHT35" angeboten. I²C-Adresse `0x44`. |
-| Interne Sensoren | Sensirion **SCD41** (CO₂ + T + RH @ `0x62`), Sensirion **SGP40** (VOC-Index @ `0x59`) — auf dem Indicator-Board verbaut |
+| Interne Vorraum-Sensoren | **Nur D1S:** Sensirion **SCD41** (CO₂ + T + RH @ `0x62`), Sensirion **SGP40** (VOC-Index @ `0x59`) — werkseitig auf dem D1S-Board verbaut. **Auf dem D1 nicht vorhanden** — der Logger arbeitet dort mit den Kabinen-Werten allein. |
 | Speicher | microSD-Karte, **FAT32**-formatiert (exFAT wird von der Arduino-SD-Bibliothek nicht unterstützt) |
 | Stromversorgung | 5 V über USB-C, **≥ 2 A** empfohlen |
 
@@ -100,16 +101,16 @@ Geschätzte Gesamtkosten für ein komplettes Setup inklusive Fühler, Karte und 
 
 ### Messbereich
 
-| Messgröße | Sensor | Bereich | Genauigkeit (typ.) |
-|---|---|---|---|
-| Kabinentemperatur | SHT35 | −40 … +125 °C | ±0,1 °C @ 0–65 °C, ±0,4 °C @ 100–125 °C |
-| Kabinen-Luftfeuchte | SHT35 | 0 … 100 % RH | ±1,5 % RH @ 10–90 % |
-| Vorraum-CO₂ | SCD41 | 400 … 5000 ppm | ±(50 ppm + 5 %) |
-| Vorraum-VOC-Index | SGP40 | 1 … 500 (relativ) | Algorithmus-basiert, ~5 min Warmup |
-| Vorraum-Temperatur | SCD41 | −10 … +60 °C | ±0,8 °C |
-| Vorraum-Luftfeuchte | SCD41 | 0 … 100 % RH | ±9 % RH |
+| Messgröße | Sensor | Bereich | Genauigkeit (typ.) | Verfügbar auf |
+|---|---|---|---|---|
+| Kabinentemperatur | SHT35 | −40 … +125 °C | ±0,1 °C @ 0–65 °C, ±0,4 °C @ 100–125 °C | D1, D1S |
+| Kabinen-Luftfeuchte | SHT35 | 0 … 100 % RH | ±1,5 % RH @ 10–90 % | D1, D1S |
+| Vorraum-CO₂ | SCD41 | 400 … 5000 ppm | ±(50 ppm + 5 %) | nur D1S |
+| Vorraum-VOC-Index | SGP40 | 1 … 500 (relativ) | Algorithmus-basiert, ~5 min Warmup | nur D1S |
+| Vorraum-Temperatur | SCD41 | −10 … +60 °C | ±0,8 °C | nur D1S |
+| Vorraum-Luftfeuchte | SCD41 | 0 … 100 % RH | ±9 % RH | nur D1S |
 
-Abtastrate: **1 Hz** Standardbetrieb, **2 Hz** für 120 s nach einem Aufguss-Marker. Das Basis-Intervall ist zur Laufzeit zwischen 250 ms und 60 s einstellbar.
+Abtastrate: **2 Hz dauerhaft** (alle 500 ms) während einer Session — gibt eine Stunde Auflösung in voller Treue ohne Boost-/Normal-Umschalterei. Das Basis-Intervall ist im Code als `SSC_INTERVAL_NORMAL_MS` konfiguriert und zur Laufzeit per `0xA0`-Kommando zwischen 250 ms und 60 s einstellbar.
 
 > Hinweis zur Sauna-Praxis: Die SHT35-Spezifikation deckt den Temperatur-Bereich einer finnischen Sauna (80–100 °C) komfortabel ab. Die Polymer-Membran des Feuchtesensors verträgt langfristig keine direkte Bewässerung — der Fühler gehört nicht in den Aufgussstrahl, sondern an einen Punkt 10–20 cm unter der Kabinendecke abseits der Steine.
 
@@ -309,8 +310,8 @@ Monitor verlassen mit `Strg+]`.
 │                              │       Pakete [Typ(1B)|Daten]      │                              │
 │  · LVGL-UI 480×480           │                                   │  · I²C @ 50 kHz              │
 │  · Touch (FT6336U)           │                                   │  · SHT35 @ 0x44 (Kabine)     │
-│  · Session-Metadaten in NVS  │                                   │  · SCD41 @ 0x62 (intern)     │
-│  · WLAN / NTP / Timezone     │                                   │  · SGP40 @ 0x59 (intern)     │
+│  · Session-Metadaten in NVS  │                                   │  · SCD41 @ 0x62 (D1S only)   │
+│  · WLAN / NTP / Timezone     │                                   │  · SGP40 @ 0x59 (D1S only)   │
 │  · MariaDB-Export            │                                   │  · SD-Karte über SPI1        │
 │  · Crash-Counter & Reason    │                                   │  · Watchdog 8 s              │
 └──────────────────────────────┘                                   └──────────────────────────────┘
@@ -382,17 +383,16 @@ Der RP2040-Sketch ist bewusst monolithisch — eine einzige `.ino`-Datei mit kla
 
 ### Live-Flow
 
-1. **Home-Screen:** Kabine groß, Vorraum kompakt, Liste der letzten Sessions, großer `START`-Button.
-2. **Start:** Live-Screen mit Status-Pill, Werte-Cards für Temp/RH/Peak, 3-Minuten-Chart, Buttons `AUFGUSS MARKIEREN` / `STOPPEN` / `ABBRECHEN`. Ab diesem Moment legt der RP2040 die CSV an und schreibt jede Sekunde eine Zeile.
-3. **Aufguss markieren:** Setzt einen Marker mit Namen (z. B. „Eukalyptus") in die aktuelle CSV-Zeile, schaltet die Abtastrate für 120 s auf 2 Hz und zählt einen Aufguss-Counter hoch.
-4. **Stoppen:** Öffnet die Summary-Form — Saunameister aus Dropdown wählen, Teilnehmerzahl mit Stepper setzen, Notizen eintippen. `Speichern` legt die Metadaten an und stößt einen optionalen DB-Export an.
-5. **Abbrechen:** Verwirft die Session vollständig; sowohl Metadaten als auch Teil-CSV werden gelöscht.
+1. **Home-Screen:** Kabine groß, Vorraum kompakt (nur D1S), Liste der letzten Sessions, großer `START`-Button.
+2. **Start:** Live-Screen mit Status-Pill, Werte-Cards für Temp/RH/Peak, gleitender Chart, Buttons `STOPPEN` / `ABBRECHEN`. Ab diesem Moment legt der RP2040 die CSV an und schreibt mit 2 Hz dauerhaft eine Zeile alle 500 ms — ohne Modus-Umschaltung, ohne manuelle Aufguss-Markierung.
+3. **Stoppen:** Öffnet die Summary-Form — Saunameister aus Dropdown wählen, Teilnehmerzahl mit Stepper setzen, **Aufguss-Anzahl** post-hoc eintragen, Aufguss-/Ritual-Headline und Notizen eintippen. `Speichern` legt die Metadaten an und stößt einen optionalen DB-Export an.
+4. **Abbrechen:** Verwirft die Session vollständig; sowohl Metadaten als auch Teil-CSV werden gelöscht.
 
 ### History und Detail
 
 - Vom Home-Screen oder über die History-Liste lässt sich eine Session anwählen.
-- Der **Detail-Screen** zeigt Temperatur- und Feuchte-Kurve (aus der CSV zurückgelesen), Aufguss-Marker als Spikes, Peak-Werte und alle Metadaten.
-- **Bearbeiten** öffnet die Summary-Form im Edit-Modus — Saunameister, Teilnehmerzahl, Notizen und Aufguss-Zähler nachträglich anpassbar. Die rohen Sensor-Samples auf der SD-Karte werden nicht verändert (write-once).
+- Der **Detail-Screen** zeigt Temperatur- und Feuchte-Kurve (aus der CSV zurückgelesen), Peak-Werte und alle Metadaten. Aufgüsse sind als charakteristische RH-Spikes in der Kurve sichtbar; ältere Sessions (vor v0.3.1) zeigen zusätzlich namentliche Marker an den Spike-Positionen, weil damals noch ein Aufguss-Button im Live-Screen Marker in die CSV schrieb.
+- **Bearbeiten** öffnet die Summary-Form im Edit-Modus — Saunameister, Teilnehmerzahl, Aufguss-Anzahl, Headline und Notizen nachträglich anpassbar. Die rohen Sensor-Samples auf der SD-Karte werden nicht verändert (write-once).
 - **Löschen** entfernt Metadaten und CSV.
 
 ### Einstellungen (Zahnrad)
@@ -404,7 +404,7 @@ Die Settings sind seit v0.3.0 als kategorisierte Submenüs aufgebaut — eine Ha
 | Saunameister | Stammgäste-Namen für das Operator-Dropdown (komma-getrennt) |
 | Verbindung | WLAN-SSID + Passwort, in NVS gespeichert |
 | Zeit | NTP-Auto-Sync-Toggle, Button für manuelles Setzen mit Datum + Uhrzeit (DST-korrekt) |
-| Anzeige | Helligkeits-Slider (PWM), „Gerät intern" anzeigen-Toggle für die Vorraum-Kachel |
+| Anzeige | Helligkeits-Slider (PWM), „Gerät intern" anzeigen-Toggle für die Vorraum-Kachel (nur sinnvoll auf D1S) |
 | Daten-Export | MariaDB-Endpunkt + Credentials, Push-Intervall (per Default deaktiviert) |
 | Diagnose | Zeit-Quelle, Boot-Counter beider Chips, letzte Reset-Reason, DRAM-/PSRAM-Heap, Firmware-Info |
 | Speicher | History-Statistik, Buttons „AUS SD WIEDERHERSTELLEN" (NVS aus SD-CSV+JSON neu aufbauen) und „ALTE SESSIONS REPARIEREN" |
@@ -419,20 +419,21 @@ Pfad: `/sessions/<session_id>.csv`
 ```
 t_elapsed_s,temp,rh,aufguss
 0,25.50,31.10,
-1,25.51,31.08,
+0,25.51,31.08,
+1,25.52,31.05,
+1,25.51,31.10,
 ...
-42,78.20,55.30,Eukalyptus
-43,78.45,62.10,
-...
-1799,98.30,38.20,
+1800,98.30,38.20,
 ```
+
+`t_elapsed_s` ist die Sekunde seit Session-Start; bei 2-Hz-Aufzeichnung erscheint jede Sekunde **zweimal**.
 
 | Spalte | Inhalt |
 |---|---|
 | `t_elapsed_s` | Sekunden seit Session-Start |
 | `temp` | Kabinentemperatur in °C |
 | `rh` | relative Luftfeuchte in % |
-| `aufguss` | Marker-Name in genau der Zeile, in der der Aufguss-Button gedrückt wurde |
+| `aufguss` | Marker-Name in der Zeile, in der ein Aufguss-Button-Druck stattfand. **Seit v0.3.1 immer leer**, weil der Live-Aufguss-Button entfernt wurde — die Spalte bleibt erhalten, damit ältere Sessions weiterhin lesbar sind. |
 
 ### JSON-Sidecar (v0.3.0+)
 
@@ -529,10 +530,10 @@ Detaillierte Health-Logs erscheinen im RP2040-Serial-Output:
 
 ## Roadmap
 
-Die Firmware deckt aktuell den Kernkreislauf — manuell starten, Aufgüsse markieren, lokal speichern, optional in DB pushen — vollständig ab. In Vorbereitung sind:
+Die Firmware deckt aktuell den Kernkreislauf — manuell starten, durchgehend mit 2 Hz aufzeichnen, lokal speichern, optional in DB pushen — vollständig ab. In Vorbereitung sind:
 
 - **supersauna.club-API.** Ein zentraler HTTP-Endpunkt für Vereins-Anlagen, an den jede gespeicherte Session als JSON gepusht wird (Metadaten + Sample-Serie). Damit lassen sich mehrere Standorte gemeinsam auswerten — Aufguss-Statistiken, Saunameister-Rankings, Belastungs-Heatmaps. Der Push-Pfad inklusive NVS-Retry-Queue ist im Code bereits angelegt; im Settings-Screen ist die API-Section als „Zukunfts-Feature" sichtbar, aber bis zur Server-Freigabe ausgegraut.
-- **Automatische Aufguss-Erkennung.** Statt jeden Aufguss manuell mit dem Button zu markieren, soll die Firmware den charakteristischen Spike in Temperatur und vor allem Luftfeuchte (typisch +20…30 % RH innerhalb weniger Sekunden) anhand eines Schwellwert- und Anstiegsraten-Detektors selbst erkennen, automatisch in den 2-Hz-Boost wechseln und einen Marker setzen. Manuelles Markieren bleibt erhalten, dient dann nur noch zum Benennen des Aufgusses.
+- **Automatische Aufguss-Erkennung.** Die Firmware soll den charakteristischen RH-Spike (typisch +20…30 % RH innerhalb weniger Sekunden) anhand eines Schwellwert- und Anstiegsraten-Detektors selbst erkennen und einen benannten Marker in die CSV schreiben. Damit erscheint die Aufguss-Anzahl im Save-Formular bereits vorausgefüllt, der Saunameister muss nur noch bestätigen oder optional Namen pro Aufguss vergeben.
 - **Automatische Session-Aufzeichnung.** Auf derselben Detektor-Logik aufbauend: Wenn die Kabinentemperatur über einen längeren Zeitraum eine Schwelle überschreitet (z. B. > 50 °C für 5 min), startet die Firmware selbsttätig eine Session — und beendet sie analog beim Abkühlen. Der `START`-Button auf dem Home-Screen wird damit zum optionalen Override für den Saunameister, nicht mehr zum Pflicht-Schritt.
 
 ## Troubleshooting
