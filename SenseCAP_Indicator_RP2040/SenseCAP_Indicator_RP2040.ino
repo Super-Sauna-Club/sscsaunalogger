@@ -1392,6 +1392,30 @@ static void rec_try_resume(void) {
         SD.remove("/ssc_active.tmp");
         return;
     }
+    /* Letzte Zeitmarke aus dem CSV-Ende lesen: _active.txt wird nur
+     * jede Minute geschrieben, die CSV alle 5 s geflusht. So bleibt
+     * t_ms nach dem Resume monoton (v0.4.0-Test: sprang sonst zurueck). */
+    {
+        File r = SD.open(path, FILE_READ);
+        if (r) {
+            uint32_t sz = r.size();
+            r.seek(sz > 300 ? sz - 300 : 0);
+            char ln[96]; size_t l = 0;
+            while (r.available()) {
+                int c = r.read();
+                if (c < 0) break;
+                if (c == '\n') {
+                    ln[l] = 0;
+                    if (l > 0 && ln[0] >= '0' && ln[0] <= '9') {
+                        unsigned long v = strtoul(ln, NULL, 10);
+                        if (v > t_ms) t_ms = v;
+                    }
+                    l = 0;
+                } else if (l < sizeof(ln) - 1) ln[l++] = (char)c;
+            }
+            r.close();
+        }
+    }
     File f = SD.open(path, FILE_WRITE);   /* Append-Modus */
     if (!f) return;
     rec_reset_counters();
@@ -2496,7 +2520,8 @@ static void periodic(uint32_t now) {
 /* USB-CDC-Debug: strikt '?'-Prefix (feedback-sicher, siehe v0.2.14).
  *   ?L            Dateiliste       ?D <datei>  Datei dumpen
  *   ?H            Health-Zeile     ?S          Session-Zustand
- *   ?F t T RH     Sim-Sample (t in ms, Replay)  ?X  WDT-Test (haengt) */
+ *   ?F t T RH     Sim-Sample (t in ms, Replay)  ?X  WDT-Test (haengt)
+ *   ?B / ?E       Test: Session starten / beenden                  */
 static void usb_cdc_service(void) {
     static char buf[96];
     static uint8_t idx = 0;
@@ -2582,6 +2607,18 @@ static void usb_cdc_service(void) {
                 sensor_data_send(SSC_PKT_SAUNA_RH, RH);
                 process_sample(g_sim_t, T, RH, true);
             }
+        } else if (op == 'B' || op == 'b') {
+            /* Test: echte Session manuell starten (wie START-Knopf) */
+            uint8_t rc = rec_start(SSC_ORIGIN_MANUAL);
+            Serial.print(F("[SAUNA] ?B rc=")); Serial.println(rc);
+        } else if (op == 'E' || op == 'e') {
+            rec_end(SSC_END_MANUAL);
+            Serial.println(F("[SAUNA] ?E ok"));
+        } else if ((op == 'K' || op == 'k') && buf[2] == ' ') {
+            /* Test-/Wartung: Session-Dateien loeschen (nie die aktive) */
+            uint8_t idb[SSC_ID_LEN] = {0};
+            strncpy((char *)idb, buf + 3, SSC_ID_LEN - 1);
+            Serial.print(F("[SAUNA] ?K rc=")); Serial.println(handle_delete(idb, false));
         } else if (op == 'X' || op == 'x') {
             slog("WDT-Test: haenge loop() absichtlich");
             Serial.flush();

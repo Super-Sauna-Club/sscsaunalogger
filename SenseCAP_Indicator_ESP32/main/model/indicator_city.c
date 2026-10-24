@@ -912,10 +912,10 @@ static void __indicator_http_task(void *p_arg)
                 ip_flag= true;
                 if (strlen(__custom_city_name) > 0) {
                     esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_CITY,
-                                      __custom_city_name, sizeof(__custom_city_name), portMAX_DELAY);
+                                      __custom_city_name, sizeof(__custom_city_name), pdMS_TO_TICKS(100));
                 } else {
                     esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_CITY,
-                                      &__g_city_model.city, sizeof(__g_city_model.city), portMAX_DELAY);
+                                      &__g_city_model.city, sizeof(__g_city_model.city), pdMS_TO_TICKS(100));
                 }
             }
         }
@@ -1028,10 +1028,10 @@ int indicator_city_set_custom_name(const char *name)
 
     if (strlen(__custom_city_name) > 0) {
         esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_CITY,
-                          __custom_city_name, sizeof(__custom_city_name), portMAX_DELAY);
+                          __custom_city_name, sizeof(__custom_city_name), pdMS_TO_TICKS(100));
     } else {
         esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_CITY,
-                          &__g_city_model.city, sizeof(__g_city_model.city), portMAX_DELAY);
+                          &__g_city_model.city, sizeof(__g_city_model.city), pdMS_TO_TICKS(100));
     }
     return 0;
 }
@@ -1063,7 +1063,7 @@ int indicator_city_init(void)
     if (err == ESP_OK && strlen(__custom_city_name) > 0) {
         ESP_LOGI(TAG, "Loaded custom city name: '%s'", __custom_city_name);
         esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_CITY,
-                          __custom_city_name, sizeof(__custom_city_name), portMAX_DELAY);
+                          __custom_city_name, sizeof(__custom_city_name), pdMS_TO_TICKS(100));
     }
 
     /* v0.2.14: stack ueber xTaskCreateWithCaps in PSRAM. */

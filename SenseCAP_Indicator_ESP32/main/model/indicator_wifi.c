@@ -243,8 +243,13 @@ static int __wifi_connect(const char *p_ssid, const char *p_password, int retry_
     wifi_config.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
 
     esp_wifi_stop();
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
+    /* v0.4.0 (Audit M6): WLAN ist optional - Fehler loggen statt abort(). */
+    esp_err_t werr = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (werr == ESP_OK) werr = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+    if (werr != ESP_OK) {
+        ESP_LOGE(TAG, "wifi config fehlgeschlagen: %s", esp_err_to_name(werr));
+        return -1;
+    }
 
     _g_wifi_model.is_cfg = true;
 
@@ -254,7 +259,8 @@ static int __wifi_connect(const char *p_ssid, const char *p_password, int retry_
     st.is_network   = false;
     __wifi_st_set(&st);
 
-    ESP_ERROR_CHECK(esp_wifi_start());
+    werr = esp_wifi_start();
+    if (werr != ESP_OK) ESP_LOGE(TAG, "esp_wifi_start: %s", esp_err_to_name(werr));
     //esp_wifi_connect();
     
     ESP_LOGI(TAG, "connect...");

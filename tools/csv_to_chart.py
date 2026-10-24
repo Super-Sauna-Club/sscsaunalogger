@@ -3,7 +3,8 @@
 luftfeuchte. fuer jedes CSV in --csv-dir wird ein PNG in --out-dir erstellt;
 PNGs die schon existieren werden uebersprungen (idempotent).
 
-CSV-format: t_elapsed_s,temp,rh,aufguss   (aufguss-spalte wird ignoriert)
+CSV-format: v1 t_elapsed_s,temp,rh,aufguss  |  v2 (ab v0.4.0) t_ms,temp,rh,q,event
+optionale ereignis-datei <id>.evt (v0.4.0): aufguesse als linien, lueften als flaeche.
 filename:   S<YYYYMMDD>_<HHMMSS>.csv      (titel + sortierung)
 
 optional companion json (gleicher basename):
@@ -67,6 +68,27 @@ def load_companion(csv_path):
             return json.load(f)
     except (OSError, ValueError):
         return None
+
+
+def load_events(csv_path):
+    """<id>.evt (v0.4.0): no,kind,flags,gang,seq,t_start,t_peak,t_end,T0,Tpk,RH0,RHpk,AH0,AHpk,part,op,name,aroma"""
+    p = csv_path[:-4] + ".evt"
+    out = []
+    if not os.path.exists(p):
+        return out
+    for line in open(p, encoding="utf-8", errors="replace"):
+        f = line.rstrip("\n").split(",")
+        if len(f) < 15:
+            continue
+        try:
+            ev = dict(no=int(f[0]), kind=int(f[1]), flags=int(f[2]), gang=int(f[3]), seq=int(f[4]),
+                      t0=int(f[5]) / 60000.0, tp=int(f[6]) / 60000.0, t1=int(f[7]) / 60000.0,
+                      op=f[15] if len(f) > 15 else "", name=f[16] if len(f) > 16 else "")
+        except ValueError:
+            continue
+        if not ev["flags"] & 2:      # geloescht (Fehlalarm)
+            out.append(ev)
+    return out
 
 
 def style_axes(ax):
@@ -175,6 +197,15 @@ def plot_session(df, dt, meta, out_path):
     # optionale annotation: lueften-bereich (vent_start_s..vent_end_s) +
     # geschlossen-bereich (vent_end_s..ende). farben unterscheiden tuer-offen
     # (kuehl-blau) von tuer-geschlossen-nachheizen (warm-orange).
+    # v0.4.0: erkannte ereignisse aus der .evt-datei
+    for ev in m.get("_events", []):
+        if ev["kind"] == 3:        # aufguss
+            ax.axvline(ev["tp"], color=T_COLOR, alpha=0.45, linewidth=1.0, linestyle="--", zorder=1.6)
+            lbl = f"A{ev['seq']}" + (f" {ev['op']}" if ev["op"] else "")
+            ax.text(ev["tp"], 0.985, lbl, transform=ax.get_xaxis_transform(), color=T_COLOR,
+                    fontsize=8, ha="center", va="top", rotation=90, alpha=0.9)
+        elif ev["kind"] == 4:      # lueften
+            ax.axvspan(ev["t0"], max(ev["t1"], ev["t0"]), facecolor=RH_COLOR, alpha=0.10, zorder=1.5)
     vent_s = m.get("vent_start_s")
     vent_e = m.get("vent_end_s")
     chart_end = float(t_min[-1])
@@ -259,12 +290,18 @@ def process(csv_path, out_dir, force, min_bytes):
     df = pd.read_csv(csv_path)
     if len(df) < 2 or "temp" not in df.columns or "rh" not in df.columns:
         return ("bad_csv", csv_path, None)
-    df["t_min"] = df["t_elapsed_s"] / 60.0
+    if "t_ms" in df.columns:                       # CSV v2
+        df["t_min"] = df["t_ms"] / 60000.0
+    elif len(df) > 2 and df["t_elapsed_s"].iloc[1] == df["t_elapsed_s"].iloc[0]:
+        df["t_min"] = df.index * 0.5 / 60.0        # v1 @ 2 Hz: doppelte Sekunden
+    else:
+        df["t_min"] = df["t_elapsed_s"] / 60.0
     df = df.dropna(subset=["temp", "rh"])
     if len(df) < 2:
         return ("no_valid_samples", csv_path, None)
 
-    meta = load_companion(csv_path)
+    meta = load_companion(csv_path) or {}
+    meta["_events"] = load_events(csv_path)
     plot_session(df, dt, meta, out_path)
     return ("ok", csv_path, out_path)
 

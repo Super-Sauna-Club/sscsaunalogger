@@ -150,14 +150,16 @@ static void __sleep_mode_timer_callback(void* arg)
 
     bool st=0;
     st = 0;
-    esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SCREEN_CTRL, &st, sizeof(st), portMAX_DELAY);
+    esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SCREEN_CTRL, &st, sizeof(st), pdMS_TO_TICKS(100));
 }
 
 static void __timer_stop(void)
 {
     if(  __timer_st_get()) {
         xSemaphoreTake(__g_timer_mutex, portMAX_DELAY);
-        ESP_ERROR_CHECK(esp_timer_stop(sleep_timer_handle));
+        /* v0.4.0: one-shot evtl. schon abgelaufen -> INVALID_STATE ist ok,
+         * vorher abort() (ESP_ERROR_CHECK).                              */
+        (void)esp_timer_stop(sleep_timer_handle);
         xSemaphoreGive(__g_timer_mutex);
         __timer_st_set(false);
     }
@@ -171,7 +173,8 @@ static void __sleep_mode_restart(bool en, int min)
     }
     __timer_st_set(true);
     xSemaphoreTake(__g_timer_mutex, portMAX_DELAY);
-    ESP_ERROR_CHECK(esp_timer_start_once(sleep_timer_handle, (uint64_t) min *60 * 1000000 ));
+    esp_err_t terr = esp_timer_start_once(sleep_timer_handle, (uint64_t) min *60 * 1000000 );
+    if (terr != ESP_OK) ESP_LOGW(TAG, "sleep timer start: %s", esp_err_to_name(terr));
     xSemaphoreGive(__g_timer_mutex);
 }
 
@@ -278,7 +281,7 @@ int indicator_display_init(void)
 
     __sleep_mode_init(cfg.sleep_mode_en, cfg.sleep_mode_time_min);
 
-    esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_DISPLAY_CFG, &cfg, sizeof(cfg), portMAX_DELAY);
+    esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_DISPLAY_CFG, &cfg, sizeof(cfg), pdMS_TO_TICKS(100));
 
     ESP_ERROR_CHECK(esp_event_handler_instance_register_with(view_event_handle, 
                                                             VIEW_EVENT_BASE, VIEW_EVENT_BRIGHTNESS_UPDATE, 

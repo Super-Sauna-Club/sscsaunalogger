@@ -21,11 +21,11 @@ static void __btn_click_callback(void* arg)
         ESP_LOGI("btn", "click, off");
         indicator_display_off();
         st = 0;
-        esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SCREEN_CTRL, &st, sizeof(st), portMAX_DELAY);
+        esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SCREEN_CTRL, &st, sizeof(st), pdMS_TO_TICKS(100));
     } else {
         ESP_LOGI("btn", "click, on");
         st = 1;
-        esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SCREEN_CTRL, &st, sizeof(st), portMAX_DELAY);
+        esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SCREEN_CTRL, &st, sizeof(st), pdMS_TO_TICKS(100));
         indicator_display_on();
     }
 }

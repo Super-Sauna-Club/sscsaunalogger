@@ -73,6 +73,15 @@ Eine **Session** beginnt mit einem Druck auf `START` am Display und endet mit `S
 
 ## Funktionen
 
+### Neu in v0.4.0 (Saison 2026/27)
+
+- **Auto-Modus:** Die Session startet von selbst, wenn die Kabine aufheizt (> 40 °C und steigend), und endet nach dem Abkühlen. Ein Abend = eine Session, automatisch in **Gänge** geteilt. **Aufgüsse** (Sprung der absoluten Feuchte) und **Lüften** (Temperatur fällt minutenlang, Feuchte sinkt) werden erkannt, alle Kennzahlen pro Aufguss/Gang/Abend berechnet. Abschaltbar unter *Einstellungen → Aufzeichnung*.
+- **Aufgüsse benennen ohne Unterbrechung:** Ein dezenter Hinweis (kein Popup) führt zur Ereignisliste; pro Aufguss Saunameister, Name/Thema, Duft und Teilnehmer – jederzeit, auch Tage später. Fehlalarme lassen sich entfernen, vergessene Aufgüsse nachtragen.
+- **RP2040 = autonomer Rekorder:** Aufzeichnung, Erkennung und Statistik laufen auf dem Sensor-Chip. ESP32-Neustarts unterbrechen nichts mehr; nach Watchdog-Reset oder Stromausfall wird die Session fortgesetzt (`RESUME`-Marker).
+- **Sensorschutz:** Kein automatisches Ausheizen mehr (hilft gegen Aroma-Öle nicht). Nur noch ein bewachter **Selbsttest** bei kalter Kabine; der Heater wird nach jedem Init und jede Minute per Status-Register auf AUS geprüft. Live-Erkennung eines „blinden“ Feuchtefühlers (Feuchte reagiert nicht auf Temperaturänderungen).
+- **Stabilität:** PSRAM/Flash 80 MHz statt 120 MHz (reproduzierbare Heap-Korruption nach Kaltstart), UART-Protokoll v2 mit Längenprüfung/ACK/CRC, 4-KB-Empfangspuffer am RP2040, IO-Expander-Fix (ESP32-Boot hat den RP2040 zurückgesetzt), monotone Uhr ohne WLAN.
+
+
 - **2-Hz-Dauer-Aufzeichnung** von Kabinentemperatur und Luftfeuchte über die ganze Session — keine Boost-Phasen, keine Modus-Umschaltung. Aufgüsse werden post-hoc als Anzahl im Save-Formular eingetragen, die charakteristischen RH/Temp-Spikes bleiben in der Roh-CSV erhalten und sind im Detail-Chart gut sichtbar.
 - **Touch-bedienbares UI** mit Live-Kurve, History-Liste, Detail-Charts und kategorisierten Settings-Submenüs — komplett offline ohne Smartphone bedienbar.
 - **Detail-Chart-Puffer:** 7200 Slots im PSRAM, das deckt eine Stunde durchgehend in voller 2-Hz-Auflösung ab.
@@ -435,6 +444,20 @@ t_elapsed_s,temp,rh,aufguss
 | `rh` | relative Luftfeuchte in % |
 | `aufguss` | Marker-Name in der Zeile, in der ein Aufguss-Button-Druck stattfand. **Seit v0.3.1 immer leer**, weil der Live-Aufguss-Button entfernt wurde — die Spalte bleibt erhalten, damit ältere Sessions weiterhin lesbar sind. |
 
+### CSV v2 (ab v0.4.0)
+
+```
+t_ms,temp,rh,q,event
+0,76.29,8.72,0,START_AUTO
+652000,74.87,16.53,0,A1
+1265000,67.22,12.77,0,L1+
+2600000,65.28,10.27,0,L1-;G2
+```
+
+`t_ms` = Millisekunden seit Start; `temp`/`rh` bleiben **leer**, wenn der Messwert ungültig ist; `q` = Qualitäts-Bits (1 Heater/Abklingen, 2 Feuchte unplausibel, 4 RH ≥ 98 %, 8 Simulation); `event` = `A<n>` Aufguss, `L<n>+`/`L<n>-` Lüften, `G<n>` Gang, `RESUME`, `GAP…`, `SD_GAP`. Die erkannten Ereignisse mit Kennzahlen und Benennungen liegen zusätzlich in `<id>.evt`. `tools/csv_to_chart.py` liest v1 und v2 und zeichnet Aufgüsse und Lüften ein.
+
+**Testen ohne Sauna:** `python3 tools/replay_session.py sessions_extracted/<datei>.csv --speed 20` spielt eine echte Session per USB in den RP2040 (Simulationsmodus, IDs mit `X`/`Y`), `--synthetic` einen ganzen Abend. `make -C tests` testet den Detektor gegen alle aufgezeichneten Sessions.
+
 ### JSON-Sidecar (v0.3.0+)
 
 Neben jeder `<session_id>.csv` legt der RP2040 eine kompakte `<session_id>.json` mit den Metadaten ab — Saunameister, Aufguss-Headline, Teilnehmerzahl, Notizen, Peak-Werte und Zeitstempel. Das macht die SD-Karte zur Source-of-Truth: ein NVS-Verlust auf dem ESP32 (z. B. nach Bootloop-Recovery) lässt sich per *Settings → Speicher → AUS SD WIEDERHERSTELLEN* in Sekunden vollständig wiederherstellen.
@@ -506,7 +529,7 @@ Die Firmware ist gegen die typischen Fehlerquellen einer Saunaumgebung ausgelegt
 - **I²C-Bus-Recovery:** Vor jedem `Wire.begin()` macht die Firmware eine 9-Clock-Recovery-Sequenz, falls ein Slave SDA stuck-LOW hält. Damit löst sich ein Bus-Lock nach Brownout oder Kabel-Glitch ohne Reboot.
 - **Clock-Stretch-Timeout:** I²C-Reads brechen nach 25 ms ab und resetten den Controller, statt das System bis zur Standard-Wire-Stream-Timeout-Grenze (1 s) zu blockieren. Notwendig für Slaves am 2 m Kabel.
 - **Sanity-Range-Checks** auf alle SHT35-Messwerte: Werte außerhalb von −10 … +120 °C oder 0 … 105 % RH werden als Fehler verworfen, auch wenn die CRC stimmt — schützt vor seltenen Bit-Flips am langen Kabel.
-- **Heater-Cycle:** Wenn die Luftfeuchte länger als 60 s bei ≥ 60 % steht, triggert die Firmware den Sensor-internen Heater (33 mW, 1 s), um Polymer-Kondensat nach einem Aufguss zu lösen. Lockout 10 min nach jeder Auslösung, damit der Sensor sich vor dem nächsten Heizpuls wieder thermisch ausgleicht.
+- **Heater nur als Selbsttest (v0.4.0):** Der SHT3x-Heater ist laut Sensirion nur für Plausibilitätstests gedacht. Die Firmware heizt nie automatisch, nur auf Knopfdruck bei kalter Kabine (5–40 °C, keine Session, max. 30 s, höchstens alle 6 h) und prüft danach per Status-Register, dass er aus ist.
 - **NTP-Auto-Retry** bei jedem WLAN-Reconnect, NVS-persistierte Last-Known-Time als Boot-Fallback ohne RTC-Hardware. Ein Warn-Badge im Header zeigt, wenn die Uhrzeit nicht frisch synchronisiert ist.
 - **Boot-Counter und Reset-Reason** beider Prozessoren werden persistiert und in den Settings live angezeigt — bei einem Reboot ohne Eingriff sieht man sofort, welcher Chip gecrasht ist und ob es Watchdog, Brownout oder Panic war.
 - **NVS-Recovery mit Panic-Streak-Schutz:** RTC_NOINIT-Counter zählt aufeinanderfolgende Panics; bei Korruption (z. B. nach Brownout-Cluster) wird die NVS einmalig erased und neu initialisiert, ohne dass die SD-Daten verloren gehen. Ein hoher Threshold (100) verhindert versehentliches Auto-Erase bei einzelnen Crashes.
@@ -548,7 +571,7 @@ Die Firmware deckt aktuell den Kernkreislauf — manuell starten, durchgehend mi
 | `sd=0` dauerhaft | Karte nicht erkannt oder als exFAT formatiert | Karte in **FAT32** neu formatieren |
 | Touch reagiert nicht | Display-Flex-Verbindung | Display-Flex-Kabel neu einstecken, 2+ min stromlos lassen |
 | VOC-Index = NaN in den ersten 5 min (nur D1S) | Erwartetes Verhalten | Warmup des SGP40-Index-Algorithmus abwarten |
-| RH stuck bei 100 % nach Aufguss | Polymer-Kondensat | Heater-Cycle löst sich automatisch nach 60 s aus, Lockout 10 min |
+| „Feuchte unplausibel" | Fühler „blind" (meist Aroma-Kontamination) | Fühler prüfen/reinigen, Selbsttest bei kalter Kabine, ggf. tauschen. Temperatur bleibt gültig. |
 | Display schwarz nach ESP32-Flash | PSRAM-Patch fehlt | [Seeed-Wiki](https://wiki.seeedstudio.com/SenseCAP_Indicator_ESP32_Flash/) befolgen |
 | Uhrzeit beim Start falsch | Strom war weg, kein WLAN seither | Mit WLAN booten (NTP synct automatisch) oder *Settings → Zeit manuell setzen* |
 
