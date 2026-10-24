@@ -254,8 +254,10 @@ esp_err_t bsp_board_sensecap_indicator_init(void)
         Delay(5);
         g_board_lcd_evb_io_expander_ops.set_level(EXPANDER_IO_TP_RESET, 1);
     }
-    g_board_lcd_evb_io_expander_ops.set_direction(EXPANDER_IO_RP2040_RESET, 1);
+    /* sscsaunalogger: erst Pegel HIGH, dann Ausgang - sonst kurzer
+     * Reset-Puls am RP2040 (bricht die Aufzeichnung ab).             */
     g_board_lcd_evb_io_expander_ops.set_level(EXPANDER_IO_RP2040_RESET, 1);
+    g_board_lcd_evb_io_expander_ops.set_direction(EXPANDER_IO_RP2040_RESET, 1);
 
     g_board_lcd_evb_io_expander_ops.set_direction(EXPANDER_IO_BMP_PWR, 1);
     g_board_lcd_evb_io_expander_ops.set_level(EXPANDER_IO_BMP_PWR, 1);

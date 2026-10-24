@@ -8,6 +8,22 @@
 #include <stdlib.h>
 #include <math.h>
 #include "time.h"
+#include <stddef.h>
+#include "indicator_ssc_settings.h"
+
+/* v0.4.0: ACK-Queue (RX-Task -> rp_cmd_task) + Zeit-Sync-Trigger */
+static QueueHandle_t s_ack_queue = NULL;
+static volatile bool s_tsync_now = false;
+typedef struct {
+    uint8_t  cmd;
+    uint16_t len;
+    uint8_t  data[312];
+} rp_cmd_t;
+
+static QueueHandle_t s_cmd_queue = NULL;
+static void rp_cmd_task(void *arg);
+void indicator_sensor_send_time_sync(void);
+void indicator_sensor_send_auto_cfg(void);
 
 #define SENSOR_HISTORY_DATA_DEBUG  0
 /* v0.3.1: hard auf 0 - das war der bootloop-trigger.
@@ -93,26 +109,8 @@ enum  pkt_type {
     PKT_TYPE_SENSOR_HEALTH = 0xC6,
 };
 
-/* Session-Steuerung ESP -> RP (als defines, damit sie ausserhalb des
- * pkt_type-Enums eindeutig bleiben und in den Hex-Kommando-Bereich
- * 0xA0-0xAF passen, der vom RP2040 konsumiert wird).                 */
-#define SSC_CMD_SESSION_START    0xA4
-#define SSC_CMD_SESSION_AUFGUSS  0xA5
-#define SSC_CMD_SESSION_END      0xA6
-#define SSC_CMD_SD_READBACK      0xA7
-/* v0.2.7: anfrage an RP2040 nach boot-status (reset-reason + boot-count).
- * Antwort kommt als 0xC3 mit 5B payload.                                  */
-#define SSC_CMD_GET_RP_STATUS    0xA8
-
-/* v0.3.0: hybrid storage commands - SD-list + meta-push + delete. */
-#define SSC_CMD_LIST_SESSIONS         0xA9
-#define SSC_CMD_SESSION_META_PUSH     0xAA
-#define SSC_CMD_SESSION_DELETE_FILE   0xAB
-#define SSC_CMD_SESSION_DELETE_JSON   0xAC
-
-/* manueller heater-trigger fuer SHT85-filter-recovery.
- * Payload: [1B power] (0=33mW low, 1=200mW high). */
-#define SSC_CMD_SHT85_HEATER          0xAD
+/* v0.4.0: alle ESP->RP-Kommandos (SSC_CMD_*) und RP->ESP-Pakete (SSC_PKT_*)
+ * kommen aus ssc_proto.h (gemeinsam mit dem RP2040-Sketch).          */
 
 
 struct sensor_present_data
@@ -1157,13 +1155,20 @@ static int __data_parse_handle(uint8_t *p_data, ssize_t len)
              * Sofort als event posten - indicator_session ingestiert
              * in NVS. Wir queuen via portMAX_DELAY weil viele packets
              * schnell kommen koennen und drop = verlorene session.    */
-            if (len < 1 + (ssize_t)sizeof(ssc_meta_wire_t)) break;
+            if (len != 1 + (ssize_t)sizeof(ssc_meta_wire_t)) break;
             ssc_meta_wire_t meta;
             memcpy(&meta, &p_data[1], sizeof(meta));
+            if (ssc_meta_check(&meta) < 0) {
+                ESP_LOGW(TAG, "META_RESP CRC falsch - verworfen");
+                break;
+            }
             meta.id[sizeof(meta.id) - 1] = 0;
-            (void)esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
-                                    VIEW_EVENT_SD_META_RESP, &meta, sizeof(meta),
-                                    portMAX_DELAY);
+            /* v0.4.0: kein portMAX_DELAY im UART-Task (blockierte RX). Der
+             * RP2040 taktet LIST mit 25 ms pro Eintrag.                  */
+            if (esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
+                                  VIEW_EVENT_SD_META_RESP, &meta, sizeof(meta),
+                                  pdMS_TO_TICKS(200)) != ESP_OK)
+                ESP_LOGW(TAG, "META_RESP dropped (queue voll) id=%s", meta.id);
             break;
         }
 
@@ -1173,26 +1178,81 @@ static int __data_parse_handle(uint8_t *p_data, ssize_t len)
             uint16_t count = (uint16_t)p_data[1] | ((uint16_t)p_data[2] << 8);
             (void)esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
                                     VIEW_EVENT_SD_META_DONE, &count, sizeof(count),
-                                    portMAX_DELAY);
+                                    pdMS_TO_TICKS(200));
             break;
         }
 
         case PKT_TYPE_SENSOR_HEALTH: {
-            /* SHT85 filter-health vom RP2040. 9B paket inkl. type-byte:
-             * [0xC6][state][last_hp][2B min_since LE][2B count LE][2B std LE] */
-            if (len < 9) break;
-            struct view_data_sensor_health sh;
-            sh.state          = p_data[1];
-            sh.last_heater_hp = p_data[2];
-            sh.minutes_since  = (uint16_t)p_data[3] |
-                                ((uint16_t)p_data[4] << 8);
-            sh.heater_count   = (uint16_t)p_data[5] |
-                                ((uint16_t)p_data[6] << 8);
-            sh.rh_std_x100    = (int16_t)((uint16_t)p_data[7] |
-                                          ((uint16_t)p_data[8] << 8));
+            /* v0.4.0: ssc_sensor_health_t (Sensor-Pflege-Policy) */
+            if (len != 1 + (ssize_t)sizeof(ssc_sensor_health_t)) break;
+            ssc_sensor_health_t sh;
+            memcpy(&sh, &p_data[1], sizeof(sh));
             (void)esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
                                     VIEW_EVENT_SENSOR_HEALTH, &sh, sizeof(sh),
                                     pdMS_TO_TICKS(5));
+            break;
+        }
+
+        case SSC_PKT_SESSION_STATE: {
+            if (len != 1 + (ssize_t)sizeof(ssc_session_state_t)) break;
+            ssc_session_state_t st;
+            memcpy(&st, &p_data[1], sizeof(st));
+            st.id[SSC_ID_LEN - 1] = 0;
+            extern void indicator_session_on_state(const ssc_session_state_t *st);
+            indicator_session_on_state(&st);
+            break;
+        }
+
+        case SSC_PKT_EVENT: {
+            if (len != 1 + (ssize_t)sizeof(ssc_event_msg_t)) break;
+            ssc_event_msg_t m;
+            memcpy(&m, &p_data[1], sizeof(m));
+            m.id[SSC_ID_LEN - 1] = 0;
+            extern void indicator_session_on_event(const ssc_event_msg_t *m);
+            indicator_session_on_event(&m);
+            break;
+        }
+
+        case SSC_PKT_EVENT_REC: {
+            if (len != 1 + (ssize_t)sizeof(ssc_event_full_t)) break;
+            ssc_event_full_t m;
+            memcpy(&m, &p_data[1], sizeof(m));
+            m.id[SSC_ID_LEN - 1] = 0;
+            extern void indicator_session_on_event_rec(const ssc_event_full_t *m);
+            indicator_session_on_event_rec(&m);
+            break;
+        }
+
+        case SSC_PKT_EVENTS_DONE: {
+            if (len != 1 + SSC_ID_LEN + 2) break;
+            char id[SSC_ID_LEN];
+            memcpy(id, &p_data[1], SSC_ID_LEN);
+            id[SSC_ID_LEN - 1] = 0;
+            extern void indicator_session_on_events_done(const char *id, uint8_t n, uint8_t rc);
+            indicator_session_on_events_done(id, p_data[1 + SSC_ID_LEN], p_data[2 + SSC_ID_LEN]);
+            break;
+        }
+
+        case SSC_PKT_ACK: {
+            if (len != 1 + (ssize_t)sizeof(ssc_ack_t)) break;
+            ssc_ack_t a;
+            memcpy(&a, &p_data[1], sizeof(a));
+            if (s_ack_queue) (void)xQueueSend(s_ack_queue, &a, 0);
+            break;
+        }
+
+        case SSC_PKT_HELLO_RESP: {
+            if (len != 1 + (ssize_t)sizeof(ssc_hello_resp_t)) break;
+            ssc_hello_resp_t h;
+            memcpy(&h, &p_data[1], sizeof(h));
+            h.fw[sizeof(h.fw) - 1] = 0;
+            ESP_LOGI(TAG, "RP2040 HELLO proto=%u fw=%s boot=%lu", h.proto, h.fw,
+                     (unsigned long)h.boot_count);
+            if (h.proto != SSC_PROTO_VERSION)
+                ESP_LOGE(TAG, "!!! Protokoll-Mismatch: RP2040=%u ESP32=%u - beide Chips flashen!",
+                         h.proto, SSC_PROTO_VERSION);
+            (void)esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
+                                    VIEW_EVENT_RP_HELLO, &h, sizeof(h), pdMS_TO_TICKS(5));
             break;
         }
 
@@ -1270,8 +1330,12 @@ static void esp32_rp2040_comm_task(void *arg)
     ESP_ERROR_CHECK(uart_param_config(ESP32_COMM_PORT_NUM, &uart_config));
     ESP_ERROR_CHECK(uart_set_pin(ESP32_COMM_PORT_NUM, ESP32_RP2040_TXD, ESP32_RP2040_RXD, ESP32_RP2040_RTS, ESP32_RP2040_CTS));
 
-    __cmd_send(PKT_TYPE_CMD_POWER_ON, NULL, 0);
+    /* v0.4.0: KEIN Legacy-POWER_ON (0xA4) mehr - das war identisch mit
+     * SESSION_START und hat auf dem RP2040 bei jedem ESP32-Boot die
+     * laufende Aufzeichnung beendet (Audit C1/C2).                     */
     cobs_decode_result ret;
+    int64_t next_hello_us = esp_timer_get_time() + 1500 * 1000;
+    int64_t next_tsync_us = esp_timer_get_time() + 1500 * 1000;
 
     /* v0.2.7: timer fuer RP-STATUS-anfrage. Initial nach ~2s (damit RP2040
      * sicher seinen setup() durch hat), dann alle 60s.                    */
@@ -1295,6 +1359,17 @@ static void esp32_rp2040_comm_task(void *arg)
          * als PKT_TYPE_RP_STATUS zurueck und wird an VIEW_EVENT_RP_BOOT_INFO
          * gepostet.                                                        */
         int64_t now_us = esp_timer_get_time();
+        if (next_hello_us && now_us >= next_hello_us) {
+            next_hello_us = 0;
+            uint8_t pv = SSC_PROTO_VERSION;
+            __cmd_send(SSC_CMD_HELLO, &pv, 1);
+            indicator_sensor_send_auto_cfg();
+        }
+        if (now_us >= next_tsync_us || s_tsync_now) {
+            s_tsync_now = false;
+            next_tsync_us = now_us + (int64_t)60 * 1000 * 1000;
+            indicator_sensor_send_time_sync();
+        }
         if (now_us >= next_rp_status_us) {
             next_rp_status_us = now_us + (int64_t)60 * 1000 * 1000;
             __cmd_send(SSC_CMD_GET_RP_STATUS, NULL, 0);
@@ -1690,7 +1765,18 @@ int indicator_sensor_init(void)
     /* Stack in PSRAM. DRAM ist zu knapp; das war ursaechlich der
      * panic-trigger - bei DRAM=1.5KB free hat lvgl-malloc NULL-pointer
      * zurueckgegeben, render-routinen sind ueber NULL gestolpert.       */
-    xTaskCreateWithCaps(esp32_rp2040_comm_task, "esp32_rp2040_comm_task", ESP32_RP2040_COMM_TASK_STACK_SIZE, NULL, 2, NULL, MALLOC_CAP_SPIRAM);
+    s_ack_queue = xQueueCreate(8, sizeof(ssc_ack_t));
+    s_cmd_queue = xQueueCreateWithCaps(16, sizeof(rp_cmd_t), MALLOC_CAP_SPIRAM);
+    if (!s_ack_queue || !s_cmd_queue)
+        ESP_LOGE(TAG, "rp cmd queues alloc failed (ack=%p cmd=%p)", s_ack_queue, s_cmd_queue);
+    if (xTaskCreateWithCaps(esp32_rp2040_comm_task, "esp32_rp2040_comm_task",
+                            ESP32_RP2040_COMM_TASK_STACK_SIZE, NULL, 2, NULL,
+                            MALLOC_CAP_SPIRAM) != pdPASS)
+        ESP_LOGE(TAG, "!!! comm task create FAILED - keine Verbindung zum RP2040");
+    if (s_cmd_queue &&
+        xTaskCreateWithCaps(rp_cmd_task, "rp_cmd", 4096, NULL, 3, NULL,
+                            MALLOC_CAP_SPIRAM) != pdPASS)
+        ESP_LOGE(TAG, "!!! rp_cmd task create FAILED");
 
     /* v0.2.12: legacy sensor_history_data-task disabled. Schrieb periodisch
      * in den NVS-namespace 'sensor_data' fuer die alten luftqualitaets-
@@ -1754,9 +1840,78 @@ int indicator_sensor_get_data(struct view_data_sensor *out_data)
     return 0;
 }
 
-int indicator_sensor_trigger_heater(bool high_power)
-{
-    uint8_t power = high_power ? 1 : 0;
-    return __cmd_send(SSC_CMD_SHT85_HEATER, &power, 1);
+/* ======================================================================= */
+/* v0.4.0: Kommando-Kanal mit ACK                                            */
+/* ======================================================================= */
+/* Zustandsaendernde Kommandos (START/END/META/LABEL/DELETE/...) laufen
+ * ueber eine Queue in einen eigenen Task: senden, auf ACK warten (800 ms),
+ * bis zu 3 Versuche. Das Ergebnis geht als VIEW_EVENT_RP_CMD_RESULT an
+ * UI/Model. Dadurch blockiert niemand (LVGL, Event-Loop) auf dem UART.  */
+
+static void rp_cmd_task(void *arg) {
+    static rp_cmd_t c;
+    while (1) {
+        if (xQueueReceive(s_cmd_queue, &c, portMAX_DELAY) != pdTRUE) continue;
+        ssc_ack_t res = { c.cmd, 0xFF, 0 };   /* 0xFF = keine Antwort */
+        for (int attempt = 0; attempt < 3; attempt++) {
+            xQueueReset(s_ack_queue);
+            __cmd_send(c.cmd, c.len ? c.data : NULL, c.len);
+            int64_t deadline = esp_timer_get_time() + 800 * 1000;
+            ssc_ack_t a;
+            bool got = false;
+            while (esp_timer_get_time() < deadline) {
+                if (xQueueReceive(s_ack_queue, &a, pdMS_TO_TICKS(50)) == pdTRUE &&
+                    a.cmd == c.cmd) { got = true; break; }
+            }
+            if (got) {
+                res = a;
+                /* BAD_LEN/BAD_CRC: Uebertragungsfehler -> nochmal */
+                if (a.rc != SSC_RC_BAD_LEN && a.rc != SSC_RC_BAD_CRC) break;
+            }
+            ESP_LOGW(TAG, "rp cmd 0x%02X versuch %d: %s rc=%u", c.cmd, attempt + 1,
+                     got ? "ack" : "timeout", got ? a.rc : 0);
+        }
+        ESP_LOGI(TAG, "rp cmd 0x%02X -> rc=%u extra=%u", res.cmd, res.rc, res.extra);
+        (void)esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
+                                VIEW_EVENT_RP_CMD_RESULT, &res, sizeof(res),
+                                pdMS_TO_TICKS(100));
+    }
 }
 
+int indicator_sensor_rp_cmd_acked(uint8_t cmd, const void *data, uint16_t len) {
+    if (!s_cmd_queue || len > sizeof(((rp_cmd_t *)0)->data)) return -1;
+    rp_cmd_t c;          /* ~315 B auf dem Aufrufer-Stack (Event-Task: 16 KB) */
+    c.cmd = cmd;
+    c.len = len;
+    if (len) memcpy(c.data, data, len);
+    return xQueueSend(s_cmd_queue, &c, pdMS_TO_TICKS(50)) == pdTRUE ? 0 : -2;
+}
+
+void indicator_sensor_request_time_sync(void) { s_tsync_now = true; }
+
+void indicator_sensor_send_time_sync(void) {
+    time_t now = 0;
+    time(&now);
+    if (now < 1700000000) return;
+    struct tm lt, gt;
+    localtime_r(&now, &lt);
+    gmtime_r(&now, &gt);
+    int32_t off = (lt.tm_hour - gt.tm_hour) * 3600 + (lt.tm_min - gt.tm_min) * 60;
+    int dd = lt.tm_yday - gt.tm_yday;
+    if (lt.tm_year != gt.tm_year) dd = (lt.tm_year > gt.tm_year) ? 1 : -1;
+    off += dd * 86400;
+    struct view_data_time_state ts;
+    extern void indicator_time_state_get(struct view_data_time_state *out);
+    indicator_time_state_get(&ts);
+    ssc_time_sync_t t = { (uint32_t)now, off, ts.source };
+    __cmd_send(SSC_CMD_TIME_SYNC, &t, sizeof(t));
+}
+
+void indicator_sensor_send_auto_cfg(void) {
+    extern ssc_settings_t g_ssc_settings;
+    ssc_auto_cfg_t c;
+    memset(&c, 0, sizeof(c));
+    c.enabled = g_ssc_settings._reserved[0] ? 0 : 1;   /* reserved[0]=1 heisst AUS */
+    c.crc = ssc_crc16(&c, offsetof(ssc_auto_cfg_t, crc));
+    __cmd_send(SSC_CMD_AUTO_CFG, &c, sizeof(c));
+}

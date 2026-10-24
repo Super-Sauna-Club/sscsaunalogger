@@ -8,7 +8,11 @@ CONFIG_IDF_TARGET="esp32s3"
 CONFIG_IDF_EXPERIMENTAL_FEATURES=y
 
 CONFIG_SPIRAM=y
-CONFIG_SPIRAM_SPEED_120M=y
+# v0.4.0: 80 MHz statt 120 MHz. Octal-PSRAM @120 ist laut ESP-IDF
+# experimentell ("works when the temperature is stable") - auf diesem
+# Geraet reproduzierbar zufaellige Panics nach Kaltstart (Heap-Korruption,
+# IllegalInstruction). 80 MHz reicht fuer das 480x480-RGB-Panel @18 MHz.
+CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
 CONFIG_SPIRAM_RODATA=y
@@ -32,7 +36,8 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 # CONFIG_ESP_PHY_REDUCE_TX_POWER=y
 
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
-CONFIG_ESPTOOLPY_FLASHFREQ_120M=y
+# v0.4.0: 80 MHz (siehe SPIRAM_SPEED)
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 
 CONFIG_PARTITION_TABLE_CUSTOM=y
@@ -100,3 +105,4 @@ CONFIG_I2C_BUS_DYNAMIC_CONFIG=n
 # genug (kein durchsatz-traffic, nur NTP + setup). Mit dieser config
 # bootet das geraet auch unter DRAM-druck zuverlaessig durch.
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
+

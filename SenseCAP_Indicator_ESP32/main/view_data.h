@@ -187,20 +187,9 @@ struct view_data_session_meta {
  * little-endian. 302 bytes total. Nicht zu verwechseln mit
  * view_data_session_meta - das ist der ESP32-interne speicher-record
  * mit ggf. abweichenden feld-laengen.                                 */
-struct __attribute__((packed)) ssc_meta_wire {
-    char     id[24];
-    int32_t  start_ts;
-    int32_t  end_ts;
-    char     operator_tag[16];
-    char     aufguss_headline[48];
-    uint16_t participants;
-    char     notes[192];
-    float    peak_temp;
-    float    peak_rh;
-    uint8_t  aufguss_count;
-    uint8_t  _reserved[3];
-};
-typedef struct ssc_meta_wire ssc_meta_wire_t;
+/* v0.4.0: ssc_meta_wire_t + alle Protokoll-v2-Structs kommen aus dem
+ * gemeinsamen Header (RP2040-Sketch src/ssc/ssc_proto.h).            */
+#include "ssc_proto.h"
 
 /* Live-Sample: pro Sekunde vom Session-Modul an die View gepusht. */
 struct view_data_session_live {
@@ -210,6 +199,16 @@ struct view_data_session_live {
     float    peak_temp;
     float    peak_rh;
     uint8_t  aufguss_count;
+    /* v0.4.0: gespiegelter Rekorder-Zustand vom RP2040 */
+    uint8_t  rec_state;     /* SSC_REC_*                     */
+    uint8_t  flags;         /* SSC_SF_*                      */
+    uint8_t  phase;         /* ssc_phase_t                   */
+    uint8_t  gang;
+    uint8_t  n_lueften;
+    uint8_t  n_unlabeled;   /* Aufguesse ohne bestaetigte Angaben */
+    uint8_t  origin;
+    uint8_t  rp_link;       /* 1 = State-Pakete kommen an    */
+    char     id[SSC_SESSION_ID_LEN];
 };
 
 /* Ein History-Listen-Ausschnitt fuer die View (paged loading). */
@@ -354,6 +353,18 @@ enum {
     /* === SHT85 filter-health + heater ================================= */
     VIEW_EVENT_SENSOR_HEALTH,           // struct view_data_sensor_health (vom RP2040)
 
+    /* === v0.4.0: Auto-Modus / Rekorder auf dem RP2040 =================== */
+    VIEW_EVENT_REC_EVENT,               // ssc_event_msg_t   (RP -> UI: neues/aktualisiertes Event)
+    VIEW_EVENT_EVENTS_UPDATED,          // char id[24]       (Event-Liste im Model aktualisiert)
+    VIEW_EVENT_EVENTS_REQ,              // char id[24]       (UI -> Model: Events laden)
+    VIEW_EVENT_EVENT_LABEL_SET,         // ssc_event_label_t (UI -> Model, CRC setzt das Model)
+    VIEW_EVENT_EVENT_ADD,               // NULL              (UI: Aufguss manuell nachtragen)
+    VIEW_EVENT_RP_CMD_RESULT,           // ssc_ack_t         (Ergebnis eines RP-Kommandos)
+    VIEW_EVENT_AUTO_MODE_SET,           // uint8_t           (UI -> Model)
+    VIEW_EVENT_SENSOR_SELFTEST_REQ,     // NULL              (UI -> Model)
+    VIEW_EVENT_SESSION_ENDED,           // struct view_data_session_meta (Session vorbei -> Hinweis)
+    VIEW_EVENT_RP_HELLO,                // ssc_hello_resp_t
+
     VIEW_EVENT_ALL,
 };
 
@@ -407,13 +418,8 @@ struct view_data_rp_boot_info {
  * state-enum: 0=OK, 1=STUCK_LOW, 2=HEATING, 3=RECOVERING.
  * minutes_since: 0xFFFF = noch nie geheizt seit boot.
  * rh_std_x100: rh-stdabweichung der letzten ~5 min, x100 (50 = 0.50 %RH). */
-struct view_data_sensor_health {
-    uint8_t  state;
-    uint8_t  last_heater_hp; /* 0=33mW, 1=200mW */
-    uint16_t minutes_since;
-    uint16_t heater_count;
-    int16_t  rh_std_x100;
-};
+/* v0.4.0: identisch zum Protokoll-Struct (Sensor-Pflege-Policy). */
+#define view_data_sensor_health ssc_sensor_health
 
 
 

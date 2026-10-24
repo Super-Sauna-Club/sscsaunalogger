@@ -119,13 +119,28 @@ static lv_obj_t *home_filter_warn;   /* SHT85-filter-stuck warnsymbol */
 static lv_obj_t *home_recent_list;
 static lv_obj_t *home_status_pill;
 static lv_obj_t *home_probe_badge;   /* DEV/AHT20-FB/SD-warn-Hinweis */
+/* v0.4.0: Auto-Modus-UI */
+static lv_obj_t *scr_events = NULL, *scr_ev_edit = NULL;
+static lv_obj_t *home_start_lbl = NULL, *home_hint_btn = NULL, *home_hint_lbl = NULL;
+static lv_obj_t *live_events_btn = NULL, *live_events_lbl = NULL;
+static lv_obj_t *detail_ev_btn = NULL, *detail_ev_lbl = NULL;
+static struct view_data_session_live s_ui_live;
+static struct view_data_session_meta s_detail_meta;
+static bool s_detail_valid = false;
+static struct view_data_session_meta s_last_ended;
+static bool s_last_ended_valid = false;
+static int64_t s_start_grace_until = 0;
+static void detail_events_update(void);
+static void ui_hints_update(void);
+static void live_status_update(void);
+static void events_open(const char *id, lv_obj_t *ret);
+static void on_events_updated(const char *id);
+static void on_live_events_clicked(lv_event_t *e);
+static void on_home_hint_clicked(lv_event_t *e);
 
 /* Cache der letzten sensor-health: fuers wartungs-submenu beim oeffnen
  * und fuer dashboard-rebuilds nach screen-wechsel.                     */
-static struct view_data_sensor_health g_ui_sht_health = {
-    .state = 0, .last_heater_hp = 0, .minutes_since = 0xFFFF,
-    .heater_count = 0, .rh_std_x100 = 0,
-};
+/* v0.4.0: Health-Cache siehe g_ui_health (Sensor-Screen) */
 
 /* Cache der letzten sauna-temp/rh - fuer live-anzeige im wartungs-menu. */
 static float g_ui_sauna_temp_last = 0.0f;
@@ -423,6 +438,11 @@ static lv_obj_t *scr_set_diag;
 static lv_obj_t *scr_set_danger;
 static lv_obj_t *scr_set_speicher;
 static lv_obj_t *scr_set_sensor_wartung;
+static lv_obj_t *scr_set_aufz = NULL;     /* v0.4.0: Aufzeichnung/Auto-Modus */
+static lv_obj_t *set_auto_sw = NULL;
+static lv_obj_t *wart_test_lbl = NULL;
+static struct view_data_sensor_health g_ui_health;
+static bool g_ui_health_valid = false;
 /* Diag-screen-eigene labels (heap-snapshot, wifi-status, sd/sessions) */
 static lv_obj_t *set_heap_label = NULL;
 static lv_obj_t *set_speicher_label = NULL;
@@ -675,13 +695,18 @@ static lv_obj_t *mini_stat_card(lv_obj_t *parent, const char *topic,
 
 static void on_home_start_clicked(lv_event_t *e) {
     ESP_LOGI(TAG, "on_home_start_clicked -> scr_live");
+    /* v0.4.0: laeuft schon (z.B. Auto-Start) -> nur hinwechseln */
+    if (s_ui_live.rec_state == SSC_REC_RECORDING) {
+        lv_scr_load_anim(scr_live, LV_SCR_LOAD_ANIM_FADE_ON, 240, 0, false);
+        return;
+    }
     live_set_ready_state();
     lv_scr_load_anim(scr_live, LV_SCR_LOAD_ANIM_FADE_ON, 240, 0, false);
 }
 
 static void on_home_history_clicked(lv_event_t *e) {
     esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
-                      VIEW_EVENT_HISTORY_LIST_REQ, NULL, 0, portMAX_DELAY);
+                      VIEW_EVENT_HISTORY_LIST_REQ, NULL, 0, pdMS_TO_TICKS(30));
     lv_scr_load_anim(scr_history, LV_SCR_LOAD_ANIM_OVER_LEFT, 220, 0, false);
 }
 
@@ -976,6 +1001,7 @@ static void build_home(void) {
     lv_obj_align_to(start, vbox, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 8);
     lv_obj_t *sl = lv_label_create(start);
     lv_label_set_text(sl, LV_SYMBOL_PLAY "  SESSION STARTEN");
+    home_start_lbl = sl;
     lv_obj_set_style_text_font(sl, F_MD, 0);
     lv_obj_center(sl);
     lv_obj_add_event_cb(start, on_home_start_clicked, LV_EVENT_CLICKED, NULL);
@@ -1002,6 +1028,19 @@ static void build_home(void) {
     lv_obj_set_style_text_font(hl, F_XS, 0);
     lv_obj_center(hl);
     lv_obj_add_event_cb(histbtn, on_home_history_clicked, LV_EVENT_CLICKED, NULL);
+
+    /* v0.4.0: dezenter Hinweis "Aufguesse benennen" - nie ein Modal. */
+    home_hint_btn = lv_btn_create(rhdr);
+    style_primary_btn(home_hint_btn);
+    lv_obj_set_size(home_hint_btn, 230, 20);
+    lv_obj_set_style_radius(home_hint_btn, 10, 0);
+    lv_obj_align(home_hint_btn, LV_ALIGN_RIGHT_MID, -104, 0);
+    home_hint_lbl = lv_label_create(home_hint_btn);
+    lv_label_set_text(home_hint_lbl, "");
+    lv_obj_set_style_text_font(home_hint_lbl, F_XS, 0);
+    lv_obj_center(home_hint_lbl);
+    lv_obj_add_event_cb(home_hint_btn, on_home_hint_clicked, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_flag(home_hint_btn, LV_OBJ_FLAG_HIDDEN);
 
     /* ===== Recent-sessions-Liste (~140 px, passt in rest der höhe) ===== */
     home_recent_list = lv_list_create(scr_home);
@@ -1100,7 +1139,7 @@ static void on_live_aufguss_clicked(lv_event_t *e) {
     char name[SSC_AUFGUSS_NAME_MAXLEN] = {0};
     esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
                       VIEW_EVENT_SESSION_AUFGUSS, name, sizeof(name),
-                      portMAX_DELAY);
+                      pdMS_TO_TICKS(30));
 }
 
 /* Gemeinsamer Start-Pfad, aufrufbar auch aus dem Confirm-Callback wenn
@@ -1117,7 +1156,9 @@ static void __do_session_start_now(void *user_data) {
     char op[SSC_OPERATOR_MAXLEN] = {0};
     esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
                       VIEW_EVENT_SESSION_START, op, sizeof(op),
-                      portMAX_DELAY);
+                      pdMS_TO_TICKS(30));
+    /* 5 s Kulanz, bis der RP2040-State "RECORDING" meldet */
+    s_start_grace_until = esp_timer_get_time() + 5000000;
     live_set_running_state();
 }
 
@@ -1154,7 +1195,7 @@ static void on_live_stop_clicked(lv_event_t *e) {
     if (!live_running) return;
     esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
                       VIEW_EVENT_SESSION_END_REQUEST, NULL, 0,
-                      portMAX_DELAY);
+                      pdMS_TO_TICKS(30));
     live_running = false;
     live_set_button_states(false, false, false, true);
     if (live_status_label) lv_label_set_text(live_status_label, "SPEICHERE...");
@@ -1166,13 +1207,24 @@ static void on_live_stop_clicked(lv_event_t *e) {
     ESP_LOGI(TAG, "scr_summary geladen");
 }
 
+static void do_live_cancel(void *ud) {
+    (void)ud;
+    esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
+                      VIEW_EVENT_SESSION_DISCARD, NULL, 0, pdMS_TO_TICKS(30));
+    live_running = false;
+    s_start_grace_until = 0;
+    lv_scr_load_anim(scr_home, LV_SCR_LOAD_ANIM_FADE_ON, 240, 0, false);
+}
+
 static void on_live_cancel_clicked(lv_event_t *e) {
-    /* Wenn session schon laeuft, Discard feuern (schliesst SD etc). */
-    if (live_running) {
-        esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
-                          VIEW_EVENT_SESSION_DISCARD, NULL, 0,
-                          portMAX_DELAY);
-        live_running = false;
+    /* v0.4.0 (Audit M9): laufende Session nur nach Rueckfrage verwerfen.
+     * Ohne laufende Session ist der Knopf einfach "zurueck".            */
+    if (live_running || s_ui_live.rec_state == SSC_REC_RECORDING) {
+        show_confirm("SESSION ABBRECHEN",
+                     "aufzeichnung beenden und komplett loeschen?\n"
+                     "(zum normalen beenden: STOPPEN)",
+                     "LOESCHEN", do_live_cancel, NULL);
+        return;
     }
     lv_scr_load_anim(scr_home, LV_SCR_LOAD_ANIM_FADE_ON, 240, 0, false);
 }
@@ -1248,7 +1300,7 @@ static void build_live(void) {
     lv_label_set_text(live_timer_val, "00:00");
     lv_obj_set_style_text_color(live_timer_val, SSC_C_TEXT, 0);
     lv_obj_set_style_text_font(live_timer_val, F_MD, 0);
-    lv_obj_align(live_timer_val, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_align(live_timer_val, LV_ALIGN_CENTER, 30, 0);
 
     /* v0.3.1: aufguss-counter im LIVE-screen ausgeblendet - aufguss-
      * button ist auch weg, niemand klickt das in der heissen sauna.
@@ -1256,6 +1308,19 @@ static void build_live(void) {
     live_aufguss_count_val = lv_label_create(top);
     lv_label_set_text(live_aufguss_count_val, "");
     lv_obj_add_flag(live_aufguss_count_val, LV_OBJ_FLAG_HIDDEN);
+
+    /* v0.4.0: Ereignis-Chip (Aufguesse / offen) -> Ereignisliste */
+    live_events_btn = lv_btn_create(top);
+    style_primary_btn(live_events_btn);
+    lv_obj_set_size(live_events_btn, 150, 28);
+    lv_obj_set_style_radius(live_events_btn, 14, 0);
+    lv_obj_align(live_events_btn, LV_ALIGN_RIGHT_MID, 0, 0);
+    live_events_lbl = lv_label_create(live_events_btn);
+    lv_label_set_text(live_events_lbl, "");
+    lv_obj_set_style_text_font(live_events_lbl, F_XS, 0);
+    lv_obj_center(live_events_lbl);
+    lv_obj_add_event_cb(live_events_btn, on_live_events_clicked, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_flag(live_events_btn, LV_OBJ_FLAG_HIDDEN);
 
     /* Value-Zeile: Temp | RH | Peak */
     lv_obj_t *vrow = lv_obj_create(scr_live);
@@ -1531,6 +1596,10 @@ static void on_summary_save_clicked(lv_event_t *e) {
     }
     strncpy(meta.notes, lv_textarea_get_text(sum_notes_ta),
             SSC_NOTES_MAXLEN - 1);
+    /* N2: immer terminieren */
+    meta.operator_tag[SSC_OPERATOR_MAXLEN - 1] = 0;
+    meta.aufguss_headline[SSC_AUFGUSS_NAME_MAXLEN - 1] = 0;
+    meta.notes[SSC_NOTES_MAXLEN - 1] = 0;
 
     if (sum_edit_mode) {
         /* Edit-flow: session_store_update, zurueck auf detail */
@@ -1540,7 +1609,7 @@ static void on_summary_save_clicked(lv_event_t *e) {
                  (unsigned)strlen(meta.notes));
         esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
                           VIEW_EVENT_SESSION_EDIT, &meta, sizeof(meta),
-                          portMAX_DELAY);
+                          pdMS_TO_TICKS(30));
         /* Detail-screen-labels sofort mit den neuen werten aktualisieren,
          * damit der user die aenderung ohne screen-wechsel sieht. Die
          * hist_cached[]-tabelle wird kurz darauf vom HISTORY_LIST-event
@@ -1571,12 +1640,13 @@ static void on_summary_save_clicked(lv_event_t *e) {
         lv_scr_load_anim(scr_detail, LV_SCR_LOAD_ANIM_FADE_ON, 240, 0, false);
     } else {
         /* Save-flow (frische session beenden) */
+        if (s_last_ended_valid && strcmp(s_last_ended.id, meta.id) == 0) s_last_ended_valid = false;
         esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
                           VIEW_EVENT_SESSION_SAVE, &meta, sizeof(meta),
-                          portMAX_DELAY);
+                          pdMS_TO_TICKS(30));
         /* History neu laden damit home-recent + history-liste aktualisiert. */
         esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
-                          VIEW_EVENT_HISTORY_LIST_REQ, NULL, 0, portMAX_DELAY);
+                          VIEW_EVENT_HISTORY_LIST_REQ, NULL, 0, pdMS_TO_TICKS(30));
         lv_scr_load_anim(scr_home, LV_SCR_LOAD_ANIM_FADE_ON, 240, 0, false);
     }
 }
@@ -1588,9 +1658,8 @@ static void on_summary_discard_clicked(lv_event_t *e) {
         lv_scr_load_anim(scr_detail, LV_SCR_LOAD_ANIM_FADE_ON, 240, 0, false);
         return;
     }
-    /* Neue session verwerfen */
-    esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
-                      VIEW_EVENT_SESSION_DISCARD, NULL, 0, portMAX_DELAY);
+    /* v0.4.0: Session ist bereits gespeichert - "SPAETER" geht nur heim.
+     * Der Hinweis auf dem Home-Screen bleibt, Angaben jederzeit nachtragbar. */
     lv_scr_load_anim(scr_home, LV_SCR_LOAD_ANIM_FADE_ON, 240, 0, false);
 }
 
@@ -1790,7 +1859,7 @@ static void build_summary(void) {
     style_ghost_btn(dc);
     lv_obj_set_size(dc, 146, 52);
     sum_discard_btn_label = lv_label_create(dc);
-    lv_label_set_text(sum_discard_btn_label, "VERWERFEN");
+    lv_label_set_text(sum_discard_btn_label, "SPAETER");
     lv_obj_set_style_text_font(sum_discard_btn_label, F_SM, 0);
     lv_obj_center(sum_discard_btn_label);
     lv_obj_add_event_cb(dc, on_summary_discard_clicked, LV_EVENT_CLICKED, NULL);
@@ -1833,6 +1902,11 @@ static void on_history_row_clicked(lv_event_t *e) {
     const struct view_data_session_meta *m = &hist_cached[idx];
     /* Index merken: detail-screen nutzt ihn fuer edit/delete */
     sum_edit_hist_idx = (int)idx;
+    /* v0.4.0 (Audit M8): Kopie per ID statt Index in eine Liste, die
+     * sich im Hintergrund neu sortieren kann.                         */
+    s_detail_meta = *m;
+    s_detail_valid = true;
+    if (detail_ev_lbl) lv_label_set_text(detail_ev_lbl, "ereignisse: lade ...");
     /* Duration fuer X-Achsen-Labels - wird im DETAIL_DONE-Handler benutzt. */
     s_detail_duration_s = (m->end_ts > m->start_ts)
                           ? (uint32_t)(m->end_ts - m->start_ts) : 0;
@@ -1842,7 +1916,7 @@ static void on_history_row_clicked(lv_event_t *e) {
     ESP_LOGI(TAG, "  -> DETAIL_REQ post sid='%s'", sid);
     esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
                       VIEW_EVENT_HISTORY_DETAIL_REQ,
-                      sid, SSC_SESSION_ID_LEN, portMAX_DELAY);
+                      sid, SSC_SESSION_ID_LEN, pdMS_TO_TICKS(30));
 
     if (detail_title) lv_label_set_text(detail_title, m->id);
     if (detail_sub) {
@@ -2000,38 +2074,35 @@ static void on_detail_back_clicked(lv_event_t *e) {
 }
 
 static void do_detail_delete(void *user_data) {
-    if (sum_edit_hist_idx < 0 || sum_edit_hist_idx >= hist_cache_count) return;
-    const char *id = hist_cached[sum_edit_hist_idx].id;
+    if (!s_detail_valid) return;
+    const char *id = s_detail_meta.id;
     ESP_LOGI(TAG, "do_detail_delete sid=%s", id);
     esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
                       VIEW_EVENT_HISTORY_DELETE, id, SSC_SESSION_ID_LEN,
-                      portMAX_DELAY);
+                      pdMS_TO_TICKS(30));
     /* nach kurzer wartezeit wird die neue liste automatisch gepostet
      * vom session-modul-handler (delete loescht + on_history_list_req). */
     sum_edit_hist_idx = -1;
+    s_detail_valid = false;
     lv_scr_load_anim(scr_history, LV_SCR_LOAD_ANIM_OVER_RIGHT, 220, 0, false);
 }
 
 static void on_detail_delete_clicked(lv_event_t *e) {
     (void)e;
-    if (sum_edit_hist_idx < 0 || sum_edit_hist_idx >= hist_cache_count) return;
+    if (!s_detail_valid) return;
+    if (s_ui_live.rec_state == SSC_REC_RECORDING && strcmp(s_ui_live.id, s_detail_meta.id) == 0) return;
     char body[128];
     snprintf(body, sizeof(body),
              "session %s\nwirklich unwiderruflich loeschen?",
-             hist_cached[sum_edit_hist_idx].id);
+             s_detail_meta.id);
     show_confirm("SESSION LOESCHEN", body, "LOESCHEN",
                  do_detail_delete, NULL);
 }
 
 static void on_detail_edit_clicked(lv_event_t *e) {
     (void)e;
-    if (sum_edit_hist_idx < 0 || sum_edit_hist_idx >= hist_cache_count) return;
-    if (indicator_session_is_active()) {
-        /* Defensive: edit waehrend live-session blocken */
-        ESP_LOGW(TAG, "edit denied: session is live");
-        return;
-    }
-    const struct view_data_session_meta *m = &hist_cached[sum_edit_hist_idx];
+    if (!s_detail_valid) return;
+    const struct view_data_session_meta *m = &s_detail_meta;
     ESP_LOGI(TAG, "on_detail_edit_clicked sid=%s", m->id);
     sum_edit_mode = true;
     summary_prefill(m);
@@ -2183,7 +2254,7 @@ static void on_time_modal_ok(lv_event_t *e) {
              m.year, m.mon, m.day, m.hour, m.minute, m.sec);
     esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
                       VIEW_EVENT_TIME_MANUAL_SET, &m, sizeof(m),
-                      portMAX_DELAY);
+                      pdMS_TO_TICKS(30));
     time_modal_close();
 }
 
@@ -2387,6 +2458,11 @@ static void settings_update_diag_label(void) {
     lv_label_set_text(set_diag_label, buf);
 }
 
+static void on_detail_events_clicked(lv_event_t *e) {
+    (void)e;
+    if (s_detail_valid) events_open(s_detail_meta.id, scr_detail);
+}
+
 static void build_detail(void) {
     scr_detail = lv_obj_create(NULL);
     style_screen(scr_detail);
@@ -2500,6 +2576,17 @@ static void build_detail(void) {
     lv_obj_add_flag(detail_spinner, LV_OBJ_FLAG_HIDDEN);
 
     /* Button-row unten: BEARBEITEN | LOESCHEN | ZURUECK */
+    /* v0.4.0: Ereignis-Zusammenfassung + Zugang zur Ereignisliste */
+    detail_ev_btn = lv_btn_create(scr_detail);
+    style_ghost_btn(detail_ev_btn);
+    lv_obj_set_size(detail_ev_btn, 456, 26);
+    lv_obj_align(detail_ev_btn, LV_ALIGN_TOP_LEFT, 0, 414);
+    detail_ev_lbl = lv_label_create(detail_ev_btn);
+    lv_label_set_text(detail_ev_lbl, "ereignisse");
+    lv_obj_set_style_text_font(detail_ev_lbl, F_XS, 0);
+    lv_obj_center(detail_ev_lbl);
+    lv_obj_add_event_cb(detail_ev_btn, on_detail_events_clicked, LV_EVENT_CLICKED, NULL);
+
     lv_obj_t *btn_edit = lv_btn_create(scr_detail);
     lv_obj_set_size(btn_edit, 142, 38);
     lv_obj_align(btn_edit, LV_ALIGN_BOTTOM_LEFT, 0, 0);
@@ -2680,7 +2767,7 @@ static void on_wifi_connect_clicked(lv_event_t *e) {
     }
     esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
                       VIEW_EVENT_WIFI_CONNECT, &cfg, sizeof(cfg),
-                      portMAX_DELAY);
+                      pdMS_TO_TICKS(30));
 }
 
 static void on_http_apply_clicked(lv_event_t *e) {
@@ -2690,7 +2777,7 @@ static void on_http_apply_clicked(lv_event_t *e) {
     strncpy(c.bearer_token, lv_textarea_get_text(set_http_token_ta),
             sizeof(c.bearer_token) - 1);
     esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
-                      VIEW_EVENT_HTTP_CFG_APPLY, &c, sizeof(c), portMAX_DELAY);
+                      VIEW_EVENT_HTTP_CFG_APPLY, &c, sizeof(c), pdMS_TO_TICKS(30));
 }
 
 /* Parst operator-liste aus textarea - entweder komma-getrennt oder
@@ -2729,14 +2816,14 @@ static void on_operators_apply_clicked(lv_event_t *e) {
     parse_operators(lv_textarea_get_text(set_operators_ta), &p);
     esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
                       VIEW_EVENT_OPERATOR_PRESETS_UPDATE, &p, sizeof(p),
-                      portMAX_DELAY);
+                      pdMS_TO_TICKS(30));
 }
 
 static void do_wipe_all(void *user_data) {
     (void)user_data;
     ESP_LOGW(TAG, "user confirmed WIPE ALL sessions");
     esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
-                      VIEW_EVENT_HISTORY_WIPE_ALL, NULL, 0, portMAX_DELAY);
+                      VIEW_EVENT_HISTORY_WIPE_ALL, NULL, 0, pdMS_TO_TICKS(30));
 }
 
 static void on_wipe_all_clicked(lv_event_t *e) {
@@ -3011,27 +3098,68 @@ static void on_cat_sensor_wartung_clicked(lv_event_t *e) {
     lv_scr_load_anim(scr_set_sensor_wartung, LV_SCR_LOAD_ANIM_OVER_LEFT, 220, 0, false);
 }
 
-/* Sanft ausheizen (33 mW). Kein modal - low-power ist harmlos.        */
-static void on_heater_btn_low_clicked(lv_event_t *e) {
+/* v0.4.0 Sensor-Pflege: KEIN Ausheizen mehr. Der Heater des SHT3x ist
+ * laut Sensirion nur fuer Plausibilitaetstests gedacht und hilft gegen
+ * Aroma-Kontamination im heissen Zustand nicht. Der RP2040 bietet einen
+ * bewachten Selbsttest (nur kalte Kabine, keine Session, max 30 s).   */
+static void do_selftest(void *ud) {
+    (void)ud;
+    esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
+                      VIEW_EVENT_SENSOR_SELFTEST_REQ, NULL, 0, pdMS_TO_TICKS(30));
+    if (wart_test_lbl) lv_label_set_text(wart_test_lbl, "selbsttest angefordert ...");
+}
+static void on_selftest_clicked(lv_event_t *e) {
     (void)e;
-    indicator_sensor_trigger_heater(false);
+    show_confirm("SENSOR-SELBSTTEST",
+                 "nur bei KALTER kabine (5-40 grad) und ohne session.\n"
+                 "der fuehler heizt 30 s ganz leicht und prueft,\n"
+                 "ob die feuchte noch richtig reagiert. dauer ~1 min.",
+                 "STARTEN", do_selftest, NULL);
 }
 
-/* Lang ausheizen (30 s heater on): confirmation-modal, weil RP2040
- * waehrend der 30 s blockiert ist (keine messdaten-updates). Plus die
- * naechsten ~60 s state=RECOVERING. User soll bewusst klicken.        */
-static void do_heater_high(void *ud) {
-    (void)ud;
-    indicator_sensor_trigger_heater(true);
+static void on_set_auto_changed(lv_event_t *e) {
+    lv_obj_t *sw = lv_event_get_target(e);
+    uint8_t on = lv_obj_has_state(sw, LV_STATE_CHECKED) ? 1 : 0;
+    esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
+                      VIEW_EVENT_AUTO_MODE_SET, &on, sizeof(on), pdMS_TO_TICKS(30));
 }
-static void on_heater_btn_high_clicked(lv_event_t *e) {
+
+static void build_set_aufz(void) {
+    if (scr_set_aufz) return;
+    scr_set_aufz = lv_obj_create(NULL);
+    style_screen(scr_set_aufz);
+    make_sub_header(scr_set_aufz, "AUFZEICHNUNG");
+    lv_obj_t *body = make_sub_body(scr_set_aufz);
+    make_toggle_row(body, "AUTO-START / AUTO-ENDE", &set_auto_sw,
+                    "session startet beim aufheizen, endet beim abkuehlen",
+                    g_ssc_settings._reserved[0] == 0, on_set_auto_changed);
+    lv_obj_t *t = lv_label_create(body);
+    lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(t, 420);
+    lv_obj_set_style_text_color(t, SSC_C_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(t, F_XS, 0);
+    lv_label_set_text(t,
+        "so funktioniert der auto-modus:\n"
+        "- start: kabine ueber 40 grad und steigend (oder 2 min ueber 60)\n"
+        "- ein abend = eine session, automatisch in gaenge geteilt\n"
+        "- aufguesse erkennt das geraet an der feuchte (+10 g/m3 in 30 s)\n"
+        "- lueften: temperatur faellt minutenlang, feuchte sinkt\n"
+        "- ende: kabine unter 45 grad bzw. 25 grad unter dem peak\n\n"
+        "aufguesse benennen (saunameister, name, duft, teilnehmer):\n"
+        "jederzeit ueber den hinweis auf dem start-screen oder die\n"
+        "ereignisliste - die messung wird dabei nie unterbrochen.\n\n"
+        "STARTEN/STOPPEN funktionieren weiterhin manuell. die\n"
+        "aufzeichnung laeuft auf dem sensor-chip und ueberlebt\n"
+        "neustarts und stromausfaelle (wird fortgesetzt).");
+}
+static void on_cat_aufz_clicked(lv_event_t *e) {
     (void)e;
-    show_confirm("LANG AUSHEIZEN",
-                 "heizer laeuft 30 sekunden.\n"
-                 "danach ca. 1 minute warten -\n"
-                 "rh-werte sind solange verfaelscht.\n\n"
-                 "fuer hartnaeckig verstopften filter.",
-                 "LOS GEHTS", do_heater_high, NULL);
+    build_set_aufz();
+    if (set_auto_sw) {
+        if (g_ssc_settings._reserved[0] == 0) lv_obj_add_state(set_auto_sw, LV_STATE_CHECKED);
+        else lv_obj_clear_state(set_auto_sw, LV_STATE_CHECKED);
+    }
+    lv_scr_load_anim(scr_set_aufz, LV_SCR_LOAD_ANIM_OVER_LEFT, 220, 0, false);
 }
 
 static void on_cat_danger_clicked(lv_event_t *e) {
@@ -3349,33 +3477,6 @@ static void on_set_recover_sd_clicked(lv_event_t *e)
     }
 }
 
-/* v0.3.0+: einmaliger fix fuer die 6 sessions die vor dem TZ-fix
- * recovered wurden. Wipe NVS, kicke alte JSON-sidecars von SD,
- * resync laeuft mit synthesize_meta_from_csv (TZ-korrekt), dann
- * wird operator/aufguss aus dem hardcoded mapping nachgepatcht.    */
-static void do_fix_legacy_sessions(void *user_data) {
-    (void)user_data;
-    esp_err_t e = esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
-                                    VIEW_EVENT_HISTORY_FIX_LEGACY,
-                                    NULL, 0, pdMS_TO_TICKS(200));
-    if (e != ESP_OK) ESP_LOGE(TAG, "fix_legacy post failed: %d", e);
-    if (set_speicher_label) {
-        lv_label_set_text(set_speicher_label,
-            "fix laeuft ... ~10 sekunden.\n"
-            "history-liste refreshed automatisch wenn fertig.");
-    }
-}
-
-static void on_set_fix_legacy_clicked(lv_event_t *e) {
-    (void)e;
-    show_confirm("ALTE SESSIONS REPARIEREN",
-                 "fix fuer die 6 v0.3-recovered sessions:\n"
-                 "- uhrzeit aus dateinamen neu berechnen (TZ-fix)\n"
-                 "- saunameister aus mapping setzen\n"
-                 "messdaten in CSV bleiben unveraendert.",
-                 "JA, FIXEN", do_fix_legacy_sessions, NULL);
-}
-
 static void build_set_speicher(void)
 {
     if (scr_set_speicher) return;
@@ -3404,19 +3505,6 @@ static void build_set_speicher(void)
     lv_obj_add_event_cb(recover_btn, on_set_recover_sd_clicked,
                         LV_EVENT_CLICKED, NULL);
 
-    /* v0.3.0+: einmaliger legacy-fix-button (TZ + operator-namen). */
-    lv_obj_t *fix_btn = lv_btn_create(body);
-    style_primary_btn(fix_btn);
-    lv_obj_set_size(fix_btn, 420, 42);
-    lv_obj_set_style_bg_color(fix_btn, lv_color_hex(0x4a4a2a), 0);
-    lv_obj_set_style_bg_color(fix_btn, lv_color_hex(0x6a6a3a), LV_STATE_PRESSED);
-    lv_obj_t *fl = lv_label_create(fix_btn);
-    lv_label_set_text(fl, LV_SYMBOL_REFRESH "  ALTE SESSIONS REPARIEREN");
-    lv_obj_set_style_text_font(fl, F_SM, 0);
-    lv_obj_center(fl);
-    lv_obj_add_event_cb(fix_btn, on_set_fix_legacy_clicked,
-                        LV_EVENT_CLICKED, NULL);
-
     lv_obj_t *hint = lv_label_create(body);
     lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
     lv_label_set_text(hint,
@@ -3431,81 +3519,52 @@ static void build_set_speicher(void)
     lv_obj_set_style_text_font(hint, F_XS, 0);
 }
 
-/* SENSOR / WARTUNG: live rh/temp + filter-status + manueller heater.  */
+/* SENSOR: live-werte, gesundheit, bewachter selbsttest, pflege-tipps. */
+static lv_obj_t *wart_mk_label(lv_obj_t *body, const lv_font_t *f, lv_color_t c, const char *txt) {
+    lv_obj_t *l = lv_label_create(body);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(l, 420);
+    lv_obj_set_style_text_color(l, c, 0);
+    lv_obj_set_style_text_font(l, f, 0);
+    lv_label_set_text(l, txt);
+    return l;
+}
+
 static void build_set_sensor_wartung(void)
 {
     if (scr_set_sensor_wartung) return;
     scr_set_sensor_wartung = lv_obj_create(NULL);
     style_screen(scr_set_sensor_wartung);
-    make_sub_header(scr_set_sensor_wartung, "SENSOR / WARTUNG");
+    make_sub_header(scr_set_sensor_wartung, "SENSOR");
     lv_obj_t *body = make_sub_body(scr_set_sensor_wartung);
 
-    /* LIVE-WERTE-ZEILE: das wichtigste damit man sofort sieht ob das
-     * ausheizen wirkt (anhauchen -> rh sollte sichtbar steigen).      */
-    wart_live_lbl = lv_label_create(body);
-    lv_obj_set_width(wart_live_lbl, 420);
-    lv_obj_set_style_text_color(wart_live_lbl, SSC_C_ACCENT, 0);
-    lv_obj_set_style_text_font(wart_live_lbl, F_LG, 0);
+    wart_live_lbl = wart_mk_label(body, F_LG, SSC_C_ACCENT, "-- grad   -- %");
     lv_obj_set_style_text_align(wart_live_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(wart_live_lbl, "rh  -- %    temp  -- \xC2\xB0""C");
+    wart_status_lbl = wart_mk_label(body, F_SM, SSC_C_TEXT, "zustand: lade ...");
+    wart_std_lbl = wart_mk_label(body, F_XS, SSC_C_TEXT_FAINT, "");
 
-    lv_obj_t *test_hint = lv_label_create(body);
-    lv_obj_set_width(test_hint, 420);
-    lv_obj_set_style_text_color(test_hint, SSC_C_TEXT_FAINT, 0);
-    lv_obj_set_style_text_font(test_hint, F_XS, 0);
-    lv_obj_set_style_text_align(test_hint, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(test_hint,
-        "test: sensor anhauchen -> rh soll spuerbar steigen");
+    lv_obj_t *btn = lv_btn_create(body);
+    style_primary_btn(btn);
+    lv_obj_set_size(btn, 420, 50);
+    lv_obj_t *bl = lv_label_create(btn);
+    lv_label_set_text(bl, LV_SYMBOL_EYE_OPEN "  SELBSTTEST (nur kalte kabine)");
+    lv_obj_set_style_text_font(bl, F_SM, 0);
+    lv_obj_center(bl);
+    lv_obj_add_event_cb(btn, on_selftest_clicked, LV_EVENT_CLICKED, NULL);
+    wart_test_lbl = wart_mk_label(body, F_XS, SSC_C_TEXT_MUTED, "letzter selbsttest: -");
 
-    /* FILTER-STATUS - eine zeile, kompakt. */
-    wart_status_lbl = lv_label_create(body);
-    lv_obj_set_width(wart_status_lbl, 420);
-    lv_obj_set_style_text_color(wart_status_lbl, SSC_C_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(wart_status_lbl, F_SM, 0);
-    lv_label_set_text(wart_status_lbl, "filter: lade ...");
-
-    /* Zwei buttons direkt - keine sektionen-titel mehr, spart platz. */
-    lv_obj_t *btn_low = lv_btn_create(body);
-    style_primary_btn(btn_low);
-    lv_obj_set_size(btn_low, 420, 44);
-    lv_obj_t *ll = lv_label_create(btn_low);
-    lv_label_set_text(ll, LV_SYMBOL_REFRESH "  KURZ AUSHEIZEN  (5 s)");
-    lv_obj_set_style_text_font(ll, F_SM, 0);
-    lv_obj_center(ll);
-    lv_obj_add_event_cb(btn_low, on_heater_btn_low_clicked,
-                        LV_EVENT_CLICKED, NULL);
-
-    lv_obj_t *btn_high = lv_btn_create(body);
-    style_primary_btn(btn_high);
-    lv_obj_set_size(btn_high, 420, 44);
-    lv_obj_set_style_bg_color(btn_high, lv_color_hex(0x6a3a2a), 0);
-    lv_obj_set_style_bg_color(btn_high, lv_color_hex(0x8a4a3a), LV_STATE_PRESSED);
-    lv_obj_t *hl = lv_label_create(btn_high);
-    lv_label_set_text(hl, LV_SYMBOL_WARNING "  LANG AUSHEIZEN  (30 s)");
-    lv_obj_set_style_text_font(hl, F_SM, 0);
-    lv_obj_center(hl);
-    lv_obj_add_event_cb(btn_high, on_heater_btn_high_clicked,
-                        LV_EVENT_CLICKED, NULL);
-
-    /* counter-zeilen ganz nach unten - weniger wichtig, klein. */
-    wart_lastheat_lbl = lv_label_create(body);
-    lv_obj_set_width(wart_lastheat_lbl, 420);
-    lv_obj_set_style_text_color(wart_lastheat_lbl, SSC_C_TEXT_FAINT, 0);
-    lv_obj_set_style_text_font(wart_lastheat_lbl, F_XS, 0);
-    lv_label_set_text(wart_lastheat_lbl, "letztes ausheizen: -");
-
-    wart_count_lbl = lv_label_create(body);
-    lv_obj_set_width(wart_count_lbl, 420);
-    lv_obj_set_style_text_color(wart_count_lbl, SSC_C_TEXT_FAINT, 0);
-    lv_obj_set_style_text_font(wart_count_lbl, F_XS, 0);
-    lv_label_set_text(wart_count_lbl, "ausheizungen seit boot: -");
-
-    wart_std_lbl = lv_label_create(body);
-    lv_obj_set_width(wart_std_lbl, 420);
-    lv_obj_set_style_text_color(wart_std_lbl, SSC_C_TEXT_FAINT, 0);
-    lv_obj_set_style_text_font(wart_std_lbl, F_XS, 0);
-    lv_label_set_text(wart_std_lbl,
-        "rh-varianz: -   (gesund >1.0, stuck <0.5)");
+    wart_mk_label(body, F_XS, SSC_C_TEXT_MUTED,
+        "FUEHLER LANGE GESUND HALTEN:\n"
+        "- seitlich 15-20 cm unter der decke, NICHT ueber dem ofen\n"
+        "- spitze nach unten, kabel mit tropfschlaufe\n"
+        "- aroma immer im aufgusswasser verduennen, nie richtung\n"
+        "  fuehler spruehen, keine menthol-kristalle in der naehe\n"
+        "- nach dem letzten gang 20-30 min geluftet nachheizen\n"
+        "  (ohne aufguss) - trocknet und reinigt den fuehler\n"
+        "- neuer fuehler: erst 1-2 h heiss + lueften ohne aufguss\n"
+        "- kein ausheizen am geraet: das hilft gegen oele nicht");
+    wart_lastheat_lbl = NULL;
+    wart_count_lbl = NULL;
 }
 
 /* Snapshot-refresh fuer DIAGNOSE + SPEICHER labels. Wird beim oeffnen
@@ -3681,8 +3740,10 @@ static void build_settings(void)
                  "wlan ein/aus, ssid + passwort", on_cat_verbindung_clicked);
     make_cat_btn(list, LV_SYMBOL_REFRESH,  "ZEIT",
                  "ntp auto-sync, manuell setzen", on_cat_zeit_clicked);
-    make_cat_btn(list, LV_SYMBOL_REFRESH,  "SENSOR / WARTUNG",
-                 "filter-status, ausheizen",      on_cat_sensor_wartung_clicked);
+    make_cat_btn(list, LV_SYMBOL_PLAY,     "AUFZEICHNUNG",
+                 "auto-start/-ende, gaenge, aufguesse", on_cat_aufz_clicked);
+    make_cat_btn(list, LV_SYMBOL_EYE_OPEN, "SENSOR",
+                 "zustand, selbsttest, pflege",    on_cat_sensor_wartung_clicked);
     make_cat_btn(list, LV_SYMBOL_IMAGE,    "ANZEIGE",
                  "geraet-intern, helligkeit",     on_cat_anzeige_clicked);
     make_cat_btn(list, LV_SYMBOL_UPLOAD,   "DATEN-EXPORT",
@@ -3700,6 +3761,22 @@ static void build_settings(void)
 /* ======================================================================= */
 
 static void on_session_live(const struct view_data_session_live *L) {
+    /* v0.4.0: der RP2040 ist die Wahrheit - UI-Zustand nachziehen
+     * (Auto-Start, Auto-Ende, ESP32-Neustart mitten in der Session). */
+    s_ui_live = *L;
+    bool rp_rec = L->rec_state == SSC_REC_RECORDING;
+    if (rp_rec && !live_running) {
+        live_set_running_state();
+        if (lv_scr_act() == scr_home && L->origin == SSC_ORIGIN_AUTO)
+            lv_scr_load_anim(scr_live, LV_SCR_LOAD_ANIM_FADE_ON, 240, 0, false);
+    } else if (!rp_rec && live_running && esp_timer_get_time() > s_start_grace_until) {
+        live_set_ready_state();
+    }
+    live_status_update();
+    ui_hints_update();
+    if (!rp_rec && !live_running) {
+        /* Bereit: Kurve laeuft als Vorschau mit, Timer steht. */
+    }
     /* Erste 3 events + dann alle 10s loggen, damit man im monitor sieht
      * dass die events das UI erreichen und der chart sollte tickern.  */
     static uint32_t live_rx_cnt = 0;
@@ -4054,127 +4131,78 @@ static void on_probe_state(const struct view_data_probe_state *ps) {
     }
 }
 
-/* wartungs-submenu live-update aus dem cached health-struct.
- * Skip wenn screen nicht offen - sonst 28+ label-writes/s belasten
- * den LVGL-render-task unnoetig (hackelig wenn submenu zu).           */
+/* Sensor-Screen aktualisieren (nur wenn sichtbar). */
 static void wartung_update_labels(void) {
-    if (!scr_set_sensor_wartung || lv_scr_act() != scr_set_sensor_wartung) {
-        return;
-    }
-    const struct view_data_sensor_health *h = &g_ui_sht_health;
-
-    /* Live rh + temp - das wichtigste sichtbare feedback ob ausheizen
-     * was bringt. Anhauchen sollte rh sofort hoch ziehen.             */
+    if (!scr_set_sensor_wartung || lv_scr_act() != scr_set_sensor_wartung) return;
+    char buf[128];
     if (wart_live_lbl) {
-        char buf[64];
-        if (g_ui_sauna_have_vals) {
-            snprintf(buf, sizeof(buf),
-                     "rh  %.1f %%    temp  %.1f \xC2\xB0""C",
-                     g_ui_sauna_rh_last, g_ui_sauna_temp_last);
-        } else {
-            snprintf(buf, sizeof(buf),
-                     "rh  -- %%    temp  -- \xC2\xB0""C");
-        }
+        if (g_ui_sauna_have_vals)
+            snprintf(buf, sizeof(buf), "%.1f \xC2\xB0""C   %.1f %%", g_ui_sauna_temp_last, g_ui_sauna_rh_last);
+        else snprintf(buf, sizeof(buf), "-- \xC2\xB0""C   -- %%");
         lv_label_set_text(wart_live_lbl, buf);
     }
-
+    if (!g_ui_health_valid) return;
+    const struct view_data_sensor_health *h = &g_ui_health;
     if (wart_status_lbl) {
-        const char *st_text;
-        lv_color_t  st_col;
-        switch (h->state) {
-        case 1:
-            st_text = "filter: verstopft (rh-werte konstant)";
-            st_col  = lv_color_hex(0xffa040);
-            break;
-        case 2:
-            st_text = "filter: heize ... (UI eingefroren)";
-            st_col  = lv_color_hex(0x60c0ff);
-            break;
-        case 3:
-            st_text = "filter: recovery (60 s evaluierung)";
-            st_col  = lv_color_hex(0x508aaa);
-            break;
-        case 0:
+        const char *t; lv_color_t c = SSC_C_ACCENT;
+        switch (h->health) {
+        case SSC_H_OK: t = "zustand: fuehler ok"; break;
+        case SSC_H_CHECK:
+            t = (h->reason & 8) ? "zustand: kein fuehler erkannt" :
+                (h->reason & 4) ? "zustand: viele lesefehler - kabel/stecker pruefen" :
+                                  "zustand: bitte pruefen";
+            c = SSC_C_WARNING; break;
+        case SSC_H_RH_INVALID:
+            t = "zustand: FEUCHTE UNPLAUSIBEL - fuehler reagiert nicht (verschmutzt?). temperatur bleibt gueltig.";
+            c = SSC_C_WARNING; break;
         default:
-            st_text = "filter: ok (rh schwankt normal)";
-            st_col  = SSC_C_ACCENT;
-            break;
+            t = "zustand: HEIZER LAESST SICH NICHT ABSCHALTEN - fuehler abstecken!";
+            c = SSC_C_WARNING; break;
         }
-        lv_label_set_text(wart_status_lbl, st_text);
-        lv_obj_set_style_text_color(wart_status_lbl, st_col, 0);
+        lv_label_set_text(wart_status_lbl, t);
+        lv_obj_set_style_text_color(wart_status_lbl, c, 0);
     }
-
     if (wart_std_lbl) {
-        char buf[64];
-        float std = (float)h->rh_std_x100 / 100.0f;
-        snprintf(buf, sizeof(buf),
-                 "rh-varianz: %.2f %%   (gesund >1.0, stuck <0.5)", std);
+        float dp = NAN;
+        if (g_ui_sauna_have_vals && g_ui_sauna_rh_last > 0.5f) {
+            float tt = g_ui_sauna_temp_last, rr = g_ui_sauna_rh_last;
+            float g = logf(rr / 100.0f) + 17.62f * tt / (243.12f + tt);
+            dp = 243.12f * g / (17.62f - g);
+        }
+        snprintf(buf, sizeof(buf), "heizer: %s   i2c-fehler: %u   taupunkt: %.0f \xC2\xB0""C",
+                 h->heater_on ? "AN" : "aus", (unsigned)h->i2c_fails, isnan(dp) ? 0.0 : dp);
         lv_label_set_text(wart_std_lbl, buf);
     }
-
-    if (wart_lastheat_lbl) {
-        char buf[64];
-        const char *dur = h->last_heater_hp ? "30 s" : "5 s";
-        if (h->minutes_since == 0xFFFF) {
-            snprintf(buf, sizeof(buf),
-                     "letztes ausheizen: noch nie (seit boot)");
-        } else if (h->minutes_since < 1) {
-            snprintf(buf, sizeof(buf),
-                     "letztes ausheizen: gerade eben (%s)", dur);
-        } else if (h->minutes_since < 60) {
-            snprintf(buf, sizeof(buf),
-                     "letztes ausheizen: vor %u min  (%s)",
-                     (unsigned)h->minutes_since, dur);
-        } else {
-            unsigned hr = h->minutes_since / 60;
-            unsigned mn = h->minutes_since % 60;
-            snprintf(buf, sizeof(buf),
-                     "letztes ausheizen: vor %u h %u min  (%s)",
-                     hr, mn, dur);
+    if (wart_test_lbl) {
+        static const char *why[] = { "", "es laeuft eine session", "kabine nicht 5-40 grad",
+                                     "feuchte nicht 20-85 %", "temperatur nicht stabil",
+                                     "letzter test < 6 h her", "tagesbudget", "kein fuehler" };
+        char age[24] = "";
+        if (h->st_age_min != 0xFFFF) snprintf(age, sizeof(age), " (vor %u min)", (unsigned)h->st_age_min);
+        switch (h->st_state) {
+        case SSC_ST_PASS: snprintf(buf, sizeof(buf), "letzter selbsttest: BESTANDEN k=%.2f%s", h->st_k_x100 / 100.0, age); break;
+        case SSC_ST_BLIND: snprintf(buf, sizeof(buf), "letzter selbsttest: FEUCHTE BLIND k=%.2f%s - fuehler reinigen/tauschen", h->st_k_x100 / 100.0, age); break;
+        case SSC_ST_INCONCLUSIVE: snprintf(buf, sizeof(buf), "letzter selbsttest: unklar%s - spaeter wiederholen", age); break;
+        case SSC_ST_RUNNING: snprintf(buf, sizeof(buf), "selbsttest laeuft ... (ca. 1 min)"); break;
+        case SSC_ST_REFUSED: snprintf(buf, sizeof(buf), "selbsttest abgelehnt: %s", h->st_reason < 8 ? why[h->st_reason] : "?"); break;
+        case SSC_ST_ABORTED: snprintf(buf, sizeof(buf), "selbsttest abgebrochen%s", age); break;
+        default: snprintf(buf, sizeof(buf), "letzter selbsttest: noch keiner"); break;
         }
-        lv_label_set_text(wart_lastheat_lbl, buf);
-    }
-
-    if (wart_count_lbl) {
-        char buf[48];
-        snprintf(buf, sizeof(buf),
-                 "ausheizungen seit boot: %u", (unsigned)h->heater_count);
-        lv_label_set_text(wart_count_lbl, buf);
+        lv_label_set_text(wart_test_lbl, buf);
     }
 }
 
-/* SHT85 filter-health vom RP2040. State steuert:
- *  - dashboard warn-icon (sichtbar + farbe + symbol)
- *  - cache g_ui_sht_health (fuers wartungs-submenu)
- *  - submenu-labels (live update, no-op wenn screen nicht aktiv)      */
 static void on_sensor_health(const struct view_data_sensor_health *h) {
     if (!h) return;
-    g_ui_sht_health = *h;
-
+    g_ui_health = *h;
+    g_ui_health_valid = true;
     if (home_filter_warn) {
-        switch (h->state) {
-        case 1: /* STUCK_LOW */
+        if (h->health == SSC_H_RH_INVALID || h->health == SSC_H_FAULT) {
             lv_label_set_text(home_filter_warn, LV_SYMBOL_WARNING);
-            lv_obj_set_style_text_color(home_filter_warn,
-                                        lv_color_hex(0xffa040), 0);
+            lv_obj_set_style_text_color(home_filter_warn, lv_color_hex(0xffa040), 0);
             lv_obj_clear_flag(home_filter_warn, LV_OBJ_FLAG_HIDDEN);
-            break;
-        case 2: /* HEATING */
-            lv_label_set_text(home_filter_warn, LV_SYMBOL_REFRESH);
-            lv_obj_set_style_text_color(home_filter_warn,
-                                        lv_color_hex(0x60c0ff), 0);
-            lv_obj_clear_flag(home_filter_warn, LV_OBJ_FLAG_HIDDEN);
-            break;
-        case 3: /* RECOVERING */
-            lv_label_set_text(home_filter_warn, LV_SYMBOL_REFRESH);
-            lv_obj_set_style_text_color(home_filter_warn,
-                                        lv_color_hex(0x508aaa), 0);
-            lv_obj_clear_flag(home_filter_warn, LV_OBJ_FLAG_HIDDEN);
-            break;
-        case 0: /* OK */
-        default:
+        } else {
             lv_obj_add_flag(home_filter_warn, LV_OBJ_FLAG_HIDDEN);
-            break;
         }
     }
     wartung_update_labels();
@@ -4276,7 +4304,9 @@ static bool ui_sauna_is_known_screen(lv_obj_t *s)
            s == scr_set_anzeige || s == scr_set_export ||
            s == scr_set_operators || s == scr_set_diag ||
            s == scr_set_danger || s == scr_set_speicher ||
-           s == scr_set_sensor_wartung;
+           s == scr_set_sensor_wartung ||
+           (scr_events && s == scr_events) || (scr_ev_edit && s == scr_ev_edit) ||
+           (scr_set_aufz && s == scr_set_aufz);
 }
 
 /* Watchdog-timer: prueft ob der aktuelle screen einer unserer sauna-
@@ -4344,6 +4374,541 @@ static void clock_tick(lv_timer_t *t) {
 }
 
 /* ======================================================================= */
+/*   v0.4.0: EREIGNISSE (Auto-Modus) - Liste + Aufguss-Editor               */
+/* ======================================================================= */
+/* Nicht-blockierend: kein Modal. Die Liste ist ueber den Chip im Live-
+ * Screen, den Hinweis auf dem Home-Screen und das Detail einer Session
+ * erreichbar und kann jederzeit (auch Tage spaeter) bearbeitet werden.
+ * Die Messung laeuft auf dem RP2040 vollkommen unabhaengig weiter.     */
+static lv_obj_t *ev_list = NULL, *ev_title = NULL, *ev_add_btn = NULL;
+static lv_obj_t *ev_return_scr = NULL;
+static char      s_ev_view_id[SSC_SESSION_ID_LEN] = {0};
+EXT_RAM_BSS_ATTR static ssc_event_full_t s_ui_ev[64];
+static int       s_ui_ev_n = -1;
+
+static lv_obj_t *eve_title = NULL, *eve_op_dd = NULL;
+static lv_obj_t *eve_name_ta = NULL, *eve_aroma_ta = NULL, *eve_part_lbl = NULL;
+static lv_obj_t *eve_all_cb = NULL, *eve_kb = NULL;
+static int       eve_part_n = 0;
+static int       eve_idx = -1;
+
+static void ui_post(int32_t id, const void *data, size_t len) {
+    if (esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, id, (void *)data, len,
+                          pdMS_TO_TICKS(30)) != ESP_OK)
+        ESP_LOGW(TAG, "ui_post %ld verworfen (queue voll)", (long)id);
+}
+
+static void fmt_hmm(char *b, size_t n, uint32_t ms) {
+    uint32_t s = ms / 1000;
+    if (s >= 3600) snprintf(b, n, "%lu:%02lu h", (unsigned long)(s / 3600), (unsigned long)((s % 3600) / 60));
+    else           snprintf(b, n, "%lu:%02lu", (unsigned long)(s / 60), (unsigned long)(s % 60));
+}
+
+static void events_refresh(void);
+static void eve_open(int idx);
+
+static void on_ev_row_clicked(lv_event_t *e) {
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    eve_open(idx);
+}
+
+static void on_ev_back_clicked(lv_event_t *e) {
+    (void)e;
+    lv_scr_load_anim(ev_return_scr ? ev_return_scr : scr_home, LV_SCR_LOAD_ANIM_OVER_RIGHT, 220, 0, false);
+}
+
+static void on_ev_add_clicked(lv_event_t *e) {
+    (void)e;
+    ui_post(VIEW_EVENT_EVENT_ADD, NULL, 0);
+}
+
+static void build_events(void) {
+    if (scr_events) return;
+    scr_events = lv_obj_create(NULL);
+    style_screen(scr_events);
+    lv_obj_t *back = lv_btn_create(scr_events);
+    style_ghost_btn(back);
+    lv_obj_set_size(back, 110, 44);
+    lv_obj_align(back, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_t *bl = lv_label_create(back);
+    lv_label_set_text(bl, LV_SYMBOL_LEFT "  ZURUECK");
+    lv_obj_set_style_text_font(bl, F_SM, 0);
+    lv_obj_center(bl);
+    lv_obj_add_event_cb(back, on_ev_back_clicked, LV_EVENT_CLICKED, NULL);
+
+    ev_title = lv_label_create(scr_events);
+    lv_label_set_text(ev_title, "EREIGNISSE");
+    lv_obj_set_style_text_color(ev_title, SSC_C_ACCENT, 0);
+    lv_obj_set_style_text_font(ev_title, F_MD, 0);
+    lv_obj_align(ev_title, LV_ALIGN_TOP_LEFT, 122, 10);
+
+    ev_list = lv_list_create(scr_events);
+    style_card(ev_list);
+    lv_obj_set_size(ev_list, 456, 340);
+    lv_obj_align(ev_list, LV_ALIGN_TOP_LEFT, 0, 52);
+    lv_obj_set_style_pad_all(ev_list, 0, 0);
+    lv_obj_add_flag(ev_list, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(ev_list, LV_DIR_VER);
+
+    ev_add_btn = lv_btn_create(scr_events);
+    style_primary_btn(ev_add_btn);
+    lv_obj_set_size(ev_add_btn, 456, 56);
+    lv_obj_align(ev_add_btn, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_t *al = lv_label_create(ev_add_btn);
+    lv_label_set_text(al, LV_SYMBOL_PLUS "  AUFGUSS JETZT NACHTRAGEN");
+    lv_obj_set_style_text_font(al, F_SM, 0);
+    lv_obj_center(al);
+    lv_obj_add_event_cb(ev_add_btn, on_ev_add_clicked, LV_EVENT_CLICKED, NULL);
+}
+
+/* Liste fuer id oeffnen. ret = Screen fuer ZURUECK. */
+static void events_open(const char *id, lv_obj_t *ret) {
+    if (!id || !id[0]) return;
+    build_events();
+    ev_return_scr = ret;
+    if (strcmp(s_ev_view_id, id) != 0) s_ui_ev_n = -1;
+    strncpy(s_ev_view_id, id, SSC_SESSION_ID_LEN - 1);
+    s_ev_view_id[SSC_SESSION_ID_LEN - 1] = 0;
+    char idbuf[SSC_SESSION_ID_LEN];
+    memcpy(idbuf, s_ev_view_id, sizeof(idbuf));
+    ui_post(VIEW_EVENT_EVENTS_REQ, idbuf, sizeof(idbuf));
+    events_refresh();
+    lv_scr_load_anim(scr_events, LV_SCR_LOAD_ANIM_OVER_LEFT, 220, 0, false);
+}
+
+static void ev_add_row(const char *txt, const char *right, lv_color_t col, bool clickable, int idx, bool header) {
+    lv_obj_t *row = lv_list_add_btn(ev_list, NULL, txt);
+    lv_obj_set_style_bg_color(row, header ? SSC_C_ELEVATED : SSC_C_SURFACE, 0);
+    lv_obj_set_style_bg_color(row, SSC_C_ELEVATED, LV_STATE_PRESSED);
+    lv_obj_set_style_text_color(row, col, 0);
+    lv_obj_set_style_text_font(row, header ? F_XS : F_SM, 0);
+    lv_obj_set_style_pad_ver(row, header ? 6 : 12, 0);
+    lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
+    lv_obj_set_style_border_color(row, SSC_C_BORDER, 0);
+    lv_obj_set_style_border_width(row, 1, 0);
+    if (right && right[0]) {
+        lv_obj_t *r = lv_label_create(row);
+        lv_label_set_text(r, right);
+        lv_obj_set_style_text_color(r, SSC_C_TEXT_MUTED, 0);
+        lv_obj_set_style_text_font(r, F_XS, 0);
+        lv_obj_align(r, LV_ALIGN_RIGHT_MID, 0, 0);
+    }
+    if (clickable) lv_obj_add_event_cb(row, on_ev_row_clicked, LV_EVENT_CLICKED, (void *)(intptr_t)idx);
+    else lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
+}
+
+static void events_refresh(void) {
+    if (!ev_list) return;
+    lv_obj_clean(ev_list);
+    bool active = s_ui_live.rec_state == SSC_REC_RECORDING && strcmp(s_ui_live.id, s_ev_view_id) == 0;
+    if (ev_add_btn) {
+        if (active) lv_obj_clear_flag(ev_add_btn, LV_OBJ_FLAG_HIDDEN);
+        else        lv_obj_add_flag(ev_add_btn, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_height(ev_list, active ? 340 : 404);
+    }
+    if (s_ui_ev_n < 0) {
+        ev_add_row("lade ereignisse ...", NULL, SSC_C_TEXT_MUTED, false, -1, false);
+        return;
+    }
+    int shown = 0, unl = 0;
+    for (int i = 0; i < s_ui_ev_n; i++) {
+        const ssc_event_rec_t *e = &s_ui_ev[i].e;
+        const ssc_event_label_body_t *l = &s_ui_ev[i].l;
+        if (e->flags & SSC_EVF_DELETED) continue;
+        char t[40], line[120], right[48];
+        fmt_hmm(t, sizeof(t), e->t_start_ms);
+        switch (e->kind) {
+        case SSC_EK_GANG:
+            snprintf(line, sizeof(line), "GANG %u   ab %s", e->seq, t);
+            ev_add_row(line, NULL, SSC_C_ACCENT, false, i, true);
+            break;
+        case SSC_EK_AUFGUSS: {
+            bool lab = e->flags & SSC_EVF_LABELED;
+            bool pre = !lab && (l->operator_tag[0] || l->name[0]);
+            if (!lab) unl++;
+            char who[80] = {0};
+            if (l->operator_tag[0] || l->name[0] || l->aroma[0])
+                snprintf(who, sizeof(who), "  %s%s%s%s%s", l->operator_tag,
+                         (l->operator_tag[0] && l->name[0]) ? " - " : "", l->name,
+                         l->aroma[0] ? " - " : "", l->aroma);
+            snprintf(line, sizeof(line), "%s Aufguss %u   %s%s%s",
+                     lab ? LV_SYMBOL_OK : LV_SYMBOL_EDIT, e->seq, t, who,
+                     pre ? "  (vorbelegt)" : (lab ? "" : "  - antippen"));
+            snprintf(right, sizeof(right), "%.0f\xC2\xB0 %.0f%%%s", e->tpk_x10 / 10.0, e->rhpk_x10 / 10.0,
+                     (e->flags & SSC_EVF_MANUAL) ? " M" : "");
+            ev_add_row(line, right, lab ? SSC_C_TEXT : SSC_C_ACCENT, true, i, false);
+            break;
+        }
+        case SSC_EK_LUEFTEN: {
+            char t2[24];
+            if (e->flags & SSC_EVF_OPEN) snprintf(t2, sizeof(t2), "laeuft");
+            else fmt_hmm(t2, sizeof(t2), e->t_end_ms);
+            snprintf(line, sizeof(line), LV_SYMBOL_REFRESH " Lueften   %s - %s", t, t2);
+            snprintf(right, sizeof(right), "%.0f -> %.0f\xC2\xB0", e->t0_x10 / 10.0, e->tpk_x10 / 10.0);
+            ev_add_row(line, right, SSC_C_TEXT_MUTED, false, i, false);
+            break;
+        }
+        case SSC_EK_RESUME:
+            snprintf(line, sizeof(line), LV_SYMBOL_WARNING " Neustart - Aufzeichnung fortgesetzt (%s)", t);
+            ev_add_row(line, NULL, SSC_C_TEXT_FAINT, false, i, false);
+            break;
+        case SSC_EK_SENSOR:
+            snprintf(line, sizeof(line), LV_SYMBOL_WARNING " Feuchte unplausibel (%s)", t);
+            ev_add_row(line, NULL, SSC_C_WARNING, false, i, false);
+            break;
+        default:
+            continue;
+        }
+        shown++;
+    }
+    if (!shown)
+        ev_add_row(active ? "noch keine ereignisse - aufguesse werden automatisch erkannt"
+                          : "keine ereignisse aufgezeichnet",
+                   NULL, SSC_C_TEXT_MUTED, false, -1, false);
+    if (ev_title) {
+        char b[48];
+        if (unl) snprintf(b, sizeof(b), "EREIGNISSE  (%d offen)", unl);
+        else snprintf(b, sizeof(b), "EREIGNISSE");
+        lv_label_set_text(ev_title, b);
+    }
+}
+
+/* ---- Aufguss-Editor ---- */
+static void eve_part_update(void) {
+    if (!eve_part_lbl) return;
+    char b[16];
+    if (eve_part_n > 0) snprintf(b, sizeof(b), "%d", eve_part_n);
+    else snprintf(b, sizeof(b), "-");
+    lv_label_set_text(eve_part_lbl, b);
+}
+static void on_eve_minus(lv_event_t *e) { (void)e; if (eve_part_n > 0) eve_part_n--; eve_part_update(); }
+static void on_eve_plus(lv_event_t *e)  { (void)e; if (eve_part_n < 99) eve_part_n++; eve_part_update(); }
+
+static void eve_fill_label(ssc_event_label_t *L, int idx) {
+    memset(L, 0, sizeof(*L));
+    strncpy(L->id, s_ev_view_id, SSC_ID_LEN - 1);
+    L->no = s_ui_ev[idx].e.no;
+    L->l.participants = (uint8_t)eve_part_n;
+    char op[SSC_OPERATOR_MAXLEN] = {0};
+    if (eve_op_dd) lv_dropdown_get_selected_str(eve_op_dd, op, sizeof(op));
+    if (strcmp(op, "-") != 0) strncpy(L->l.operator_tag, op, SSC_LBL_OP - 1);
+    strncpy(L->l.name, lv_textarea_get_text(eve_name_ta), SSC_LBL_NAME - 1);
+    strncpy(L->l.aroma, lv_textarea_get_text(eve_aroma_ta), SSC_LBL_AROMA - 1);
+}
+
+static void on_eve_save(lv_event_t *e) {
+    (void)e;
+    if (eve_idx < 0 || eve_idx >= s_ui_ev_n) return;
+    ssc_event_label_t L;
+    eve_fill_label(&L, eve_idx);
+    ui_post(VIEW_EVENT_EVENT_LABEL_SET, &L, sizeof(L));
+    s_ui_ev[eve_idx].l = L.l;
+    s_ui_ev[eve_idx].e.flags |= SSC_EVF_LABELED;
+    /* optional: gleiche Angaben fuer alle noch offenen Aufguesse im Gang */
+    if (eve_all_cb && lv_obj_has_state(eve_all_cb, LV_STATE_CHECKED)) {
+        uint8_t g = s_ui_ev[eve_idx].e.gang;
+        for (int i = 0; i < s_ui_ev_n; i++) {
+            ssc_event_full_t *x = &s_ui_ev[i];
+            if (i == eve_idx || x->e.kind != SSC_EK_AUFGUSS || x->e.gang != g) continue;
+            if (x->e.flags & (SSC_EVF_LABELED | SSC_EVF_DELETED)) continue;
+            ssc_event_label_t L2 = L;
+            L2.no = x->e.no;
+            ui_post(VIEW_EVENT_EVENT_LABEL_SET, &L2, sizeof(L2));
+            x->l = L.l;
+            x->e.flags |= SSC_EVF_LABELED;
+        }
+    }
+    if (eve_kb) lv_obj_add_flag(eve_kb, LV_OBJ_FLAG_HIDDEN);
+    events_refresh();
+    lv_scr_load_anim(scr_events, LV_SCR_LOAD_ANIM_OVER_RIGHT, 220, 0, false);
+}
+
+static void do_eve_delete(void *ud) {
+    (void)ud;
+    if (eve_idx < 0 || eve_idx >= s_ui_ev_n) return;
+    ssc_event_label_t L;
+    memset(&L, 0, sizeof(L));
+    strncpy(L.id, s_ev_view_id, SSC_ID_LEN - 1);
+    L.no = s_ui_ev[eve_idx].e.no;
+    L.delete_flag = 1;
+    ui_post(VIEW_EVENT_EVENT_LABEL_SET, &L, sizeof(L));
+    s_ui_ev[eve_idx].e.flags |= SSC_EVF_DELETED;
+    events_refresh();
+    lv_scr_load_anim(scr_events, LV_SCR_LOAD_ANIM_OVER_RIGHT, 220, 0, false);
+}
+static void on_eve_delete(lv_event_t *e) {
+    (void)e;
+    show_confirm("KEIN AUFGUSS?", "diese erkennung als fehlalarm entfernen?\n(messdaten bleiben erhalten)",
+                 "ENTFERNEN", do_eve_delete, NULL);
+}
+static void on_eve_back(lv_event_t *e) {
+    (void)e;
+    if (eve_kb) lv_obj_add_flag(eve_kb, LV_OBJ_FLAG_HIDDEN);
+    lv_scr_load_anim(scr_events, LV_SCR_LOAD_ANIM_OVER_RIGHT, 220, 0, false);
+}
+
+static lv_obj_t *eve_small_btn(lv_obj_t *p, const char *txt, lv_event_cb_t cb, int w) {
+    lv_obj_t *b = lv_btn_create(p);
+    style_ghost_btn(b);
+    lv_obj_set_size(b, w, 48);
+    lv_obj_t *l = lv_label_create(b);
+    lv_label_set_text(l, txt);
+    lv_obj_set_style_text_font(l, F_MD, 0);
+    lv_obj_center(l);
+    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, NULL);
+    return b;
+}
+
+static void build_ev_edit(void) {
+    if (scr_ev_edit) return;
+    scr_ev_edit = lv_obj_create(NULL);
+    style_screen(scr_ev_edit);
+    lv_obj_t *back = eve_small_btn(scr_ev_edit, LV_SYMBOL_LEFT, on_eve_back, 60);
+    lv_obj_align(back, LV_ALIGN_TOP_LEFT, 0, 0);
+    eve_title = lv_label_create(scr_ev_edit);
+    lv_obj_set_style_text_color(eve_title, SSC_C_ACCENT, 0);
+    lv_obj_set_style_text_font(eve_title, F_MD, 0);
+    lv_obj_align(eve_title, LV_ALIGN_TOP_LEFT, 72, 12);
+
+    lv_obj_t *form = lv_obj_create(scr_ev_edit);
+    style_card(form);
+    lv_obj_set_size(form, 456, 352);
+    lv_obj_align(form, LV_ALIGN_TOP_LEFT, 0, 56);
+    lv_obj_set_flex_flow(form, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(form, 6, 0);
+    lv_obj_add_flag(form, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *l1 = lv_label_create(form); lv_label_set_text(l1, "SAUNAMEISTER"); label_muted(l1);
+    eve_op_dd = lv_dropdown_create(form);
+    lv_obj_set_width(eve_op_dd, 420);
+    lv_obj_set_style_text_font(eve_op_dd, F_SM, 0);
+    lv_dropdown_set_options(eve_op_dd, "-");
+
+    lv_obj_t *l2 = lv_label_create(form); lv_label_set_text(l2, "AUFGUSS / THEMA"); label_muted(l2);
+    eve_name_ta = lv_textarea_create(form);
+    lv_textarea_set_one_line(eve_name_ta, true);
+    lv_textarea_set_max_length(eve_name_ta, SSC_LBL_NAME - 1);
+    lv_obj_set_width(eve_name_ta, 420);
+    lv_textarea_set_placeholder_text(eve_name_ta, "z.b. birkenwald, eis-aufguss");
+
+    lv_obj_t *l3 = lv_label_create(form); lv_label_set_text(l3, "DUFT / AROMA"); label_muted(l3);
+    eve_aroma_ta = lv_textarea_create(form);
+    lv_textarea_set_one_line(eve_aroma_ta, true);
+    lv_textarea_set_max_length(eve_aroma_ta, SSC_LBL_AROMA - 1);
+    lv_obj_set_width(eve_aroma_ta, 420);
+    lv_textarea_set_placeholder_text(eve_aroma_ta, "z.b. eukalyptus, minze");
+
+    lv_obj_t *l4 = lv_label_create(form); lv_label_set_text(l4, "TEILNEHMER"); label_muted(l4);
+    lv_obj_t *pr = lv_obj_create(form);
+    lv_obj_remove_style_all(pr);
+    lv_obj_set_size(pr, 420, 52);
+    lv_obj_set_flex_flow(pr, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(pr, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_gap(pr, 16, 0);
+    eve_small_btn(pr, LV_SYMBOL_MINUS, on_eve_minus, 72);
+    eve_part_lbl = lv_label_create(pr);
+    lv_obj_set_style_text_font(eve_part_lbl, F_LG, 0);
+    lv_obj_set_style_text_color(eve_part_lbl, SSC_C_TEXT, 0);
+    eve_small_btn(pr, LV_SYMBOL_PLUS, on_eve_plus, 72);
+
+    eve_all_cb = lv_checkbox_create(form);
+    lv_checkbox_set_text(eve_all_cb, "fuer alle offenen aufguesse dieses gangs");
+    lv_obj_set_style_text_color(eve_all_cb, SSC_C_TEXT, 0);
+    lv_obj_set_style_text_font(eve_all_cb, F_XS, 0);
+    lv_obj_add_state(eve_all_cb, LV_STATE_CHECKED);
+
+    lv_obj_t *arow = lv_obj_create(scr_ev_edit);
+    lv_obj_remove_style_all(arow);
+    lv_obj_set_size(arow, 456, 56);
+    lv_obj_align(arow, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_flex_flow(arow, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(arow, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *sv = lv_btn_create(arow);
+    style_primary_btn(sv);
+    lv_obj_set_size(sv, 300, 56);
+    lv_obj_t *svl = lv_label_create(sv);
+    lv_label_set_text(svl, LV_SYMBOL_OK "  SPEICHERN");
+    lv_obj_set_style_text_font(svl, F_MD, 0);
+    lv_obj_center(svl);
+    lv_obj_add_event_cb(sv, on_eve_save, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *dl = lv_btn_create(arow);
+    style_ghost_btn(dl);
+    lv_obj_set_size(dl, 146, 56);
+    lv_obj_t *dll = lv_label_create(dl);
+    lv_label_set_text(dll, "FEHLALARM");
+    lv_obj_set_style_text_font(dll, F_XS, 0);
+    lv_obj_center(dll);
+    lv_obj_add_event_cb(dl, on_eve_delete, LV_EVENT_CLICKED, NULL);
+
+    eve_kb = kb_create(scr_ev_edit);
+    kb_attach(eve_name_ta, eve_kb);
+    kb_attach(eve_aroma_ta, eve_kb);
+}
+
+static void eve_open(int idx) {
+    if (idx < 0 || idx >= s_ui_ev_n) return;
+    const ssc_event_full_t *x = &s_ui_ev[idx];
+    if (x->e.kind != SSC_EK_AUFGUSS) return;
+    build_ev_edit();
+    eve_idx = idx;
+    char t[24], b[64];
+    fmt_hmm(t, sizeof(t), x->e.t_start_ms);
+    snprintf(b, sizeof(b), "AUFGUSS %u  (gang %u, %s)", x->e.seq, x->e.gang, t);
+    lv_label_set_text(eve_title, b);
+    /* Saunameister-Liste vom Session-Formular uebernehmen (haeufigste oben) */
+    if (sum_operator_dd) lv_dropdown_set_options(eve_op_dd, lv_dropdown_get_options(sum_operator_dd));
+    int sel = 0;
+    if (x->l.operator_tag[0]) {
+        int i = lv_dropdown_get_option_index(eve_op_dd, x->l.operator_tag);
+        if (i < 0) {
+            lv_dropdown_add_option(eve_op_dd, x->l.operator_tag, LV_DROPDOWN_POS_LAST);
+            i = lv_dropdown_get_option_index(eve_op_dd, x->l.operator_tag);
+        }
+        if (i >= 0) sel = i;
+    }
+    lv_dropdown_set_selected(eve_op_dd, (uint16_t)sel);
+    lv_textarea_set_text(eve_name_ta, x->l.name);
+    lv_textarea_set_text(eve_aroma_ta, x->l.aroma);
+    eve_part_n = x->l.participants;
+    eve_part_update();
+    lv_scr_load_anim(scr_ev_edit, LV_SCR_LOAD_ANIM_OVER_LEFT, 220, 0, false);
+}
+
+static void on_events_updated(const char *id) {
+    if (!id || strcmp(id, s_ev_view_id) != 0) return;
+    int n = indicator_session_events_copy(id, s_ui_ev, 64);
+    if (n < 0) return;
+    s_ui_ev_n = n;
+    if (scr_events && lv_scr_act() == scr_events) events_refresh();
+    detail_events_update();
+}
+
+/* ---- Hinweise (Home/Live) ---- */
+static void on_live_events_clicked(lv_event_t *e) {
+    (void)e;
+    if (s_ui_live.id[0]) events_open(s_ui_live.id, scr_live);
+}
+
+static void on_home_hint_clicked(lv_event_t *e) {
+    (void)e;
+    if (s_ui_live.rec_state == SSC_REC_RECORDING && s_ui_live.id[0]) {
+        events_open(s_ui_live.id, scr_home);
+    } else if (s_last_ended_valid) {
+        s_last_ended_valid = false;
+        if (home_hint_btn) lv_obj_add_flag(home_hint_btn, LV_OBJ_FLAG_HIDDEN);
+        events_open(s_last_ended.id, scr_home);
+    }
+}
+
+static void ui_hints_update(void) {
+    bool rec = s_ui_live.rec_state == SSC_REC_RECORDING;
+    char b[64];
+    if (home_start_lbl) {
+        if (rec) {
+            char d[16]; fmt_duration(d, sizeof(d), s_ui_live.t_elapsed_s);
+            if (s_ui_live.gang)
+                snprintf(b, sizeof(b), LV_SYMBOL_PLAY "  LAEUFT %s  -  GANG %u  -  %u AUFG.", d,
+                         s_ui_live.gang, s_ui_live.aufguss_count);
+            else
+                snprintf(b, sizeof(b), LV_SYMBOL_PLAY "  AUFHEIZEN  -  %s", d);
+            lv_label_set_text(home_start_lbl, b);
+        } else {
+            lv_label_set_text(home_start_lbl, (s_ui_live.flags & SSC_SF_AUTO)
+                              ? LV_SYMBOL_PLAY "  SESSION STARTEN   (auto an)"
+                              : LV_SYMBOL_PLAY "  SESSION STARTEN");
+        }
+    }
+    if (home_hint_btn && home_hint_lbl) {
+        bool show = false;
+        if (rec && s_ui_live.n_unlabeled) {
+            snprintf(b, sizeof(b), LV_SYMBOL_EDIT " %u AUFG. BENENNEN", s_ui_live.n_unlabeled);
+            show = true;
+        } else if (!rec && s_last_ended_valid) {
+            snprintf(b, sizeof(b), LV_SYMBOL_EDIT " LETZTE SESSION ERGAENZEN");
+            show = true;
+        }
+        if (show) { lv_label_set_text(home_hint_lbl, b); lv_obj_clear_flag(home_hint_btn, LV_OBJ_FLAG_HIDDEN); }
+        else lv_obj_add_flag(home_hint_btn, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (live_events_btn && live_events_lbl) {
+        if (rec) {
+            if (s_ui_live.n_unlabeled)
+                snprintf(b, sizeof(b), "%u AUFG. - %u OFFEN " LV_SYMBOL_RIGHT, s_ui_live.aufguss_count, s_ui_live.n_unlabeled);
+            else
+                snprintf(b, sizeof(b), "%u AUFG. " LV_SYMBOL_RIGHT, s_ui_live.aufguss_count);
+            lv_label_set_text(live_events_lbl, b);
+            lv_obj_clear_flag(live_events_btn, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(live_events_btn, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+static const char *phase_txt(uint8_t ph) {
+    switch (ph) {
+    case 1: return "AUFHEIZEN";
+    case 2: return "GANG";
+    case 3: return "LUEFTEN";
+    case 4: return "ABKUEHLEN";
+    default: return "AUFZEICHNUNG";
+    }
+}
+
+/* Status-Zeile im Live-Screen: zeigt Phase und vor allem PROBLEME, damit
+ * niemand eine Aufzeichnung fuer laufend haelt, die keine ist.         */
+static void live_status_update(void) {
+    if (!live_status_label) return;
+    const struct view_data_session_live *L = &s_ui_live;
+    char b[64];
+    lv_color_t c = SSC_C_ACCENT;
+    bool rec = L->rec_state == SSC_REC_RECORDING;
+    if (!L->rp_link) { snprintf(b, sizeof(b), "KEINE VERBINDUNG ZUM SENSOR-CHIP"); c = SSC_C_WARNING; }
+    else if (rec && !(L->flags & SSC_SF_WRITE_OK)) { snprintf(b, sizeof(b), "SD-FEHLER - AUFZEICHNUNG UNTERBROCHEN"); c = SSC_C_WARNING; }
+    else if (!(L->flags & SSC_SF_SD_OK)) { snprintf(b, sizeof(b), "KEINE SD-KARTE"); c = SSC_C_WARNING; }
+    else if (!(L->flags & SSC_SF_PROBE_OK)) { snprintf(b, sizeof(b), "FUEHLER ANTWORTET NICHT"); c = SSC_C_WARNING; }
+    else if (L->flags & SSC_SF_RH_SUSPECT) { snprintf(b, sizeof(b), "FEUCHTE UNPLAUSIBEL - FUEHLER PRUEFEN"); c = SSC_C_WARNING; }
+    else if (rec) {
+        if (L->phase == 2 && L->gang) snprintf(b, sizeof(b), "GANG %u%s", L->gang, (L->flags & SSC_SF_RESUMED) ? " (FORTGESETZT)" : "");
+        else snprintf(b, sizeof(b), "%s%s", phase_txt(L->phase), (L->flags & SSC_SF_RESUMED) ? " (FORTGESETZT)" : "");
+    } else {
+        snprintf(b, sizeof(b), (L->flags & SSC_SF_AUTO) ? "BEREIT - AUTO-START AN" : "BEREIT");
+    }
+    lv_label_set_text(live_status_label, b);
+    lv_obj_set_style_text_color(live_status_label, c, 0);
+}
+
+static void detail_events_update(void) {
+    if (!detail_ev_lbl || !s_detail_valid || strcmp(s_detail_meta.id, s_ev_view_id) != 0 || s_ui_ev_n < 0) return;
+    int g = 0, a = 0, l = 0, open = 0;
+    for (int i = 0; i < s_ui_ev_n; i++) {
+        const ssc_event_rec_t *e = &s_ui_ev[i].e;
+        if (e->flags & SSC_EVF_DELETED) continue;
+        if (e->kind == SSC_EK_GANG) g++;
+        else if (e->kind == SSC_EK_AUFGUSS) { a++; if (!(e->flags & SSC_EVF_LABELED)) open++; }
+        else if (e->kind == SSC_EK_LUEFTEN) l++;
+    }
+    char b[96];
+    if (!g && !a && !l) snprintf(b, sizeof(b), "keine erkannten ereignisse (aeltere session)");
+    else snprintf(b, sizeof(b), "%d gaenge  -  %d aufguesse%s  -  %dx lueften   " LV_SYMBOL_RIGHT,
+                  g, a, open ? " (offen)" : "", l);
+    lv_label_set_text(detail_ev_lbl, b);
+}
+
+static void ui_on_cmd_result(const ssc_ack_t *a) {
+    if (!a) return;
+    if (a->cmd == SSC_CMD_SESSION_START && a->rc != SSC_RC_OK && a->rc != SSC_RC_STATE) {
+        s_start_grace_until = 0;
+        live_set_ready_state();
+        show_confirm("START FEHLGESCHLAGEN",
+                     a->rc == SSC_RC_SD_ERR ? "sd-karte fehlt oder schreibfehler.\nbitte karte pruefen."
+                     : (a->rc == 0xFF ? "sensor-chip antwortet nicht.\nbitte geraet neu starten."
+                                      : "der sensor-chip hat den start abgelehnt."),
+                     "OK", NULL, NULL);
+    }
+    if (a->cmd == SSC_CMD_SENSOR_SELFTEST) wartung_update_labels();
+}
+
+/* ======================================================================= */
 /*   esp_event-Handler (LAEUFT IM EVENT-TASK - LVGL-LOCK NEHMEN!)            */
 /* ======================================================================= */
 
@@ -4367,7 +4932,7 @@ static void on_view_event(void *arg, esp_event_base_t base,
                 lv_label_set_text(sum_save_btn_label,
                                   LV_SYMBOL_SAVE "  SPEICHERN");
             if (sum_discard_btn_label)
-                lv_label_set_text(sum_discard_btn_label, "VERWERFEN");
+                lv_label_set_text(sum_discard_btn_label, "SPAETER");
             summary_prefill(ev_data);
             lv_scr_load_anim(scr_summary, LV_SCR_LOAD_ANIM_FADE_ON,
                              240, 0, false);
@@ -4443,6 +5008,22 @@ static void on_view_event(void *arg, esp_event_base_t base,
         break;
     case VIEW_EVENT_SENSOR_HEALTH:
         if (ev_data) on_sensor_health(ev_data);
+        break;
+    case VIEW_EVENT_REC_EVENT:
+        ui_hints_update();
+        break;
+    case VIEW_EVENT_EVENTS_UPDATED:
+        if (ev_data) on_events_updated((const char *)ev_data);
+        break;
+    case VIEW_EVENT_RP_CMD_RESULT:
+        if (ev_data) ui_on_cmd_result(ev_data);
+        break;
+    case VIEW_EVENT_SESSION_ENDED:
+        if (ev_data) {
+            s_last_ended = *(const struct view_data_session_meta *)ev_data;
+            s_last_ended_valid = true;
+            ui_hints_update();
+        }
         break;
     case VIEW_EVENT_WIFI_ST:
         if (ev_data && set_wifi_info) {
@@ -4566,6 +5147,8 @@ void ui_sauna_init(void) {
         VIEW_EVENT_BOOT_INFO,
         VIEW_EVENT_RP_BOOT_INFO,
         VIEW_EVENT_SENSOR_HEALTH,
+        VIEW_EVENT_REC_EVENT, VIEW_EVENT_EVENTS_UPDATED,
+        VIEW_EVENT_RP_CMD_RESULT, VIEW_EVENT_SESSION_ENDED,
     };
     for (size_t i = 0; i < sizeof(listened)/sizeof(listened[0]); i++) {
         esp_err_t e = esp_event_handler_register_with(

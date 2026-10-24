@@ -32,6 +32,12 @@ RTC_NOINIT_ATTR static uint32_t s_panic_streak_magic;
 
 int indicator_storage_init(void)
 {
+    /* v0.4.0 (Audit M7): wird aus main.c UND indicator_model.c gerufen -
+     * zweiter Aufruf darf den Panic-Streak nicht nochmal hochzaehlen
+     * (sonst NVS-Erase schon nach 50 statt 100 Panic-Boots).          */
+    static bool s_done = false;
+    if (s_done) return 0;
+    s_done = true;
     /* RTC-counter pflegen */
     if (s_panic_streak_magic != PANIC_STREAK_MAGIC) {
         s_panic_streak = 0;

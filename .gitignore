@@ -28,3 +28,7 @@ Thumbs.db
 
 # Extrahierte session-CSVs (reproduzierbar via RP2040 ?D-cmd)
 sessions_extracted/
+
+# Host-Test-Binaries
+tests/test_detect
+tests/test_proto

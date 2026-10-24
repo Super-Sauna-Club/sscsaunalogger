@@ -264,9 +264,10 @@ int indicator_session_store_list(struct view_data_session_list *out,
      * zwischen alten sessions oben/unten je nach append-zeitpunkt. */
     if (start_index >= total) { nvs_close(h); UNLOCK(); return 0; }
 
-    /* Alle slots in einen temp-buffer laden. Bounded durch UI-cap
-     * (out->items hat capacity 32 als haupt-konsument).             */
-    EXT_RAM_BSS_ATTR static struct view_data_session_meta tmp[32];
+    /* v0.4.0: ALLE slots laden (bis 256), dann sortieren. Vorher war der
+     * temp-buffer 32 gross und wurde ab slot 0 gefuellt -> nur die 32
+     * AELTESTEN sessions waren sichtbar (Audit H4).                    */
+    EXT_RAM_BSS_ATTR static struct view_data_session_meta tmp[256];
     uint16_t loaded = 0;
     uint16_t cap_tmp = sizeof(tmp) / sizeof(tmp[0]);
     for (uint16_t slot = 0; slot < total && loaded < cap_tmp; slot++) {
@@ -283,7 +284,7 @@ int indicator_session_store_list(struct view_data_session_list *out,
     nvs_close(h);
     UNLOCK();
 
-    /* Insertion-sort by start_ts desc (newest first). N <= 32, OK. */
+    /* Insertion-sort by start_ts desc (newest first). N <= 256, selten. */
     for (uint16_t i = 1; i < loaded; i++) {
         struct view_data_session_meta key = tmp[i];
         int j = (int)i - 1;
@@ -434,4 +435,43 @@ int indicator_session_store_wipe(void) {
     nvs_close(h); UNLOCK();
     ESP_LOGI(TAG, "store wiped");
     return 0;
+}
+
+/* v0.4.0: Messwerte (vom RP2040 berechnet) setzen - Record anlegen falls
+ * er noch nicht existiert. User-Felder (Saunameister, Notizen, ...) eines
+ * bestehenden Records bleiben erhalten.                                 */
+int indicator_session_store_put_measured(const struct view_data_session_meta *meta) {
+    if (!meta || !meta->id[0]) return -1;
+    struct view_data_session_meta cur;
+    if (indicator_session_store_get(meta->id, &cur) != 0) {
+        return indicator_session_store_append(meta);
+    }
+    LOCK();
+    nvs_handle_t h;
+    if (open_rw(&h) != ESP_OK) { UNLOCK(); return -2; }
+    uint16_t total;
+    read_count(h, &total);
+    char key[8];
+    int found = -1;
+    struct view_data_session_meta old;
+    for (uint16_t i = 0; i < total; i++) {
+        key_for_slot(i, key, sizeof(key));
+        size_t sz = sizeof(old);
+        if (nvs_get_blob(h, key, &old, &sz) == ESP_OK && strcmp(old.id, meta->id) == 0) {
+            found = (int)i;
+            break;
+        }
+    }
+    if (found < 0) { nvs_close(h); UNLOCK(); return -3; }
+    if (meta->start_ts) old.start_ts = meta->start_ts;
+    if (meta->end_ts)   old.end_ts   = meta->end_ts;
+    old.peak_temp     = meta->peak_temp;
+    old.peak_rh       = meta->peak_rh;
+    old.aufguss_count = meta->aufguss_count;
+    key_for_slot((uint16_t)found, key, sizeof(key));
+    esp_err_t err = nvs_set_blob(h, key, &old, sizeof(old));
+    if (err == ESP_OK) nvs_commit(h);
+    nvs_close(h);
+    UNLOCK();
+    return err == ESP_OK ? 0 : -4;
 }

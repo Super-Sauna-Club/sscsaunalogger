@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "freertos/idf_additions.h"
 #include "lwip/sockets.h"
 #include "lwip/netdb.h"
 #include "mbedtls/sha1.h"
@@ -888,8 +889,11 @@ int indicator_mariadb_init(void)
     __config_restore();
 
     /* Create database task with larger stack */
-    BaseType_t ret = xTaskCreate(__db_task, "mariadb_task", MARIADB_TASK_STACK,
-                                  NULL, 5, &__g_db_task_handle);
+    /* v0.4.0 (Audit L10): Stack in PSRAM statt 8 KB internes DRAM - der
+     * Export ist per Default aus, der Task soll das DRAM-Budget von LVGL
+     * nicht mehr belasten.                                              */
+    BaseType_t ret = xTaskCreateWithCaps(__db_task, "mariadb_task", MARIADB_TASK_STACK,
+                                         NULL, 5, &__g_db_task_handle, MALLOC_CAP_SPIRAM);
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create DB task");
         return -1;

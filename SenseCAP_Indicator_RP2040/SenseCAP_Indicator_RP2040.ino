@@ -29,9 +29,11 @@
 #include <VOCGasIndexAlgorithm.h>
 #include "AHT20.h"
 #include "hardware/watchdog.h"    /* watchdog_caused_reboot() fuer post-crash diagnose */
+#include "src/ssc/ssc_proto.h"     /* v0.4.0: gemeinsames UART-Protokoll (ESP32 + Host-Tests) */
+#include "src/ssc/ssc_detect.h"    /* v0.4.0: Auto-Modus-Detektor (Host-getestet) */
 
 #define DEBUG 0
-#define VERSION "ssc-v0.3.3"
+#define VERSION "ssc-v0.4.0"
 /* v0.2.7: EEPROM layout. 256 B reserviert, erste 8B belegt.
  *  [0..3] uint32_t magic = 0x55AA5AA5
  *  [4..7] uint32_t boot_count                                      */
@@ -64,7 +66,7 @@ typedef enum {
 /* Forward-declarations der file-static Funktionen. .ino-Files bekommen zwar
  * von Arduino auto-prototypes, aber fuer `static` mit nicht-trivialer
  * Signatur ist der Auto-Prototyper unzuverlaessig. Sauber explizit machen. */
-static void session_end(void);
+static void sht_after_init(void);
 static bool sht85_init(void);
 static bool aht20_fallback_init(void);
 static void i2c_bus_unlock(uint8_t sda_pin, uint8_t scl_pin);
@@ -149,33 +151,7 @@ static inline void slogf(const char *lbl, float v, int decimals = 2) {
                                                   [state][last_hp][2B min_since LE]
                                                   [2B count LE][2B std_x100 LE] */
 
-/* Wire-struct fuer hybrid-storage. MUSS byte-identisch zu ssc_meta_wire_t
- * im ESP32 view_data.h sein. Alle ints little-endian, packed.          */
-typedef struct __attribute__((packed)) {
-    char     id[24];
-    int32_t  start_ts;
-    int32_t  end_ts;
-    char     operator_tag[16];
-    char     aufguss_headline[48];
-    uint16_t participants;
-    char     notes[192];
-    float    peak_temp;
-    float    peak_rh;
-    uint8_t  aufguss_count;
-    uint8_t  _reserved[3];
-} ssc_meta_wire_t;
-
-/* Forward-decls hier explizit damit arduino-cli's auto-prototype-
- * generator nicht versucht prototypen mit ssc_meta_wire_t-typ vor
- * der typedef einzufuegen (knallt sonst beim build).               */
-static int  write_session_json(const ssc_meta_wire_t *m);
-static int  read_session_json(const char *id, ssc_meta_wire_t *out);
-static int  synthesize_meta_from_csv(const char *id, ssc_meta_wire_t *out);
-static void send_session_meta(const ssc_meta_wire_t *m);
-static void handle_list_sessions(void);
-static void handle_session_meta_push(const uint8_t *payload, size_t len);
-static void handle_session_delete_file(const uint8_t *payload, size_t len);
-static void handle_session_delete_json(const uint8_t *payload, size_t len);
+/* ssc_meta_wire_t + alle v2-Pakete: siehe src/ssc/ssc_proto.h */
 
 /* ------------------------------------------------------------------ */
 /* Geraete-Objekte                                                    */
@@ -218,12 +194,10 @@ static float g_sauna_rh   = NAN;
  * und beim Aufguss-Kommando temporaer auf SSC_INTERVAL_BOOST_MS).   */
 static uint32_t g_interval_ms   = SSC_INTERVAL_NORMAL_MS;
 static uint32_t g_interval_base = SSC_INTERVAL_NORMAL_MS;  /* user-choice */
-static uint32_t g_boost_until_ms = 0;                      /* 0=inaktiv */
 static uint32_t g_last_tick_ms = 0;
 
 /* Zaehler fuer I2C-Fehler - hilft beim Debuggen von Kabelproblemen. */
 static uint32_t g_sht85_fails = 0;
-static uint32_t g_scd_fails   = 0;
 
 /* v0.2.7: boot-observability - wird in setup() befuellt, bleibt danach
  * stabil bis zum naechsten reset.                                        */
@@ -460,26 +434,24 @@ static bool sd_try_init(void) {
     digitalWrite(chipSelect, HIGH);
     delayMicroseconds(50);
 
-    if (SD.begin(chipSelect, 1000000, SPI1)) {
-        slog("SD: initialisiert");
-        return true;
+    /* v0.4.0: 12 MHz statt 1 MHz (Readback/LIST blockierten sonst
+     * sekundenlang); Fallback auf langsamere Takte falls die Karte
+     * zickt.                                                          */
+    static const uint32_t speeds[] = { 12000000UL, 4000000UL, 1000000UL };
+    for (unsigned i = 0; i < sizeof(speeds) / sizeof(speeds[0]); i++) {
+        if (SD.begin(chipSelect, speeds[i], SPI1)) {
+            Serial.print(LOG_TAG); Serial.print("SD: initialisiert @ ");
+            Serial.print(speeds[i] / 1000000UL); Serial.println(" MHz");
+            return true;
+        }
+        SD.end(false);
+        delay(5);
+        rp2040.wdt_reset();
     }
     slog("SD: begin() fehlgeschlagen (karte nicht erkannt / falsches FS? "
          "128GB-Karten muessen FAT32 formatiert sein - Arduino-SD-Lib "
          "kann kein exFAT)");
     return false;
-}
-
-/* Leichter Health-Check: verifiziert dass der `sd_init_flag` nicht
- * stale ist (Karte koennte gezogen worden sein). Gibt true nur wenn
- * /sessions als Directory oeffnet. Schuetzt SD.remove() davor, auf
- * einen unmounted-oder-neu-eingelegten Card zu schreiben. */
-static bool sd_health_probe(void) {
-    if (!sd_init_flag) return false;
-    File d = SD.open("/sessions");
-    if (!d) { sd_init_flag = false; return false; }
-    d.close();
-    return true;
 }
 
 /* Boot-Recovery-Scan: sucht nach kaputten CSV-Dateien unter /sessions/
@@ -559,107 +531,87 @@ static bool sht85_init(void) {
     Wire.setTimeout(25, true);
 
     /* Soft-Reset + Probe auf 0x44 ODER 0x45 (FS400-Varianten).      */
-    if (sht_try_addr(0x44)) return true;
-    if (sht_try_addr(0x45)) return true;
+    if (sht_try_addr(0x44)) { sht_after_init(); return true; }
+    if (sht_try_addr(0x45)) { sht_after_init(); return true; }
     slog("SHT3x not found on I2C 0x44 or 0x45");
     return false;
 }
 
 /* ------------------------------------------------------------------ */
-/* SHT85 Heater-Cycle + Filter-Health-Tracking                        */
+/* SHT3x Status-Register + Heater-Sicherheit (v0.4.0)                 */
 /* ------------------------------------------------------------------ */
-/* Sensirion SHT85 datasheet Section 4.10 "Heater": der heater ist ein
- * TOGGLE-pair (kein pulse!). 0x306D enable, 0x3066 disable. Heater
- * laeuft kontinuierlich bis disable kommt. Spec: max 3 min am stueck,
- * dann mindestens 3 min cooldown.                                      *
- * Nur EIN power-level (~32 mW typical bei 3.3 V supply) - die SHT4x-
- * codes (0x3039 etc.) sind NICHT gueltig fuer SHT85.                  */
-#define SHT85_CMD_HEATER_ON       0x306D
-#define SHT85_CMD_HEATER_OFF      0x3066
+/* Erkenntnisse (Sensirion SHT3x-DIS Datenblatt §4.9/4.10, Research
+ * 2026-10-24):
+ *  - 0x306D/0x3066 ist ein TOGGLE: der Heater bleibt an bis OFF oder
+ *    Soft-Reset. Der 9-Clock-Bus-Unlock schaltet ihn NICHT ab.
+ *  - Der Heater ist nur "for plausibility checking" gedacht. Gegen
+ *    Kontamination (Aroma-Oele) hilft er im heissen Zustand nicht.
+ *    Deshalb: KEIN automatisches Heizen mehr, nur ein bewachter
+ *    Selbsttest im kalten Zustand (sensor_care weiter unten).
+ *  - Nach jedem Init/Soft-Reset und jede Minute wird per Status-
+ *    Register (0xF32D, Bit 13) geprueft, dass der Heater AUS ist.     */
+#define SHT_CMD_HEATER_ON   0x306D
+#define SHT_CMD_HEATER_OFF  0x3066
+#define SHT_CMD_STATUS      0xF32D
+#define SHT_CMD_CLR_STATUS  0x3041
+#define SHT_STATUS_HEATER   0x2000
 
-/* Heater-duration im manuellen modus. 0 = kurz (5 s), 1 = lang (30 s).
- * Spec erlaubt bis 3 min, aber wir bleiben konservativ - kondensat
- * sollte bei 30 s @ 32 mW komplett ausgetrieben sein.                 */
-#define SHT85_HEATER_DURATION_SHORT_MS  5000UL
-#define SHT85_HEATER_DURATION_LONG_MS   30000UL
+static uint16_t g_sht_status      = 0;
+static bool     g_sht_heater_on   = false;   /* letzter verifizierter Zustand */
+static bool     g_sht_heater_stuck = false;  /* OFF liess sich nicht verifizieren */
 
-/* Filter-state-machine fuer 0xC6 PKT_TYPE_SENSOR_HEALTH (siehe top). */
-enum sht_state_t {
-    SHT_OK         = 0,
-    SHT_STUCK_LOW  = 1,
-    SHT_HEATING    = 2,
-    SHT_RECOVERING = 3,
-};
-
-static uint32_t g_sht_heater_last_ms  = 0;
-static uint16_t g_sht_rh100_count     = 0;
-static uint8_t  g_sht_state           = SHT_OK;
-static uint32_t g_sht_state_since_ms  = 0;
-static uint16_t g_sht_heater_count    = 0;   /* seit boot */
-static uint8_t  g_sht_last_heater_hp  = 0;
-static int16_t  g_sht_rh_std_x100     = 0;   /* letzte berechnete std, *100 */
-static uint32_t g_sht_boost_ended_ms  = 0;   /* fuer post-boost-guard */
-
-/* Ringbuffer fuer stuck-at-low detection: 600 samples = 5 min @ 2 Hz.
- * 600 * 4 byte * 2 buffer = 4.8 KB. RP2040 hat 264 KB SRAM, easy.    */
-#define SHT_RING_N 600
-static float    g_sht_rh_buf[SHT_RING_N];
-static float    g_sht_temp_buf[SHT_RING_N];
-static uint16_t g_sht_buf_idx    = 0;
-static uint16_t g_sht_buf_filled = 0;   /* cap at SHT_RING_N, dann immer voll */
-
-/* sht85_heater_cycle(long_mode):
- *   long_mode = 0: kurz  (5 s heater on)  - "sanft" - fuer normales kondensat
- *   long_mode = 1: lang (30 s heater on)  - "stark" - fuer hartnaeckige
- *                                            verstopfung (oel-kontamination)
- *
- * Korrekte SHT85-sequenz: explizit OFF -> ON -> warten -> OFF. Heater ist
- * ein toggle, KEIN pulse - laeuft sonst bis zum naechsten reboot.        */
-static void sht_send_health(void);    /* forward decl, def. weiter unten */
-
-static void sht85_heater_cycle(uint8_t long_mode) {
-    uint32_t duration_ms = long_mode ? SHT85_HEATER_DURATION_LONG_MS
-                                     : SHT85_HEATER_DURATION_SHORT_MS;
-    Serial.print(LOG_TAG);
-    Serial.print("SHT3x heater cycle: ");
-    Serial.print(long_mode ? "LANG 30s" : "KURZ 5s");
-    Serial.println(" (32 mW)");
-
-    g_sht_state          = SHT_HEATING;
-    g_sht_state_since_ms = millis();
-    g_sht_last_heater_hp = long_mode ? 1 : 0;
-    sht_send_health();   /* UI sofort updaten - bevor wir blocken */
-
-    /* Defensiv: erst explizit OFF, falls heater noch laeuft von vorigem
-     * (unsauber abgebrochenen) cycle. Spec erlaubt redundant disable.   */
-    sht85_write_cmd(SHT85_CMD_HEATER_OFF);
-    delay(20);
-
-    /* Jetzt heater AN. */
-    if (!sht85_write_cmd(SHT85_CMD_HEATER_ON)) {
-        slog("SHT3x heater ENABLE failed (i2c error)");
-    }
-
-    /* Warten in 250ms-schritten mit WDT-feeding. duration_ms/250 ticks. */
-    uint32_t ticks = duration_ms / 250UL;
-    for (uint32_t i = 0; i < ticks; i++) {
-        delay(250);
-        rp2040.wdt_reset();
-    }
-
-    /* Explizit AUS - sonst laeuft heater permanent! */
-    if (!sht85_write_cmd(SHT85_CMD_HEATER_OFF)) {
-        slog("SHT3x heater DISABLE failed (i2c error)");
-    }
-    delay(30);   /* sensor settling */
-
-    g_sht_heater_last_ms = millis();
-    g_sht_rh100_count    = 0;
-    if (g_sht_heater_count < 0xFFFF) g_sht_heater_count++;
-    g_sht_state          = SHT_RECOVERING;
-    g_sht_state_since_ms = millis();
-    sht_send_health();   /* ende-event sofort melden */
+static bool sht_status_read(uint16_t *st) {
+    if (!sht85_write_cmd(SHT_CMD_STATUS)) return false;
+    delay(1);
+    if (Wire.requestFrom(g_sht_addr, (uint8_t)3) != 3) return false;
+    if (Wire.available() < 3) return false;
+    uint8_t b[3];
+    for (int i = 0; i < 3; i++) b[i] = (uint8_t)Wire.read();
+    if (sht85_crc8(b, 2) != b[2]) return false;
+    *st = (uint16_t)((b[0] << 8) | b[1]);
+    return true;
 }
+
+/* Heater AUS schalten und per Status-Register verifizieren. Eskalation:
+ * 3x OFF, dann Soft-Reset (setzt laut Datenblatt den Heater zurueck).
+ * Gibt true zurueck wenn der Heater nachweislich aus ist.            */
+static bool sht_heater_force_off(const char *why) {
+    for (int i = 0; i < 3; i++) {
+        sht85_write_cmd(SHT_CMD_HEATER_OFF);
+        delay(2);
+        uint16_t st;
+        if (sht_status_read(&st)) {
+            g_sht_status = st;
+            if (!(st & SHT_STATUS_HEATER)) {
+                g_sht_heater_on = false;
+                g_sht_heater_stuck = false;
+                return true;
+            }
+        }
+        delay(10);
+    }
+    sht85_write_cmd(0x30A2);   /* Soft-Reset: Heater-Default = aus */
+    delay(5);
+    uint16_t st;
+    if (sht_status_read(&st) && !(st & SHT_STATUS_HEATER)) {
+        g_sht_status = st;
+        g_sht_heater_on = false;
+        g_sht_heater_stuck = false;
+        Serial.print(LOG_TAG); Serial.print("heater-off via soft-reset ("); Serial.print(why); Serial.println(")");
+        return true;
+    }
+    g_sht_heater_stuck = true;
+    Serial.print(LOG_TAG); Serial.print("!!! HEATER-OFF NICHT VERIFIZIERBAR ("); Serial.print(why); Serial.println(")");
+    return false;
+}
+
+/* Nach Init/Re-Init: Heater sicher aus, Status-Flags loeschen. */
+static void sht_after_init(void) {
+    sht_heater_force_off("init");
+    sht85_write_cmd(SHT_CMD_CLR_STATUS);
+    delay(1);
+}
+
 
 /* ================================================================== */
 /* AHT20 — Fallback-Fuehler, wenn kein SHT85 gefunden wird             */
@@ -686,222 +638,52 @@ static bool aht20_fallback_init(void) {
     return true;
 }
 
-static void aht20_read_and_send(void) {
-    float h = 0, t = 0;
-    int ok = aht20_fallback.getSensor(&h, &t);
-    if (!ok) {
-        g_sht85_fails++;  /* reused counter */
-        return;
-    }
-    float rh = h * 100.0f;
-    /* Physical sanity (gleiche Envelope wie SHT85: -10..+120 / 0..100).
-     * AHT20 spec ist 0..85 degC aber wir pruefen defensiv weiter - ein
-     * CRC-glitch kann die gleichen Muell-Werte produzieren. */
-    if (t < -10.0f || t > 120.0f) { g_sht85_fails++; return; }
-    if (rh < 0.0f)   rh = 0.0f;
-    if (rh > 100.0f) rh = 100.0f;
-    g_sauna_temp = t;
-    g_sauna_rh   = rh;
-    sensor_data_send(PKT_TYPE_SENSOR_SAUNA_TEMP, t);
-    sensor_data_send(PKT_TYPE_SENSOR_SAUNA_RH, rh);
-}
 
-static void sht85_read_and_send(void) {
+/* Eine SHT3x-Messung mit Retries + Recovery. true = frischer, gueltiger
+ * Wert in *t/*rh. Schreibt NICHT mehr selbst in globale Variablen oder
+ * auf den UART - das macht measure_tick(), damit ungueltige Samples
+ * nie als "frisch" weiterlaufen (v0.4.0: H3 aus dem Audit).          */
+static uint16_t g_sht_consec_fails = 0;
+static bool sht85_read(float *t_out, float *rh_out) {
     float t = NAN, rh = NAN;
     bool ok = false;
-    /* Retry: I2C ist am 2m-Kabel anfaellig fuer stoerungen, kurze
-     * retries bei CRC-fail erhoehen die datenrate dramatisch.       */
     for (uint8_t r = 0; r < SSC_SHT85_RETRY_MAX; r++) {
         if (sht85_measure(&t, &rh)) { ok = true; break; }
         delay(8);
     }
-    if (!ok) {
-        g_sht85_fails++;
-        if ((g_sht85_fails % 10) == 1) {
-            Serial.print(LOG_TAG);
-            Serial.print("SHT3x measure failed (total fails: ");
-            Serial.print(g_sht85_fails);
-            Serial.println(")");
-        }
-        /* Kurz-Recovery: nach 5 consecutive fails ein Soft-Reset-Kommando,
-         * ohne gleich die ganze Init-Chain zu durchlaufen. Billig und
-         * hilft bei transient brownouts des Kabel-Sensors.               */
-        if ((g_sht85_fails % 5) == 0) {
-            Wire.beginTransmission(g_sht_addr);
-            Wire.write(0x30); Wire.write(0xA2);   /* Soft-Reset */
-            Wire.endTransmission();
-            delay(5);
-        }
-        /* Bei dauerhaften Fehlern (alle 20 fails): volle Re-Init mit
-         * Wire.end()/begin() und Bus-Unlock-Preamble. Loest auch
-         * peripheral-jammed states.                                      */
-        if ((g_sht85_fails % 20) == 0) {
-            slog("SHT3x recovery attempt (bus-unlock + re-init)");
-            i2c_bus_unlock(20, 21);
-            if (sht85_init()) {
-                sht_ready = true;
-                g_sht85_fails = 0;   /* clean slate nach erfolgreichem re-init */
-            } else {
-                sht_ready = false;
-            }
-        }
-        return;
+    if (ok) {
+        g_sht_consec_fails = 0;
+        *t_out = t; *rh_out = rh;
+        return true;
     }
-    g_sauna_temp = t;
-    g_sauna_rh   = rh;
-    sensor_data_send(PKT_TYPE_SENSOR_SAUNA_TEMP, t);
-    sensor_data_send(PKT_TYPE_SENSOR_SAUNA_RH, rh);
-
-    /* ringbuffer fuer stuck-at-low eval (siehe sht_eval_stuck_at_low) */
-    g_sht_rh_buf[g_sht_buf_idx]   = rh;
-    g_sht_temp_buf[g_sht_buf_idx] = t;
-    g_sht_buf_idx = (uint16_t)((g_sht_buf_idx + 1) % SHT_RING_N);
-    if (g_sht_buf_filled < SHT_RING_N) g_sht_buf_filled++;
-
-    /* RH-Stuck-at-100-Detektion: Nach Aufguss haelt sich der Polymer-Kappen
-     * oft minutenlang bei 100 %RH (Kondensat haengt physisch am Sensor),
-     * obwohl die Luft schon trocknet. Wenn wir 60 consecutive Samples bei
-     * >=99.5 % sehen UND kein Aufguss-Boost laeuft (dort ist 100 % legitim)
-     * UND der letzte Heat >=10 min her ist, einen Heater-Zyklus feuern. */
-    if (rh >= 99.5f) g_sht_rh100_count++; else g_sht_rh100_count = 0;
-    if (g_sht_rh100_count >= 60 &&
-        g_boost_until_ms == 0 &&
-        (millis() - g_sht_heater_last_ms) > 600000UL) {
-        sht85_heater_cycle(0);   /* sanft - kondensat reicht 33 mW */
-    }
-}
-
-/* ------------------------------------------------------------------ */
-/* sht_send_health: PKT_TYPE_SENSOR_HEALTH (0xC6) an den ESP32         */
-/* ------------------------------------------------------------------ */
-/* 9-byte paket: [0xC6][state][last_hp][2B min_since LE]
- *               [2B count LE][2B std_x100 LE]                          */
-static void sht_send_health(void) {
-    uint8_t pkt[9];
-    pkt[0] = PKT_TYPE_SENSOR_HEALTH;
-    pkt[1] = g_sht_state;
-    pkt[2] = g_sht_last_heater_hp;
-
-    uint16_t min_since;
-    if (g_sht_heater_last_ms == 0) {
-        min_since = 0xFFFF;   /* sentinel: noch nie geheizt seit boot */
-    } else {
-        uint32_t ms = millis() - g_sht_heater_last_ms;
-        uint32_t mn = ms / 60000UL;
-        min_since = (mn > 0xFFFE) ? 0xFFFE : (uint16_t)mn;
-    }
-    pkt[3] = (uint8_t)(min_since & 0xFF);
-    pkt[4] = (uint8_t)((min_since >> 8) & 0xFF);
-
-    pkt[5] = (uint8_t)(g_sht_heater_count & 0xFF);
-    pkt[6] = (uint8_t)((g_sht_heater_count >> 8) & 0xFF);
-
-    uint16_t std_u = (uint16_t)g_sht_rh_std_x100;   /* int16 -> bytes */
-    pkt[7] = (uint8_t)(std_u & 0xFF);
-    pkt[8] = (uint8_t)((std_u >> 8) & 0xFF);
-
-    raw_packet_send(pkt, sizeof(pkt));
-}
-
-/* ------------------------------------------------------------------ */
-/* sht_eval_stuck_at_low: state-machine fuer filter-verstopfung        */
-/* ------------------------------------------------------------------ */
-/* Wird alle ~10 s aufgerufen aus loop(). Berechnet std(RH) und        */
-/* ptp(temp) ueber das ringbuffer-fenster (5 min @ 2 Hz).              */
-/*                                                                     */
-/*   STUCK_LOW enter: rh_std < 0.5 AND temp_ptp > 5 AND !boost         */
-/*                    AND heater_age > 10 min AND probe == SHT85       */
-/*   STUCK_LOW exit:  rh_std >= 1.0   (hysterese)                      */
-/*   RECOVERING exit: 60 s nach heater-cycle-ende -> eval (OK / STUCK) */
-static void sht_eval_stuck_at_low(void) {
-    if (g_sauna_probe != SAUNA_PROBE_SHT85) {
-        if (g_sht_state != SHT_OK) {
-            g_sht_state = SHT_OK;
-            g_sht_state_since_ms = millis();
-        }
-        return;
-    }
-    if (g_sht_buf_filled < SHT_RING_N) return;   /* warmup 5 min */
-
-    /* std + ptp ueber alle 600 samples (one-pass mean + sum-of-diffs²) */
-    float rh_sum = 0.0f;
-    float tp_min = g_sht_temp_buf[0], tp_max = g_sht_temp_buf[0];
-    for (uint16_t i = 0; i < SHT_RING_N; i++) {
-        rh_sum += g_sht_rh_buf[i];
-        float tp = g_sht_temp_buf[i];
-        if (tp < tp_min) tp_min = tp;
-        if (tp > tp_max) tp_max = tp;
-    }
-    float rh_mean = rh_sum / (float)SHT_RING_N;
-    float ssq = 0.0f;
-    for (uint16_t i = 0; i < SHT_RING_N; i++) {
-        float d = g_sht_rh_buf[i] - rh_mean;
-        ssq += d * d;
-    }
-    float rh_std  = sqrtf(ssq / (float)SHT_RING_N);
-    float temp_ptp = tp_max - tp_min;
-    int32_t std_x = (int32_t)(rh_std * 100.0f);
-    if (std_x > 32767) std_x = 32767;
-    g_sht_rh_std_x100 = (int16_t)std_x;
-
-    uint32_t now = millis();
-
-    /* RECOVERING: 60 s post-heater-cooldown */
-    if (g_sht_state == SHT_HEATING) {
-        /* fall-through - heater-cycle setzt selbst RECOVERING. */
-    } else if (g_sht_state == SHT_RECOVERING) {
-        if (now - g_sht_state_since_ms > 60000UL) {
-            /* reeval: stuck noch da? */
-            if (rh_std < 0.5f && temp_ptp > 5.0f) {
-                g_sht_state = SHT_STUCK_LOW;
-            } else {
-                g_sht_state = SHT_OK;
-            }
-            g_sht_state_since_ms = now;
-            sht_send_health();
-        }
-        return;
-    }
-
-    /* post-boost-guard: 60 s nach boost-ende ignorieren wir den       */
-    /* detector, weil aufguss-feuchte noch im ringbuffer "nachschwingt". */
-    bool boost_active = (g_boost_until_ms != 0);
-    bool in_boost_recovery = (g_sht_boost_ended_ms != 0) &&
-                             (now - g_sht_boost_ended_ms < 60000UL);
-
-    bool heater_cold = (g_sht_heater_last_ms == 0) ||
-                       ((now - g_sht_heater_last_ms) > 600000UL);
-
-    uint8_t prev_state = g_sht_state;
-
-    if (g_sht_state == SHT_OK) {
-        if (rh_std < 0.5f && temp_ptp > 5.0f &&
-            !boost_active && !in_boost_recovery && heater_cold) {
-            g_sht_state = SHT_STUCK_LOW;
-            g_sht_state_since_ms = now;
-        }
-    } else if (g_sht_state == SHT_STUCK_LOW) {
-        /* hysterese: exit nur wenn varianz wieder klar gesund */
-        if (rh_std >= 1.0f) {
-            g_sht_state = SHT_OK;
-            g_sht_state_since_ms = now;
-        }
-    }
-
-    if (g_sht_state != prev_state) {
+    g_sht85_fails++;
+    g_sht_consec_fails++;
+    if ((g_sht_consec_fails % 10) == 1) {
         Serial.print(LOG_TAG);
-        Serial.print("SHT3x state change ");
-        Serial.print(prev_state);
-        Serial.print(" -> ");
-        Serial.print(g_sht_state);
-        Serial.print("  (rh_std=");
-        Serial.print(rh_std, 2);
-        Serial.print(", temp_ptp=");
-        Serial.print(temp_ptp, 1);
+        Serial.print("SHT3x measure failed (consecutive: ");
+        Serial.print(g_sht_consec_fails);
+        Serial.print(", total: ");
+        Serial.print(g_sht85_fails);
         Serial.println(")");
-        sht_send_health();
     }
+    /* Kurz-Recovery nach 5 aufeinanderfolgenden Fehlern: Soft-Reset
+     * (schaltet nebenbei auch einen evtl. haengenden Heater ab).      */
+    if ((g_sht_consec_fails % 5) == 0) {
+        Wire.beginTransmission(g_sht_addr);
+        Wire.write(0x30); Wire.write(0xA2);
+        Wire.endTransmission();
+        delay(5);
+    }
+    /* Nach 20 aufeinanderfolgenden Fehlern: Bus-Unlock + volle Re-Init. */
+    if ((g_sht_consec_fails % 20) == 0) {
+        slog("SHT3x recovery attempt (bus-unlock + re-init)");
+        i2c_bus_unlock(20, 21);
+        sht_ready = sht85_init();
+        if (sht_ready) g_sht_consec_fails = 0;
+    }
+    return false;
 }
+
 
 /* ================================================================== */
 /* SCD41 (intern) - CO2 + Temp + RH fuer Vorraum-Anzeige              */
@@ -1011,117 +793,249 @@ static void sensor_sgp40_read_and_send(void) {
 }
 
 /* ================================================================== */
-/* Session-SD-Gateway                                                 */
+/* v0.4.0: Rekorder (Wahrheit), Auto-Modus, Protokoll v2              */
 /* ================================================================== */
-#define SSC_SESSION_ID_LEN  24
-#define SSC_AUFGUSS_LEN     48
+/* Der RP2040 besitzt die Aufzeichnung komplett: Start/Ende (manuell
+ * oder automatisch durch den Detektor), Ereignisse, Statistik, Resume
+ * nach Reset. Der ESP32 ist nur noch Anzeige + Metadaten + Uhr. Ein
+ * ESP32-Neustart beendet deshalb keine Aufzeichnung mehr (v0.3.3-Bug:
+ * das Legacy-POWER_ON 0xA4 rief session_end()).                       */
 
-static bool  g_session_active = false;
-static char  g_session_id[SSC_SESSION_ID_LEN] = {0};
-static char  g_session_path[40] = {0};
-static File  g_session_file;
-static uint32_t g_session_started_ms = 0;
+static ssc_det_t g_det;
 
-/* Readback-Downsample-Buffer: Beim ersten Request einer Session lesen
- * wir die CSV einmal komplett + decimieren auf ~300 Samples (Aufguss-
- * Marker IMMER behalten). Resultat landet in diesem DRAM-Buffer, aus
- * dem die Chunks gelesen werden. Vorteile ggue. direktem File-Read:
- *   - Kleine SD-Lese-Zeit nur einmal (~100-500 ms upfront statt pro Chunk)
- *   - Grosse Sessions werden drastisch kleiner (60 KB -> 4 KB) -> weniger
- *     UART-Chunks -> ESP32-UART-Parser-Overflow-Risiko minimiert
- *   - Kurze Sessions: kein Decimate, volle Daten (Buffer enthaelt copy) */
-#define SSC_RBK_DS_BUF_SIZE  6144
-#define SSC_RBK_TARGET_SAMPLES 60    /* aggressiv-downsampling: 60 Punkte fuer die
-                                        Chart-Uebersicht. 60 samples * ~15 bytes = ~900 bytes
-                                        = ~15 UART-Chunks @ 64B = <3s bei gutem UART */
-static char     g_rbk_ds_buf[SSC_RBK_DS_BUF_SIZE];
-static uint32_t g_rbk_ds_size = 0;
-static char     g_rbk_ds_sid[SSC_SESSION_ID_LEN] = {0};
+/* ---------------- Zeit (vom ESP32 per TIME_SYNC) ------------------- */
+static uint32_t g_ts_utc = 0, g_ts_ms = 0;
+static int32_t  g_ts_tz  = 3600;
+static uint8_t  g_ts_src = 0;
+static bool     g_ts_have = false;
 
-static bool rbk_build_downsampled(const char *sid) {
-    char path[40];
-    snprintf(path, sizeof(path), "/sessions/%s.csv", sid);
-    File f = SD.open(path, FILE_READ);
-    if (!f) return false;
-    rp2040.wdt_reset();
+static bool time_valid(void) {
+    /* source >= 2: NVS-Fallback, manuell oder NTP. Compile-Time reicht
+     * nicht fuer Session-IDs.                                          */
+    return g_ts_have && g_ts_src >= 2 && g_ts_utc > 1700000000UL;
+}
+static uint32_t utc_now(void) {
+    if (!g_ts_have) return 0;
+    return g_ts_utc + (millis() - g_ts_ms) / 1000UL;
+}
 
-    uint32_t fs = f.size();
-    g_rbk_ds_size = 0;
+/* ---------------- Simulations-/Replay-Modus (USB ?F) --------------- */
+/* tools/replay_session.py speist echte CSVs mit beliebiger Geschwindig-
+ * keit ein. Die Sample-Zeit kommt dann aus der Datei, nicht aus millis.
+ * Endet automatisch 5 s nach dem letzten ?F.                          */
+static bool     g_sim = false;
+static uint32_t g_sim_t = 0;          /* aktuelle Sim-Zeit (ms)         */
+static uint32_t g_sim_last_feed = 0;  /* millis() des letzten ?F        */
 
-    if (fs <= 4000 && fs < SSC_RBK_DS_BUF_SIZE) {
-        /* Kleine Session: volles Kopieren. */
-        while (f.available() && g_rbk_ds_size < SSC_RBK_DS_BUF_SIZE) {
-            int c = f.read();
-            if (c < 0) break;
-            g_rbk_ds_buf[g_rbk_ds_size++] = (char)c;
-            if ((g_rbk_ds_size & 0x3FF) == 0) rp2040.wdt_reset();
-        }
-        f.close();
-        rp2040.wdt_reset();
-        return true;
+static uint32_t clk_ms(void) { return g_sim ? g_sim_t : millis(); }
+
+/* ---------------- Sensor-Pflege-Zustand ---------------------------- */
+enum { ST_IDLE = 0, ST_BASE, ST_HEAT, ST_SETTLE };
+static uint8_t  g_st_phase = ST_IDLE;
+static uint32_t g_st_phase_ms = 0;
+static uint8_t  g_st_result = SSC_ST_NONE, g_st_reason = 0;
+static uint16_t g_st_k_x100 = 0;
+static uint32_t g_st_last_ms = 0;      /* 0 = noch nie                   */
+static float    g_st_t0 = NAN, g_st_rh0 = NAN, g_st_tend = NAN, g_st_rhend = NAN;
+static float    g_st_acc_t = 0, g_st_acc_rh = 0; static uint16_t g_st_acc_n = 0;
+
+/* Letzter gueltiger Sauna-Messwert (fuer Anzeige/Interlocks) */
+static uint32_t g_sauna_ok_ms = 0;     /* millis() der letzten gueltigen Messung */
+
+/* ---------------- Rekorder-Zustand --------------------------------- */
+#define SSC_MAX_EVENTS 64
+struct rec_state_t {
+    bool     active, file_ok, resumed, sim, resume_checked;
+    char     id[SSC_ID_LEN];
+    char     path[44];
+    File     f;
+    uint8_t  origin;
+    uint32_t start_utc;       /* 0 = unbekannt                        */
+    uint32_t t0_clk, t_off;   /* t_ms = t_off + (clk_ms() - t0_clk)    */
+    uint32_t rows;
+    uint16_t write_errs;
+    uint32_t last_flush_ms, last_save_ms, last_probe_ms;
+    float    peak_t, peak_rh;
+    uint8_t  gang, n_aufguss, n_luef;
+    uint8_t  n_ev;
+    ssc_event_rec_t        ev[SSC_MAX_EVENTS];
+    ssc_event_label_body_t lbl[SSC_MAX_EVENTS];
+    ssc_meta_wire_t user;     /* User-Felder (vom ESP32 per META_PUSH) */
+    bool     have_user;
+    char     marker[24];      /* naechstes CSV-Event-Token             */
+};
+static rec_state_t g_rec;
+
+/* Hilfs-Puffer fuer Events vergangener Sessions (GET_EVENTS/LABEL). */
+static ssc_event_rec_t        g_tmp_ev[SSC_MAX_EVENTS];
+static ssc_event_label_body_t g_tmp_lbl[SSC_MAX_EVENTS];
+
+static uint8_t  g_auto_enabled = 1;    /* persistiert in /ssc_auto.cfg   */
+static bool     g_state_dirty = true;
+static uint16_t g_bad_len = 0, g_bad_crc = 0;
+static uint16_t g_uart_ovf = 0;
+
+static void rt_service(void);          /* 2-Hz-Takt aus langen Schleifen */
+static void send_session_state(void);
+static void sensor_health_send(void);
+
+static uint32_t rec_t_ms(void) { return g_rec.t_off + (clk_ms() - g_rec.t0_clk); }
+
+static void send_ack(uint8_t cmd, uint8_t rc, uint8_t extra) {
+    ssc_ack_t a = { cmd, rc, extra };
+    uint8_t pkt[1 + sizeof(a)];
+    pkt[0] = SSC_PKT_ACK;
+    memcpy(pkt + 1, &a, sizeof(a));
+    raw_packet_send(pkt, sizeof(pkt));
+}
+
+static void set_marker(const char *m) {
+    /* mehrere Events im selben Sample: mit ';' verketten */
+    size_t l = strlen(g_rec.marker);
+    if (l && l + 1 < sizeof(g_rec.marker)) { g_rec.marker[l++] = ';'; g_rec.marker[l] = 0; }
+    strncat(g_rec.marker, m, sizeof(g_rec.marker) - 1 - strlen(g_rec.marker));
+}
+
+/* Strings fuer CSV/.evt/JSON entschaerfen. */
+static void sanitize(char *s, size_t n) {
+    for (size_t i = 0; i < n && s[i]; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c == ',' ) s[i] = ';';
+        else if (c == '"' || c == '\\') s[i] = '\'';
+        else if (c < 0x20) s[i] = ' ';
     }
+    s[n - 1] = 0;
+}
 
-    /* Grosse Session: decimieren. N = ceil(samples / TARGET).
-     * Samples-Schaetzung: ~20 bytes pro Zeile avg. */
-    uint32_t est_samples = fs / 20;
-    uint16_t N = (est_samples + SSC_RBK_TARGET_SAMPLES - 1) / SSC_RBK_TARGET_SAMPLES;
-    if (N < 2) N = 2;
+/* ---------------- SD-Grundfunktionen ------------------------------- */
+static void rec_sd_fail(const char *why) {
+    Serial.print(LOG_TAG); Serial.print("SD-Schreibfehler: "); Serial.println(why);
+    if (g_rec.f) g_rec.f.close();
+    g_rec.f = File();
+    g_rec.file_ok = false;
+    if (g_rec.write_errs < 0xFFFF) g_rec.write_errs++;
+    sd_init_flag = false;     /* loop() mountet neu (SD.end + begin) */
+    g_state_dirty = true;
+}
 
-    char line[128];
-    uint16_t lb = 0;
-    uint32_t line_num = 0;    /* 0 = header, dann sample lines */
-
-    while (f.available()) {
-        int c = f.read();
-        if (c < 0) break;
-
-        if (c == '\n' || c == '\r') {
-            if (lb > 0) {
-                line[lb] = 0;
-                bool keep = false;
-                if (line_num == 0) {
-                    keep = true;        /* header immer behalten */
-                } else {
-                    /* Aufguss-Marker (letzte spalte nicht leer) -> immer behalten */
-                    const char *last_comma = strrchr(line, ',');
-                    bool has_marker = (last_comma && last_comma[1] != 0);
-                    if (has_marker) keep = true;
-                    else if ((line_num - 1) % N == 0) keep = true;
-                }
-                if (keep && g_rbk_ds_size + lb + 1 < SSC_RBK_DS_BUF_SIZE) {
-                    memcpy(g_rbk_ds_buf + g_rbk_ds_size, line, lb);
-                    g_rbk_ds_size += lb;
-                    g_rbk_ds_buf[g_rbk_ds_size++] = '\n';
-                }
-                line_num++;
-                lb = 0;
-                if ((line_num & 0x3F) == 0) rp2040.wdt_reset();
-            }
-        } else if (lb < sizeof(line) - 1) {
-            line[lb++] = (char)c;
-        }
-    }
-    f.close();
-    rp2040.wdt_reset();
+static bool rec_write(const char *buf, size_t n) {
+    if (!g_rec.file_ok || !g_rec.f) return false;
+    size_t w = g_rec.f.write((const uint8_t *)buf, n);
+    if (w != n) { rec_sd_fail("write"); return false; }
     return true;
 }
 
-static void session_path_from_id(const char *id) {
-    /* "/sessions/<id>.csv" */
-    snprintf(g_session_path, sizeof(g_session_path), "/sessions/%s.csv", id);
+static void active_file_save(void) {
+    if (!g_rec.active || !sd_init_flag) return;
+    File a = SD.open("/ssc_active.tmp", FILE_WRITE);
+    if (!a) return;
+    char b[160];
+    int n = snprintf(b, sizeof(b), "%s\n%lu\n%lu\n%u\n%u %u %u %.2f %.2f\n%u\n",
+                     g_rec.id, (unsigned long)g_rec.start_utc,
+                     (unsigned long)rec_t_ms(), (unsigned)g_rec.origin,
+                     (unsigned)g_rec.gang, (unsigned)g_rec.n_aufguss,
+                     (unsigned)g_rec.n_luef, (double)g_rec.peak_t,
+                     (double)g_rec.peak_rh, (unsigned)g_rec.sim);
+    bool ok = n > 0 && a.write((const uint8_t *)b, (size_t)n) == (size_t)n;
+    a.close();
+    /* atomar ersetzen: tmp -> active */
+    if (ok) {
+        SD.remove("/ssc_active.txt");
+        SD.rename("/ssc_active.tmp", "/ssc_active.txt");
+    }
 }
 
-/* ================================================================== */
-/* v0.3.0: Hybrid-Storage Helpers (JSON sidecar / synthesize / stream) */
-/* ================================================================== */
+/* ---------------- .evt-Datei --------------------------------------- */
+static void evt_path(const char *id, char *p, size_t n) {
+    snprintf(p, n, "/sessions/%s.evt", id);
+}
 
-/* JSON-string-feld extrahieren. Sucht "key":" und kopiert bis zum
- * naechsten ungeskippten ". Schreibt nul-terminiert in dst. Bei nicht-
- * gefunden bleibt dst unveraendert (NICHT genullt). Sehr schmal -
- * unterstuetzt keine \\-escapes ausser einfacher \" - reicht fuer
- * unsere felder.                                                       */
-static void json_extract_str(const char *src, const char *key,
-                             char *dst, size_t dst_sz) {
+static int evt_write(const char *id, const ssc_event_rec_t *ev,
+                     const ssc_event_label_body_t *lb, uint8_t n) {
+    if (!sd_init_flag) return -1;
+    char p[48]; evt_path(id, p, sizeof(p));
+    char tp[48]; snprintf(tp, sizeof(tp), "/sessions/%s.evx", id);
+    SD.remove(tp);
+    File f = SD.open(tp, FILE_WRITE);
+    if (!f) return -2;
+    bool ok = true;
+    for (uint8_t i = 0; i < n && ok; i++) {
+        const ssc_event_rec_t *e = &ev[i];
+        ssc_event_label_body_t l = lb[i];
+        sanitize(l.operator_tag, sizeof(l.operator_tag));
+        sanitize(l.name, sizeof(l.name));
+        sanitize(l.aroma, sizeof(l.aroma));
+        char b[220];
+        int k = snprintf(b, sizeof(b),
+            "%u,%u,%u,%u,%u,%lu,%lu,%lu,%d,%d,%u,%u,%u,%u,%u,%s,%s,%s\n",
+            e->no, e->kind, e->flags, e->gang, e->seq,
+            (unsigned long)e->t_start_ms, (unsigned long)e->t_peak_ms,
+            (unsigned long)e->t_end_ms, e->t0_x10, e->tpk_x10,
+            e->rh0_x10, e->rhpk_x10, e->ah0_x10, e->ahpk_x10,
+            l.participants, l.operator_tag, l.name, l.aroma);
+        ok = k > 0 && f.write((const uint8_t *)b, (size_t)k) == (size_t)k;
+    }
+    f.close();
+    if (!ok) return -3;
+    SD.remove(p);
+    return SD.rename(tp, p) ? 0 : -4;
+}
+
+/* Liest <id>.evt. Rueckgabe Anzahl Events oder <0. */
+static int evt_read(const char *id, ssc_event_rec_t *ev, ssc_event_label_body_t *lb) {
+    if (!sd_init_flag) return -1;
+    char p[48]; evt_path(id, p, sizeof(p));
+    File f = SD.open(p, FILE_READ);
+    if (!f) return -2;
+    int n = 0;
+    char line[224];
+    while (f.available() && n < SSC_MAX_EVENTS) {
+        size_t len = 0;
+        while (f.available() && len < sizeof(line) - 1) {
+            int c = f.read();
+            if (c < 0 || c == '\n') break;
+            line[len++] = (char)c;
+        }
+        line[len] = 0;
+        if (len < 10) continue;
+        unsigned a[15]; unsigned long ts[3]; int t0, tpk;
+        int pos = 0;
+        int got = sscanf(line, "%u,%u,%u,%u,%u,%lu,%lu,%lu,%d,%d,%u,%u,%u,%u,%u,%n",
+                         &a[0], &a[1], &a[2], &a[3], &a[4], &ts[0], &ts[1], &ts[2],
+                         &t0, &tpk, &a[5], &a[6], &a[7], &a[8], &a[9], &pos);
+        if (got < 15 || pos <= 0) continue;
+        ssc_event_rec_t *e = &ev[n];
+        memset(e, 0, sizeof(*e));
+        e->no = (uint8_t)a[0]; e->kind = (uint8_t)a[1]; e->flags = (uint8_t)a[2];
+        e->gang = (uint8_t)a[3]; e->seq = (uint8_t)a[4];
+        e->t_start_ms = ts[0]; e->t_peak_ms = ts[1]; e->t_end_ms = ts[2];
+        e->t0_x10 = (int16_t)t0; e->tpk_x10 = (int16_t)tpk;
+        e->rh0_x10 = (uint16_t)a[5]; e->rhpk_x10 = (uint16_t)a[6];
+        e->ah0_x10 = (uint16_t)a[7]; e->ahpk_x10 = (uint16_t)a[8];
+        ssc_event_label_body_t *l = &lb[n];
+        memset(l, 0, sizeof(*l));
+        l->participants = (uint8_t)a[9];
+        /* drei Strings, kommagetrennt */
+        char *s = line + pos;
+        char *fld[3] = { l->operator_tag, l->name, l->aroma };
+        size_t cap[3] = { sizeof(l->operator_tag), sizeof(l->name), sizeof(l->aroma) };
+        for (int k = 0; k < 3; k++) {
+            char *c = strchr(s, ',');
+            size_t m = c ? (size_t)(c - s) : strlen(s);
+            if (m >= cap[k]) m = cap[k] - 1;
+            memcpy(fld[k], s, m); fld[k][m] = 0;
+            if (!c) break;
+            s = c + 1;
+        }
+        n++;
+        if ((n & 7) == 0) rt_service();
+    }
+    f.close();
+    return n;
+}
+
+/* ---------------- JSON-Sidecar ------------------------------------- */
+static void json_extract_str(const char *src, const char *key, char *dst, size_t dst_sz) {
     char needle[40];
     snprintf(needle, sizeof(needle), "\"%s\":\"", key);
     const char *p = strstr(src, needle);
@@ -1129,13 +1043,11 @@ static void json_extract_str(const char *src, const char *key,
     p += strlen(needle);
     size_t i = 0;
     while (*p && *p != '"' && i < dst_sz - 1) {
-        if (*p == '\\' && *(p+1)) { p++; }
+        if (*p == '\\' && *(p + 1)) p++;
         dst[i++] = *p++;
     }
     dst[i] = 0;
 }
-
-/* JSON int feld: sucht "key": und parst long danach. */
 static long json_extract_long(const char *src, const char *key, long def) {
     char needle[40];
     snprintf(needle, sizeof(needle), "\"%s\":", key);
@@ -1145,7 +1057,6 @@ static long json_extract_long(const char *src, const char *key, long def) {
     while (*p == ' ') p++;
     return atol(p);
 }
-
 static float json_extract_float(const char *src, const char *key, float def) {
     char needle[40];
     snprintf(needle, sizeof(needle), "\"%s\":", key);
@@ -1156,185 +1067,919 @@ static float json_extract_float(const char *src, const char *key, float def) {
     return (float)atof(p);
 }
 
-/* Schreibt /sessions/<id>.json mit der wire-struct. Strings werden
- * minimal escaped: " -> ' (vermeidet broken JSON), \ -> /. Reicht
- * fuer human-readable-export, kein tooling-perfect JSON.              */
-static void json_escape_str(const char *in, char *out, size_t out_sz) {
-    size_t i = 0;
-    while (*in && i < out_sz - 1) {
-        char c = *in++;
-        if (c == '"' || c == '\\') c = '\'';   /* simplify */
-        else if (c < 0x20) c = ' ';            /* control chars */
-        out[i++] = c;
-    }
-    out[i] = 0;
-}
-
-static int write_session_json(const ssc_meta_wire_t *m) {
+/* Liest <id>.json. measured=true wenn der RP2040 (v0.4+) die Messwerte
+ * selbst geschrieben hat ("fw"-Key vorhanden).                          */
+static int read_session_json(const char *id, ssc_meta_wire_t *out, bool *measured) {
     if (!sd_init_flag) return -1;
-    char path[64];
-    snprintf(path, sizeof(path), "/sessions/%s.json", m->id);
-    if (SD.exists(path)) SD.remove(path);
-    File f = SD.open(path, FILE_WRITE);
-    if (!f) return -2;
-
-    char esc_op[32];   json_escape_str(m->operator_tag,     esc_op,  sizeof(esc_op));
-    char esc_au[80];   json_escape_str(m->aufguss_headline, esc_au,  sizeof(esc_au));
-    char esc_no[300];  json_escape_str(m->notes,            esc_no,  sizeof(esc_no));
-
-    char buf[700];
-    int n = snprintf(buf, sizeof(buf),
-        "{\"id\":\"%s\","
-        "\"start_ts\":%ld,"
-        "\"end_ts\":%ld,"
-        "\"operator\":\"%s\","
-        "\"aufguss_headline\":\"%s\","
-        "\"participants\":%u,"
-        "\"notes\":\"%s\","
-        "\"peak_temp\":%.2f,"
-        "\"peak_rh\":%.2f,"
-        "\"aufguss_count\":%u}\n",
-        m->id,
-        (long)m->start_ts,
-        (long)m->end_ts,
-        esc_op, esc_au,
-        (unsigned)m->participants,
-        esc_no,
-        (double)m->peak_temp,
-        (double)m->peak_rh,
-        (unsigned)m->aufguss_count);
-    if (n > 0) f.write((const uint8_t*)buf, (size_t)n);
-    f.close();
-    return 0;
-}
-
-/* Liest /sessions/<id>.json und fuellt out mit den feldern. id wird
- * vom caller bereits gesetzt (kommt aus filename-enumeration).        */
-static int read_session_json(const char *id, ssc_meta_wire_t *out) {
-    if (!sd_init_flag) return -1;
-    char path[64];
+    char path[48];
     snprintf(path, sizeof(path), "/sessions/%s.json", id);
     File f = SD.open(path, FILE_READ);
     if (!f) return -2;
-    char buf[700];
-    size_t n = f.read((uint8_t*)buf, sizeof(buf) - 1);
+    static char buf[900];
+    size_t n = f.read((uint8_t *)buf, sizeof(buf) - 1);
     f.close();
     if (n == 0) return -3;
     buf[n] = 0;
-
     memset(out, 0, sizeof(*out));
     strncpy(out->id, id, sizeof(out->id) - 1);
-    out->start_ts     = (int32_t)json_extract_long (buf, "start_ts", 0);
-    out->end_ts       = (int32_t)json_extract_long (buf, "end_ts",   0);
-    out->participants = (uint16_t)json_extract_long(buf, "participants", 0);
-    out->peak_temp    = json_extract_float(buf, "peak_temp", 0.0f);
-    out->peak_rh      = json_extract_float(buf, "peak_rh",   0.0f);
-    out->aufguss_count= (uint8_t)json_extract_long (buf, "aufguss_count", 0);
-    json_extract_str(buf, "operator",          out->operator_tag,     sizeof(out->operator_tag));
-    json_extract_str(buf, "aufguss_headline",  out->aufguss_headline, sizeof(out->aufguss_headline));
-    json_extract_str(buf, "notes",             out->notes,            sizeof(out->notes));
+    out->start_ts      = (int32_t)json_extract_long(buf, "start_ts", 0);
+    out->end_ts        = (int32_t)json_extract_long(buf, "end_ts", 0);
+    out->participants  = (uint16_t)json_extract_long(buf, "participants", 0);
+    out->peak_temp     = json_extract_float(buf, "peak_temp", 0.0f);
+    out->peak_rh       = json_extract_float(buf, "peak_rh", 0.0f);
+    out->aufguss_count = (uint8_t)json_extract_long(buf, "aufguss_count", 0);
+    json_extract_str(buf, "operator", out->operator_tag, sizeof(out->operator_tag));
+    json_extract_str(buf, "aufguss_headline", out->aufguss_headline, sizeof(out->aufguss_headline));
+    json_extract_str(buf, "notes", out->notes, sizeof(out->notes));
+    if (measured) *measured = strstr(buf, "\"fw\":") != NULL;
     return 0;
 }
 
-/* Recovery-pfad: kein .json sidecar - rekonstruiere metadata aus dem
- * CSV-content. start_ts kommt aus dem id-format, peaks + end-zeit aus
- * dem letzten sample, aufguss_count aus den marker-spalten.            */
-static int synthesize_meta_from_csv(const char *id, ssc_meta_wire_t *out) {
+/* Schreibt <id>.json atomar (tmp + rename). m = vollstaendiger Record.
+ * extra_* nur fuer v0.4-Felder (Gaenge etc.), <0 = weglassen.          */
+static int write_session_json(const ssc_meta_wire_t *m, int gaenge, int lueften,
+                              int origin, int sim, uint32_t rows, uint16_t werrs) {
     if (!sd_init_flag) return -1;
-    char path[64];
+    char path[48], tmp[48];
+    snprintf(path, sizeof(path), "/sessions/%s.json", m->id);
+    snprintf(tmp, sizeof(tmp), "/sessions/%s.jsx", m->id);
+    ssc_meta_wire_t c = *m;
+    c.id[sizeof(c.id) - 1] = 0;
+    c.operator_tag[sizeof(c.operator_tag) - 1] = 0;
+    c.aufguss_headline[sizeof(c.aufguss_headline) - 1] = 0;
+    c.notes[sizeof(c.notes) - 1] = 0;
+    sanitize(c.operator_tag, sizeof(c.operator_tag));
+    sanitize(c.aufguss_headline, sizeof(c.aufguss_headline));
+    sanitize(c.notes, sizeof(c.notes));
+    static char buf[900];
+    int n = snprintf(buf, sizeof(buf),
+        "{\"id\":\"%s\",\"start_ts\":%ld,\"end_ts\":%ld,\"operator\":\"%s\","
+        "\"aufguss_headline\":\"%s\",\"participants\":%u,\"notes\":\"%s\","
+        "\"peak_temp\":%.2f,\"peak_rh\":%.2f,\"aufguss_count\":%u",
+        c.id, (long)c.start_ts, (long)c.end_ts, c.operator_tag, c.aufguss_headline,
+        (unsigned)c.participants, c.notes, (double)c.peak_temp, (double)c.peak_rh,
+        (unsigned)c.aufguss_count);
+    if (n < 0 || n >= (int)sizeof(buf)) return -5;
+    if (gaenge >= 0) {
+        int k = snprintf(buf + n, sizeof(buf) - n,
+            ",\"gaenge\":%d,\"lueften\":%d,\"origin\":%d,\"sim\":%d,\"rows\":%lu,"
+            "\"write_errs\":%u,\"fw\":\"%s\",\"det\":%d",
+            gaenge, lueften, origin, sim, (unsigned long)rows, (unsigned)werrs,
+            VERSION, SSC_DET_VERSION);
+        if (k < 0 || k >= (int)(sizeof(buf) - n)) return -5;
+        n += k;
+    }
+    if (n + 3 >= (int)sizeof(buf)) return -5;
+    buf[n++] = '}'; buf[n++] = '\n';
+    SD.remove(tmp);
+    File f = SD.open(tmp, FILE_WRITE);
+    if (!f) return -2;
+    bool ok = f.write((const uint8_t *)buf, (size_t)n) == (size_t)n;
+    f.close();
+    if (!ok) return -3;
+    SD.remove(path);
+    return SD.rename(tmp, path) ? 0 : -4;
+}
+
+/* Messwerte der laufenden/gerade beendeten Session in einen Record. */
+static void rec_fill_measured(ssc_meta_wire_t *m, bool final_) {
+    strncpy(m->id, g_rec.id, sizeof(m->id) - 1);
+    m->start_ts = (int32_t)g_rec.start_utc;
+    m->end_ts   = g_rec.start_utc ? (int32_t)(g_rec.start_utc + rec_t_ms() / 1000UL) : 0;
+    (void)final_;
+    m->peak_temp = g_rec.peak_t > -100.0f ? g_rec.peak_t : 0.0f;
+    m->peak_rh   = g_rec.peak_rh > -100.0f ? g_rec.peak_rh : 0.0f;
+    uint8_t na = 0;
+    for (uint8_t i = 0; i < g_rec.n_ev; i++)
+        if (g_rec.ev[i].kind == SSC_EK_AUFGUSS && !(g_rec.ev[i].flags & SSC_EVF_DELETED)) na++;
+    m->aufguss_count = na;
+}
+
+static void rec_write_json(bool final_) {
+    ssc_meta_wire_t m;
+    memset(&m, 0, sizeof(m));
+    if (g_rec.have_user) m = g_rec.user;
+    rec_fill_measured(&m, final_);
+    int rc = write_session_json(&m, g_rec.gang, g_rec.n_luef, g_rec.origin,
+                                g_rec.sim, g_rec.rows, g_rec.write_errs);
+    if (rc != 0) { Serial.print(LOG_TAG); Serial.print("json write rc="); Serial.println(rc); }
+}
+
+/* ---------------- Events ------------------------------------------- */
+static void event_send_live(const ssc_event_rec_t *e) {
+    ssc_event_msg_t m;
+    memset(&m, 0, sizeof(m));
+    strncpy(m.id, g_rec.id, sizeof(m.id) - 1);
+    m.e = *e;
+    uint8_t pkt[1 + sizeof(m)];
+    pkt[0] = SSC_PKT_EVENT;
+    memcpy(pkt + 1, &m, sizeof(m));
+    raw_packet_send(pkt, sizeof(pkt));
+}
+
+static int16_t x10s(float v) { return isnan(v) ? 0 : (int16_t)lroundf(v * 10.0f); }
+static uint16_t x10u(float v) { return (isnan(v) || v < 0) ? 0 : (uint16_t)lroundf(v * 10.0f); }
+
+static ssc_event_rec_t *rec_new_event(uint8_t kind) {
+    if (g_rec.n_ev >= SSC_MAX_EVENTS) return NULL;
+    uint8_t i = g_rec.n_ev++;
+    memset(&g_rec.ev[i], 0, sizeof(g_rec.ev[i]));
+    memset(&g_rec.lbl[i], 0, sizeof(g_rec.lbl[i]));
+    g_rec.ev[i].no = (uint8_t)(i + 1);
+    g_rec.ev[i].kind = kind;
+    g_rec.ev[i].gang = g_rec.gang;
+    return &g_rec.ev[i];
+}
+
+static void rec_event_commit(ssc_event_rec_t *e, const char *token) {
+    set_marker(token);
+    event_send_live(e);
+    evt_write(g_rec.id, g_rec.ev, g_rec.lbl, g_rec.n_ev);
+    active_file_save();
+    g_state_dirty = true;
+    Serial.print(LOG_TAG); Serial.print("event "); Serial.print(token);
+    Serial.print(" no="); Serial.println(e->no);
+}
+
+/* Detektor-Zeiten (clk) in Session-Zeit (t_ms) umrechnen. */
+static uint32_t det_to_t(uint32_t clk) {
+    int32_t d = (int32_t)(clk - g_rec.t0_clk);
+    int64_t t = (int64_t)g_rec.t_off + d;
+    return t < 0 ? 0 : (uint32_t)t;
+}
+
+static void fill_from_det(ssc_event_rec_t *r, const ssc_det_event_t *e) {
+    r->t_start_ms = det_to_t(e->t_start_ms);
+    r->t_peak_ms  = det_to_t(e->t_peak_ms);
+    r->t_end_ms   = det_to_t(e->t_end_ms);
+    r->t0_x10 = x10s(e->t0);   r->tpk_x10 = x10s(e->tpk);
+    r->rh0_x10 = x10u(e->rh0); r->rhpk_x10 = x10u(e->rhpk);
+    r->ah0_x10 = x10u(e->ah0); r->ahpk_x10 = x10u(e->ahpk);
+}
+
+static void rec_on_aufguss(const ssc_det_event_t *de, bool manual, float T, float RH) {
+    ssc_event_rec_t *r = rec_new_event(SSC_EK_AUFGUSS);
+    if (!r) return;
+    if (de) fill_from_det(r, de);
+    else {
+        uint32_t t = rec_t_ms();
+        r->t_start_ms = r->t_peak_ms = r->t_end_ms = t;
+        r->t0_x10 = r->tpk_x10 = x10s(T);
+        r->rh0_x10 = r->rhpk_x10 = x10u(RH);
+        r->ah0_x10 = r->ahpk_x10 = x10u(ssc_abs_humidity(T, RH));
+    }
+    if (manual) r->flags |= SSC_EVF_MANUAL;
+    r->seq = ++g_rec.n_aufguss;
+    /* Vorbelegung: Labels vom vorigen Aufguss im selben Gang uebernehmen
+     * (der Saunameister macht meist alle Kellen eines Gangs). Nicht als
+     * LABELED markiert - die UI zeigt "vorbelegt, bitte bestaetigen".  */
+    uint8_t idx = (uint8_t)(r->no - 1);
+    for (int i = (int)idx - 1; i >= 0; i--) {
+        if (g_rec.ev[i].kind == SSC_EK_AUFGUSS && g_rec.ev[i].gang == r->gang) {
+            g_rec.lbl[idx] = g_rec.lbl[i];
+            break;
+        }
+    }
+    char tok[12]; snprintf(tok, sizeof(tok), "A%u", r->seq);
+    rec_event_commit(r, tok);
+}
+
+/* ---------------- Session Start/Ende -------------------------------- */
+static void make_session_id(char *out, bool sim) {
+    if (time_valid()) {
+        time_t lt = (time_t)((int64_t)utc_now() + g_ts_tz);
+        struct tm tmv;
+        gmtime_r(&lt, &tmv);
+        snprintf(out, SSC_ID_LEN, "%c%04d%02d%02d_%02d%02d%02d", sim ? 'X' : 'S',
+                 tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
+                 tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
+    } else {
+        /* Uhr unbekannt: eindeutig ueber Boot-Zaehler + Uptime */
+        snprintf(out, SSC_ID_LEN, "%c%05lu_%06lu", sim ? 'Y' : 'U',
+                 (unsigned long)(g_boot_count % 100000UL),
+                 (unsigned long)((millis() / 1000UL) % 1000000UL));
+    }
+}
+
+static bool session_ensure_dir(void) {
+    if (!sd_init_flag) return false;
+    if (SD.exists("/sessions")) {
+        File d = SD.open("/sessions");
+        if (!d) {
+            SD.rmdir("/sessions");
+            return SD.mkdir("/sessions");
+        }
+        d.close();
+        return true;
+    }
+    return SD.mkdir("/sessions");
+}
+
+static void rec_reset_counters(void) {
+    g_rec.rows = 0; g_rec.write_errs = 0;
+    g_rec.peak_t = g_rec.peak_rh = -1000.0f;
+    g_rec.gang = 0; g_rec.n_aufguss = 0; g_rec.n_luef = 0; g_rec.n_ev = 0;
+    g_rec.have_user = false;
+    memset(&g_rec.user, 0, sizeof(g_rec.user));
+    g_rec.marker[0] = 0;
+}
+
+/* Startet eine neue Session. Rueckgabe SSC_RC_*. Existierende Dateien
+ * werden NIE geloescht - bei ID-Kollision gibt es ein Suffix _2.._9.  */
+static uint8_t rec_start(uint8_t origin) {
+    if (g_rec.active) return SSC_RC_STATE;
+    if (!sd_init_flag || !session_ensure_dir()) return SSC_RC_SD_ERR;
+    char id[SSC_ID_LEN];
+    make_session_id(id, g_sim);
+    char path[44];
+    snprintf(path, sizeof(path), "/sessions/%s.csv", id);
+    if (SD.exists(path)) {
+        size_t bl = strlen(id);
+        bool found = false;
+        for (char s = '2'; s <= '9' && !found; s++) {
+            id[bl] = '_'; id[bl + 1] = s; id[bl + 2] = 0;
+            snprintf(path, sizeof(path), "/sessions/%s.csv", id);
+            if (!SD.exists(path)) found = true;
+        }
+        if (!found) return SSC_RC_STATE;
+    }
+    File f = SD.open(path, FILE_WRITE);
+    if (!f) return SSC_RC_SD_ERR;
+    const char *hdr = "t_ms,temp,rh,q,event\n";
+    if (f.write((const uint8_t *)hdr, strlen(hdr)) != strlen(hdr)) { f.close(); return SSC_RC_SD_ERR; }
+    f.flush();
+
+    rec_reset_counters();
+    g_rec.f = f;
+    g_rec.file_ok = true;
+    g_rec.active = true;
+    g_rec.resumed = false;
+    g_rec.resume_checked = true;
+    g_rec.sim = g_sim;
+    g_rec.origin = origin;
+    strncpy(g_rec.id, id, sizeof(g_rec.id) - 1);
+    g_rec.id[sizeof(g_rec.id) - 1] = 0;
+    strncpy(g_rec.path, path, sizeof(g_rec.path) - 1);
+    g_rec.start_utc = time_valid() ? utc_now() : 0;
+    g_rec.t0_clk = clk_ms();
+    g_rec.t_off = 0;
+    g_rec.last_flush_ms = g_rec.last_save_ms = g_rec.last_probe_ms = millis();
+    ssc_det_session_begin(&g_det, clk_ms(), origin == SSC_ORIGIN_MANUAL);
+    if (sht_ready) sht_heater_force_off("session-start");
+    set_marker(origin == SSC_ORIGIN_AUTO ? "START_AUTO" : "START");
+    rec_write_json(false);
+    active_file_save();
+    g_state_dirty = true;
+    Serial.print(LOG_TAG); Serial.print("session start: "); Serial.print(g_rec.id);
+    Serial.print(" origin="); Serial.println(origin);
+    return SSC_RC_OK;
+}
+
+static void rec_handle_det_events(ssc_det_event_t *ev, int n, float T, float RH);
+
+static void rec_end(uint8_t reason) {
+    if (!g_rec.active) return;
+    /* offene Aufguesse / Lueften abschliessen */
+    ssc_det_event_t fe[4];
+    int nf = ssc_det_finish(&g_det, fe, 4);
+    rec_handle_det_events(fe, nf, NAN, NAN);
+    ssc_det_session_end(&g_det);
+    for (uint8_t i = 0; i < g_rec.n_ev; i++) g_rec.ev[i].flags &= (uint8_t)~SSC_EVF_OPEN;
+    char tok[12]; snprintf(tok, sizeof(tok), reason == SSC_END_AUTO ? "END_AUTO" : "END");
+    set_marker(tok);
+    /* letzte Zeile mit Marker schreiben (ohne Messwert) */
+    char b[48];
+    int k = snprintf(b, sizeof(b), "%lu,,,0,%s\n", (unsigned long)rec_t_ms(), g_rec.marker);
+    if (k > 0) rec_write(b, (size_t)k);
+    g_rec.marker[0] = 0;
+    if (g_rec.f) { g_rec.f.flush(); g_rec.f.close(); }
+    g_rec.f = File();
+    g_rec.file_ok = false;
+    if (sht_ready) sht_heater_force_off("session-end");
+    evt_write(g_rec.id, g_rec.ev, g_rec.lbl, g_rec.n_ev);
+    rec_write_json(true);
+    SD.remove("/ssc_active.txt");
+    SD.remove("/ssc_active.tmp");
+    Serial.print(LOG_TAG); Serial.print("session end: "); Serial.print(g_rec.id);
+    Serial.print(" reason="); Serial.print(reason);
+    Serial.print(" rows="); Serial.println(g_rec.rows);
+    g_rec.active = false;
+    g_state_dirty = true;
+}
+
+/* Beim Boot: unterbrochene Session fortsetzen (WDT, Brownout, Strom). */
+static void rec_try_resume(void) {
+    if (!sd_init_flag) return;
+    File a = SD.open("/ssc_active.txt", FILE_READ);
+    /* Strom weg genau zwischen remove und rename: tmp ist dann aktuell */
+    if (!a) a = SD.open("/ssc_active.tmp", FILE_READ);
+    if (!a) return;
+    char buf[200];
+    size_t n = a.read((uint8_t *)buf, sizeof(buf) - 1);
+    a.close();
+    buf[n] = 0;
+    char id[SSC_ID_LEN] = {0};
+    unsigned long start_utc = 0, t_ms = 0;
+    unsigned origin = 0, gang = 0, na = 0, nl = 0, sim = 0;
+    float pt = -1000, prh = -1000;
+    int got = sscanf(buf, "%23s %lu %lu %u %u %u %u %f %f %u",
+                     id, &start_utc, &t_ms, &origin, &gang, &na, &nl, &pt, &prh, &sim);
+    char path[44];
+    snprintf(path, sizeof(path), "/sessions/%s.csv", id);
+    if (got < 4 || !ssc_id_valid(id, SSC_ID_LEN) || !SD.exists(path) || sim) {
+        Serial.print(LOG_TAG); Serial.println("resume: verworfen (ungueltig/sim)");
+        SD.remove("/ssc_active.txt");
+        SD.remove("/ssc_active.tmp");
+        return;
+    }
+    File f = SD.open(path, FILE_WRITE);   /* Append-Modus */
+    if (!f) return;
+    rec_reset_counters();
+    g_rec.f = f;
+    g_rec.file_ok = true;
+    g_rec.active = true;
+    g_rec.resumed = true;
+    g_rec.resume_checked = false;
+    g_rec.sim = false;
+    g_rec.origin = (uint8_t)origin;
+    strncpy(g_rec.id, id, sizeof(g_rec.id) - 1);
+    strncpy(g_rec.path, path, sizeof(g_rec.path) - 1);
+    g_rec.start_utc = (uint32_t)start_utc;
+    g_rec.t0_clk = clk_ms();
+    g_rec.t_off = (uint32_t)t_ms + 1000UL;
+    g_rec.gang = (uint8_t)gang; g_rec.n_aufguss = (uint8_t)na; g_rec.n_luef = (uint8_t)nl;
+    g_rec.peak_t = pt; g_rec.peak_rh = prh;
+    int ne = evt_read(id, g_rec.ev, g_rec.lbl);
+    g_rec.n_ev = ne > 0 ? (uint8_t)ne : 0;
+    ssc_meta_wire_t um; bool meas;
+    if (read_session_json(id, &um, &meas) == 0) { g_rec.user = um; g_rec.have_user = true; }
+    g_rec.last_flush_ms = g_rec.last_save_ms = g_rec.last_probe_ms = millis();
+    ssc_det_session_begin(&g_det, clk_ms(), g_rec.origin == SSC_ORIGIN_MANUAL);
+    g_det.gang = g_rec.gang; g_det.n_pour = g_rec.n_aufguss; g_det.n_luef = g_rec.n_luef;
+    if (g_rec.gang > 0) g_det.phase = SSC_PH_GANG;
+    g_det.was_hot = pt >= 55.0f;
+    ssc_event_rec_t *r = rec_new_event(SSC_EK_RESUME);
+    if (r) {
+        r->t_start_ms = r->t_peak_ms = r->t_end_ms = g_rec.t_off;
+        rec_event_commit(r, "RESUME");
+    }
+    Serial.print(LOG_TAG); Serial.print("session RESUME: "); Serial.print(id);
+    Serial.print(" t_ms="); Serial.println(g_rec.t_off);
+}
+
+/* Nach TIME_SYNC: Luecke eines Resumes auf echte Zeit korrigieren. */
+static void rec_check_resume_gap(void) {
+    if (!g_rec.active || g_rec.resume_checked || !time_valid()) return;
+    g_rec.resume_checked = true;
+    if (g_rec.start_utc == 0) return;
+    uint32_t real = (utc_now() - g_rec.start_utc) * 1000UL;
+    uint32_t cur = rec_t_ms();
+    if (real > cur + 5000UL) {
+        uint32_t gap = real - cur;
+        if (gap > 2UL * 3600000UL) {
+            /* Strom war Stunden weg: alte Session abschliessen */
+            Serial.print(LOG_TAG); Serial.println("resume: Luecke > 2 h -> Session beenden");
+            rec_end(SSC_END_AUTO);
+            return;
+        }
+        g_rec.t_off += gap;
+        char tok[16]; snprintf(tok, sizeof(tok), "GAP%lus", (unsigned long)(gap / 1000UL));
+        set_marker(tok);
+    }
+}
+
+/* ---------------- Detektor-Events -> Rekorder ----------------------- */
+static void rec_handle_det_events(ssc_det_event_t *ev, int n, float T, float RH) {
+    for (int i = 0; i < n; i++) {
+        ssc_det_event_t *e = &ev[i];
+        switch (e->kind) {
+        case SSC_EV_AUTO_START:
+            if (!g_rec.active && g_auto_enabled && (g_sauna_probe == SAUNA_PROBE_SHT85 || g_sim)) {
+                uint8_t rc = rec_start(SSC_ORIGIN_AUTO);
+                if (rc != SSC_RC_OK) { Serial.print(LOG_TAG); Serial.print("auto-start rc="); Serial.println(rc); }
+            }
+            break;
+        case SSC_EV_AUTO_END:
+            if (g_rec.active && (g_auto_enabled || g_rec.origin == SSC_ORIGIN_AUTO)) rec_end(SSC_END_AUTO);
+            break;
+        case SSC_EV_GANG_START:
+            if (!g_rec.active) break;
+            g_rec.gang = e->gang;
+            { ssc_event_rec_t *r = rec_new_event(SSC_EK_GANG);
+              if (r) { fill_from_det(r, e); r->seq = e->gang; r->gang = e->gang;
+                       char tok[8]; snprintf(tok, sizeof(tok), "G%u", e->gang); rec_event_commit(r, tok); } }
+            break;
+        case SSC_EV_AUFGUSS:
+            if (g_rec.active) rec_on_aufguss(e, false, T, RH);
+            break;
+        case SSC_EV_LUEFTEN_START:
+            if (!g_rec.active) break;
+            { ssc_event_rec_t *r = rec_new_event(SSC_EK_LUEFTEN);
+              if (r) { fill_from_det(r, e); r->seq = ++g_rec.n_luef; r->flags |= SSC_EVF_OPEN;
+                       char tok[8]; snprintf(tok, sizeof(tok), "L%u+", r->seq); rec_event_commit(r, tok); } }
+            break;
+        case SSC_EV_LUEFTEN_END:
+            if (!g_rec.active) break;
+            for (int k = (int)g_rec.n_ev - 1; k >= 0; k--) {
+                ssc_event_rec_t *r = &g_rec.ev[k];
+                if (r->kind == SSC_EK_LUEFTEN && (r->flags & SSC_EVF_OPEN)) {
+                    r->flags &= (uint8_t)~SSC_EVF_OPEN;
+                    r->t_end_ms = det_to_t(e->t_end_ms);
+                    r->t_peak_ms = det_to_t(e->t_peak_ms);
+                    r->tpk_x10 = x10s(e->tpk);
+                    r->rhpk_x10 = x10u(e->rhpk);
+                    r->ahpk_x10 = x10u(e->ahpk);
+                    char tok[8]; snprintf(tok, sizeof(tok), "L%u-", r->seq);
+                    rec_event_commit(r, tok);
+                    break;
+                }
+            }
+            break;
+        case SSC_EV_RH_SUSPECT:
+            if (g_rec.active) {
+                ssc_event_rec_t *r = rec_new_event(SSC_EK_SENSOR);
+                if (r) { fill_from_det(r, e); rec_event_commit(r, "RH_SUSPECT"); }
+            }
+            Serial.print(LOG_TAG); Serial.println("!!! Feuchtekanal reagiert nicht (RH_SUSPECT)");
+            g_state_dirty = true;
+            break;
+        case SSC_EV_RH_OK:
+            g_state_dirty = true;
+            break;
+        }
+    }
+}
+
+/* ---------------- Ein Sample verarbeiten ---------------------------- */
+#define Q_HEATER   0x01   /* Selbsttest heizt / klingt ab: RH/T verfaelscht */
+#define Q_RH_SUSP  0x02
+#define Q_RH_WET   0x04   /* RH >= 98 %: evtl. Wasser am Fuehler          */
+#define Q_SIM      0x08
+
+static void process_sample(uint32_t t_clk, float T, float RH, bool valid) {
+    uint8_t q = 0;
+    bool heat = (g_st_phase == ST_HEAT || g_st_phase == ST_SETTLE);
+    if (heat) q |= Q_HEATER;
+    if (g_det.rh_suspect) q |= Q_RH_SUSP;
+    if (valid && RH >= 98.0f) q |= Q_RH_WET;
+    if (g_sim) q |= Q_SIM;
+
+    ssc_det_event_t ev[8];
+    int n = ssc_det_update(&g_det, t_clk, T, RH, valid && !heat, ev, 8);
+    if (n > 0) rec_handle_det_events(ev, n, T, RH);
+
+    if (!g_rec.active) return;
+    if (valid && !heat) {
+        if (T > g_rec.peak_t) g_rec.peak_t = T;
+        if (RH > g_rec.peak_rh) g_rec.peak_rh = RH;
+    }
+    char b[64];
+    int k;
+    unsigned long t = (unsigned long)rec_t_ms();
+    if (valid) k = snprintf(b, sizeof(b), "%lu,%.2f,%.2f,%u,%s\n", t, (double)T, (double)RH, q, g_rec.marker);
+    else       k = snprintf(b, sizeof(b), "%lu,,,%u,%s\n", t, q, g_rec.marker);
+    if (k > 0 && rec_write(b, (size_t)k)) {
+        g_rec.rows++;
+        g_rec.marker[0] = 0;
+    }
+    uint32_t now = millis();
+    if (g_rec.file_ok && now - g_rec.last_flush_ms >= 5000UL) {
+        g_rec.last_flush_ms = now;
+        g_rec.f.flush();
+        rp2040.wdt_reset();
+    }
+    if (now - g_rec.last_save_ms >= 60000UL) {
+        g_rec.last_save_ms = now;
+        active_file_save();
+    }
+    /* SD-Health alle 30 s: erkennt gezogene Karte (write() meldet das
+     * bei gepufferten Writes nicht sofort).                            */
+    if (g_rec.file_ok && now - g_rec.last_probe_ms >= 30000UL) {
+        g_rec.last_probe_ms = now;
+        File d = SD.open("/sessions");
+        if (!d) rec_sd_fail("probe");
+        else d.close();
+    }
+}
+
+/* ---------------- Messtakt (2 Hz) ----------------------------------- */
+static bool g_in_tick = false;
+
+static void measure_tick(uint32_t now) {
+    g_in_tick = true;
+    static uint8_t slow_divider = 0;
+    float T = NAN, RH = NAN;
+    bool valid = false;
+    if (!g_sim) {
+        if (g_sauna_probe == SAUNA_PROBE_SHT85 && sht_ready) {
+            valid = sht85_read(&T, &RH);
+        } else if (g_sauna_probe == SAUNA_PROBE_AHT20) {
+            float h = 0, t = 0;
+            if (aht20_fallback.getSensor(&h, &t) && t > -10.0f && t < 120.0f) {
+                T = t; RH = constrain(h * 100.0f, 0.0f, 100.0f); valid = true;
+            } else g_sht85_fails++;
+        }
+        if (valid) {
+            g_sauna_ok_ms = now;
+            g_sauna_temp = T; g_sauna_rh = RH;
+            sensor_data_send(SSC_PKT_SAUNA_TEMP, T);
+            sensor_data_send(SSC_PKT_SAUNA_RH, RH);
+            if (g_st_phase != ST_IDLE) {
+                g_st_acc_t += T; g_st_acc_rh += RH; g_st_acc_n++;
+            }
+        } else if (now - g_sauna_ok_ms > 3000UL) {
+            g_sauna_temp = NAN; g_sauna_rh = NAN;
+        }
+        process_sample(clk_ms(), T, RH, valid);
+    }
+    if ((slow_divider++ & 1) == 0) {
+        if (scd_ready) sensor_scd4x_read_and_send();
+        if (sgp_ready) sensor_sgp40_read_and_send();
+    }
+    g_in_tick = false;
+}
+
+/* Aus langen Schleifen (LIST, Readback, Dump, Event-Streams) aufrufen:
+ * haelt WDT, 2-Hz-Messung und CSV am Laufen.                          */
+static void rt_service(void) {
+    rp2040.wdt_reset();
+    if (g_in_tick) return;
+    uint32_t now = millis();
+    if (now - g_last_tick_ms >= g_interval_ms) {
+        g_last_tick_ms += g_interval_ms;
+        if (now - g_last_tick_ms >= g_interval_ms) g_last_tick_ms = now;
+        measure_tick(now);
+    }
+}
+
+/* ---------------- Sensor-Selbsttest (Heater, bewacht) --------------- */
+/* Einzige Stelle, die den Heater je einschaltet. Interlocks gemaess
+ * Sensirion-Research 2026-10-24: keine Session, Kabine 5..40 °C,
+ * RH 20..85 %, T stabil, >= 6 h seit letztem Test, max 30 s Heizen.
+ * Bewertung: k = gemessene RH-Abnahme / erwartete (bei konstanter
+ * abs. Feuchte und gemessenem T-Hub). k >= 0.6 gesund, < 0.3 blind.  */
+static uint8_t selftest_refuse_reason(void) {
+    if (g_sauna_probe != SAUNA_PROBE_SHT85 || !sht_ready) return SSC_STR_NO_PROBE;
+    if (g_rec.active) return SSC_STR_SESSION;
+    if (isnan(g_sauna_temp) || g_sauna_temp < 5.0f || g_sauna_temp > 40.0f) return SSC_STR_TEMP;
+    if (isnan(g_sauna_rh) || g_sauna_rh < 20.0f || g_sauna_rh > 85.0f) return SSC_STR_RH;
+    if (g_det.r5_fill >= 60) {
+        float d = g_det.r5_t[(g_det.r5_head + SSC_DET_R5_N - 1) % SSC_DET_R5_N] -
+                  g_det.r5_t[(g_det.r5_head + SSC_DET_R5_N - 61) % SSC_DET_R5_N];
+        if (fabsf(d) > 0.5f) return SSC_STR_UNSTABLE;   /* > 0.1 K/min */
+    }
+    if (g_st_last_ms != 0 && millis() - g_st_last_ms < 6UL * 3600000UL) return SSC_STR_TOO_SOON;
+    return 0;
+}
+
+static void selftest_start(void) {
+    g_st_phase = ST_BASE;
+    g_st_phase_ms = millis();
+    g_st_acc_t = g_st_acc_rh = 0; g_st_acc_n = 0;
+    g_st_result = SSC_ST_RUNNING;
+    g_st_reason = 0;
+    sht_heater_force_off("selftest-pre");
+    slog("Selbsttest: Basislinie 30 s");
+}
+
+static void selftest_abort(const char *why) {
+    sht_heater_force_off(why);
+    g_st_phase = ST_SETTLE;
+    g_st_phase_ms = millis();
+    g_st_result = SSC_ST_ABORTED;
+    Serial.print(LOG_TAG); Serial.print("Selbsttest abgebrochen: "); Serial.println(why);
+}
+
+static void selftest_service(void) {
+    if (g_st_phase == ST_IDLE) return;
+    uint32_t el = millis() - g_st_phase_ms;
+    if (g_st_phase == ST_BASE) {
+        if (g_rec.active) { selftest_abort("session"); return; }
+        if (el >= 30000UL) {
+            if (g_st_acc_n < 20) { selftest_abort("keine messwerte"); return; }
+            g_st_t0 = g_st_acc_t / g_st_acc_n; g_st_rh0 = g_st_acc_rh / g_st_acc_n;
+            g_st_acc_t = g_st_acc_rh = 0; g_st_acc_n = 0;
+            if (!sht85_write_cmd(SHT_CMD_HEATER_ON)) { selftest_abort("enable i2c"); return; }
+            uint16_t st;
+            if (sht_status_read(&st) && (st & SHT_STATUS_HEATER)) g_sht_heater_on = true;
+            g_st_phase = ST_HEAT;
+            g_st_phase_ms = millis();
+            slog("Selbsttest: Heater AN (max 30 s)");
+        }
+    } else if (g_st_phase == ST_HEAT) {
+        /* Hart begrenzt auf 30 s - egal was passiert. */
+        if (g_rec.active || el >= 30000UL) {
+            bool ok = sht_heater_force_off("selftest-end");
+            g_st_last_ms = millis();
+            /* Mittel der letzten Sekunden (acc wird in ST_HEAT gesammelt,
+             * wir nehmen die gesamte Heizphase - konservativ) */
+            g_st_tend = g_st_acc_n ? g_st_acc_t / g_st_acc_n : NAN;
+            g_st_rhend = g_st_acc_n ? g_st_acc_rh / g_st_acc_n : NAN;
+            float dT = g_st_tend - g_st_t0;
+            if (!ok) g_st_result = SSC_ST_ABORTED;
+            else if (isnan(dT) || dT < 0.3f) g_st_result = SSC_ST_INCONCLUSIVE;
+            else {
+                /* erwartete RH bei konstanter abs. Feuchte */
+                float ah = ssc_abs_humidity(g_st_t0, g_st_rh0);
+                float rh_exp = ah * (273.15f + g_st_tend) / 216.7f /
+                               (6.1121f * expf((18.678f - g_st_tend / 234.5f) *
+                                               (g_st_tend / (257.14f + g_st_tend)))) * 100.0f;
+                float d_exp = g_st_rh0 - rh_exp, d_meas = g_st_rh0 - g_st_rhend;
+                float k = (d_exp > 0.05f) ? d_meas / d_exp : 0.0f;
+                g_st_k_x100 = (uint16_t)constrain(k * 100.0f, 0.0f, 999.0f);
+                g_st_result = (k >= 0.6f) ? SSC_ST_PASS : (k < 0.3f ? SSC_ST_BLIND : SSC_ST_INCONCLUSIVE);
+            }
+            Serial.print(LOG_TAG); Serial.print("Selbsttest Ergebnis="); Serial.print(g_st_result);
+            Serial.print(" dT="); Serial.print(dT, 2); Serial.print(" k="); Serial.println(g_st_k_x100 / 100.0f, 2);
+            g_st_phase = ST_SETTLE;
+            g_st_phase_ms = millis();
+            sensor_health_send();
+        }
+    } else if (g_st_phase == ST_SETTLE) {
+        /* 5 min abklingen: Samples bleiben fuer den Detektor geflaggt. */
+        if (el >= 300000UL) { g_st_phase = ST_IDLE; sensor_health_send(); }
+    }
+}
+
+static void sensor_health_send(void) {
+    ssc_sensor_health_t h;
+    memset(&h, 0, sizeof(h));
+    uint8_t reason = 0;
+    if (g_det.rh_suspect) reason |= 1;
+    if (g_sht_heater_stuck) reason |= 2;
+    if (g_sht_consec_fails >= 10) reason |= 4;
+    if (g_sauna_probe != SAUNA_PROBE_SHT85) reason |= 8;
+    h.reason = reason;
+    h.health = g_sht_heater_stuck ? SSC_H_FAULT :
+               (g_det.rh_suspect || g_st_result == SSC_ST_BLIND) ? SSC_H_RH_INVALID :
+               (reason ? SSC_H_CHECK : SSC_H_OK);
+    h.heater_on = (g_sht_heater_on || g_st_phase == ST_HEAT) ? 1 : 0;
+    h.st_state = g_st_result;
+    h.st_reason = g_st_reason;
+    h.st_k_x100 = g_st_k_x100;
+    h.st_age_min = g_st_last_ms ? (uint16_t)min((millis() - g_st_last_ms) / 60000UL, 0xFFFEUL) : 0xFFFF;
+    h.status_reg = g_sht_status;
+    h.i2c_fails = (uint16_t)min(g_sht85_fails, (uint32_t)0xFFFF);
+    uint8_t pkt[1 + sizeof(h)];
+    pkt[0] = SSC_PKT_SENSOR_HEALTH;
+    memcpy(pkt + 1, &h, sizeof(h));
+    raw_packet_send(pkt, sizeof(pkt));
+}
+
+/* ---------------- Zustand an den ESP32 ------------------------------ */
+static void send_session_state(void) {
+    ssc_session_state_t s;
+    memset(&s, 0, sizeof(s));
+    s.ver = SSC_PROTO_VERSION;
+    s.rec_state = g_rec.active ? SSC_REC_RECORDING : SSC_REC_IDLE;
+    uint8_t f = 0;
+    if (sd_init_flag) f |= SSC_SF_SD_OK;
+    if (g_rec.active && g_rec.file_ok) f |= SSC_SF_WRITE_OK;
+    if ((g_sauna_probe == SAUNA_PROBE_SHT85 || g_sauna_probe == SAUNA_PROBE_AHT20) &&
+        millis() - g_sauna_ok_ms < 5000UL) f |= SSC_SF_PROBE_OK;
+    if (g_sim) f |= SSC_SF_PROBE_OK;
+    if (time_valid()) f |= SSC_SF_TIME_SYNCED;
+    if (g_auto_enabled) f |= SSC_SF_AUTO;
+    if (g_rec.active && g_rec.resumed) f |= SSC_SF_RESUMED;
+    if (g_det.rh_suspect) f |= SSC_SF_RH_SUSPECT;
+    if (g_st_phase == ST_HEAT || g_sht_heater_on) f |= SSC_SF_HEATER;
+    s.flags = f;
+    s.phase = g_det.phase;
+    s.boot_count = g_boot_count;
+    if (g_rec.active) {
+        memcpy(s.id, g_rec.id, sizeof(s.id));
+        s.start_utc = g_rec.start_utc;
+        s.elapsed_s = rec_t_ms() / 1000UL;
+        s.rows = g_rec.rows;
+        s.write_errs = g_rec.write_errs;
+        s.gang = g_rec.gang;
+        uint8_t na = 0, nl = 0;
+        for (uint8_t i = 0; i < g_rec.n_ev; i++) {
+            if (g_rec.ev[i].flags & SSC_EVF_DELETED) continue;
+            if (g_rec.ev[i].kind == SSC_EK_AUFGUSS) na++;
+            if (g_rec.ev[i].kind == SSC_EK_LUEFTEN) nl++;
+        }
+        s.n_aufguss = na; s.n_lueften = nl;
+        s.n_events = g_rec.n_ev;
+        s.origin = g_rec.origin;
+        s.peak_t_x10 = g_rec.peak_t > -100 ? x10s(g_rec.peak_t) : 0;
+        s.peak_rh_x10 = g_rec.peak_rh > -100 ? x10u(g_rec.peak_rh) : 0;
+    }
+    s.health = g_sht_heater_stuck ? SSC_H_FAULT : (g_det.rh_suspect ? SSC_H_RH_INVALID : SSC_H_OK);
+    uint8_t pkt[1 + sizeof(s)];
+    pkt[0] = SSC_PKT_SESSION_STATE;
+    memcpy(pkt + 1, &s, sizeof(s));
+    raw_packet_send(pkt, sizeof(pkt));
+}
+
+/* ---------------- Readback: Huellkurve "RBK2" ----------------------- */
+/* Statt der alten 60-Punkte-Dezimierung (Spitzen verschwanden) liefert
+ * der RP2040 240 Buckets mit Min/Max von T und RH. Format (LE):
+ *   "RBK2" u16 count u32 dur_ms  dann count x { u32 t_ms, i16 tmin,
+ *   i16 tmax, u16 rhmin, u16 rhmax }  (Werte x10, 0x7FFF = leer)      */
+#define RBK_BUCKETS 240
+#define RBK_HDR 10
+#define RBK_REC 12
+#define SSC_RBK_BUF_SIZE (RBK_HDR + RBK_BUCKETS * RBK_REC)
+static uint8_t  g_rbk_buf[SSC_RBK_BUF_SIZE];
+static uint32_t g_rbk_size = 0;
+static char     g_rbk_sid[SSC_ID_LEN] = {0};
+
+/* Zeile parsen: v2 "t_ms,temp,rh,q,event" / v1 "t_s,temp,rh,mark" */
+static bool csv_parse_line(const char *line, bool v2, uint32_t *t_ms, float *T, float *RH,
+                           bool *hasv) {
+    char *e;
+    double tv = strtod(line, &e);
+    if (e == line || *e != ',') return false;
+    *t_ms = v2 ? (uint32_t)tv : (uint32_t)(tv * 1000.0);
+    const char *p = e + 1;
+    if (*p == ',') { *hasv = false; return true; }
+    double a = strtod(p, &e);
+    if (e == p || *e != ',') { *hasv = false; return true; }
+    p = e + 1;
+    double b = strtod(p, &e);
+    if (e == p) { *hasv = false; return true; }
+    *T = (float)a; *RH = (float)b; *hasv = true;
+    return true;
+}
+
+static void put16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
+static void put32(uint8_t *p, uint32_t v) { for (int i = 0; i < 4; i++) p[i] = (uint8_t)(v >> (8 * i)); }
+
+static bool rbk_build(const char *sid) {
+    char path[44];
+    snprintf(path, sizeof(path), "/sessions/%s.csv", sid);
+    File f = SD.open(path, FILE_READ);
+    if (!f) return false;
+    uint32_t fs = f.size();
+    char line[96];
+    /* Header lesen */
+    size_t len = 0;
+    while (f.available() && len < sizeof(line) - 1) {
+        int c = f.read(); if (c < 0 || c == '\n') break; line[len++] = (char)c;
+    }
+    line[len] = 0;
+    bool v2 = strncmp(line, "t_ms", 4) == 0;
+    uint32_t data_start = f.position();
+    /* Dauer aus dem Dateiende */
+    uint32_t dur = 0;
+    if (fs > data_start + 2) {
+        uint32_t from = fs > 400 ? fs - 400 : data_start;
+        if (from < data_start) from = data_start;
+        f.seek(from);
+        len = 0;
+        while (f.available()) {
+            int c = f.read();
+            if (c < 0) break;
+            if (c == '\n') {
+                line[len] = 0;
+                uint32_t t; float a, b; bool hv;
+                if (len > 0 && csv_parse_line(line, v2, &t, &a, &b, &hv) && t > dur) dur = t;
+                len = 0;
+            } else if (len < sizeof(line) - 1) line[len++] = (char)c;
+        }
+    }
+    uint32_t bw = dur / RBK_BUCKETS + 1;
+    if (bw < 500) bw = 500;
+    uint16_t nb = (uint16_t)min((uint32_t)RBK_BUCKETS, dur / bw + 1);
+    int16_t  tmin[RBK_BUCKETS], tmax[RBK_BUCKETS];
+    uint16_t hmin[RBK_BUCKETS], hmax[RBK_BUCKETS];
+    for (int i = 0; i < RBK_BUCKETS; i++) { tmin[i] = 0x7FFF; tmax[i] = (int16_t)0x8000; hmin[i] = 0xFFFF; hmax[i] = 0; }
+    f.seek(data_start);
+    len = 0;
+    uint32_t idx = 0, prev_t = 0;
+    while (f.available()) {
+        int c = f.read();
+        if (c < 0) break;
+        if (c == '\n') {
+            line[len] = 0;
+            uint32_t t; float a = 0, b = 0; bool hv = false;
+            if (len > 0 && csv_parse_line(line, v2, &t, &a, &b, &hv)) {
+                /* v1 bei 2 Hz: doppelte Sekunden -> nach Reihenfolge */
+                if (!v2 && t == prev_t && idx > 0) t += 500;
+                prev_t = t; idx++;
+                if (hv) {
+                    uint32_t k = t / bw; if (k >= nb) k = nb - 1;
+                    int16_t tv = x10s(a); uint16_t rv = x10u(b);
+                    if (tv < tmin[k]) tmin[k] = tv;
+                    if (tv > tmax[k]) tmax[k] = tv;
+                    if (rv < hmin[k]) hmin[k] = rv;
+                    if (rv > hmax[k]) hmax[k] = rv;
+                }
+            }
+            len = 0;
+            if ((idx & 0x7F) == 0) rt_service();
+        } else if (len < sizeof(line) - 1) line[len++] = (char)c;
+    }
+    f.close();
+    uint8_t *p = g_rbk_buf;
+    memcpy(p, "RBK2", 4); put16(p + 4, nb); put32(p + 6, dur);
+    p += RBK_HDR;
+    for (uint16_t i = 0; i < nb; i++, p += RBK_REC) {
+        put32(p, i * bw);
+        bool empty = tmin[i] == 0x7FFF;
+        put16(p + 4, empty ? 0x7FFF : (uint16_t)tmin[i]);
+        put16(p + 6, empty ? 0x7FFF : (uint16_t)tmax[i]);
+        put16(p + 8, empty ? 0x7FFF : hmin[i]);
+        put16(p + 10, empty ? 0x7FFF : hmax[i]);
+    }
+    g_rbk_size = RBK_HDR + (uint32_t)nb * RBK_REC;
+    return true;
+}
+
+static void handle_sd_readback(const uint8_t *payload, size_t len) {
+    rt_service();
+    if (!sd_init_flag || len != (size_t)ssc_cmd_len(SSC_CMD_SD_READBACK)) return;
+    uint16_t req_id = (uint16_t)((payload[0] << 8) | payload[1]);
+    char sid[SSC_ID_LEN];
+    memcpy(sid, payload + 2, SSC_ID_LEN - 1);
+    sid[SSC_ID_LEN - 1] = 0;
+    uint32_t offset = ((uint32_t)payload[26] << 24) | ((uint32_t)payload[27] << 16) |
+                      ((uint32_t)payload[28] << 8) | payload[29];
+    uint16_t max_len = (uint16_t)((payload[30] << 8) | payload[31]);
+    uint8_t chunk[256];
+    chunk[0] = SSC_PKT_RBK_CHUNK;
+    chunk[1] = (uint8_t)(req_id >> 8);
+    chunk[2] = (uint8_t)req_id;
+    bool ok = ssc_id_valid(sid, SSC_ID_LEN);
+    /* aktive Session: Huelle immer frisch bauen (waechst) */
+    bool active = g_rec.active && strncmp(sid, g_rec.id, SSC_ID_LEN) == 0;
+    if (ok && (active || strncmp(sid, g_rbk_sid, SSC_ID_LEN) != 0 || g_rbk_size == 0)) {
+        if (offset == 0 || !active) {
+            if (active && g_rec.file_ok) g_rec.f.flush();
+            g_rbk_sid[0] = 0;
+            if (rbk_build(sid)) { strncpy(g_rbk_sid, sid, SSC_ID_LEN - 1); g_rbk_sid[SSC_ID_LEN - 1] = 0; }
+            else ok = false;
+        }
+    }
+    uint32_t total = ok ? g_rbk_size : 0;
+    if (offset > total) offset = total;
+    uint16_t lim = (max_len == 0 || max_len > 200) ? 200 : max_len;
+    uint32_t avail = total - offset;
+    uint16_t got = (uint16_t)(avail < lim ? avail : lim);
+    chunk[3] = (uint8_t)(total >> 24); chunk[4] = (uint8_t)(total >> 16);
+    chunk[5] = (uint8_t)(total >> 8);  chunk[6] = (uint8_t)total;
+    chunk[7] = (uint8_t)(offset >> 24); chunk[8] = (uint8_t)(offset >> 16);
+    chunk[9] = (uint8_t)(offset >> 8);  chunk[10] = (uint8_t)offset;
+    chunk[11] = (uint8_t)(got >> 8);    chunk[12] = (uint8_t)got;
+    if (got) memcpy(chunk + 13, g_rbk_buf + offset, got);
+    /* Immer antworten - auch bei Fehler (total=0), damit der ESP32 nie
+     * auf ein Paket wartet das nicht kommt.                            */
+    raw_packet_send(chunk, 13 + got);
+}
+
+/* ---------------- LIST / META -------------------------------------- */
+static int synthesize_meta_from_csv(const char *id, ssc_meta_wire_t *out) {
+    char path[44];
     snprintf(path, sizeof(path), "/sessions/%s.csv", id);
     File f = SD.open(path, FILE_READ);
     if (!f) return -2;
-
     memset(out, 0, sizeof(*out));
     strncpy(out->id, id, sizeof(out->id) - 1);
-
-    /* start_ts aus filename "S<YYYYMMDD>_<HHMMSS>". Die zeit ist
-     * lokale-zeit-bei-aufnahme (aus ESP32-clock) - wir interpretieren
-     * sie als local time und mktime mit isdst=-1 macht die DST-rules.
-     *
-     * v0.3.0+: TZ env auf RP2040 ist standardmaessig leer -> mktime
-     * defaultet auf UTC, nimmt input also FAELSCHLICH als UTC an. Wenn
-     * filename "20:13" CEST war, wird start_ts dann 20:13 UTC = 22:13
-     * CEST display - 2h zu spaet. Fix: TZ einmalig setzen bevor mktime
-     * laeuft. CET-1CEST,... ist Vienna mit DST-rules.                  */
     static bool s_tz_set = false;
-    if (!s_tz_set) {
-        setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
-        tzset();
-        s_tz_set = true;
-    }
-    if (id[0] == 'S' && strlen(id) >= 16) {
-        struct tm tmv = {0};
+    if (!s_tz_set) { setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1); tzset(); s_tz_set = true; }
+    if ((id[0] == 'S' || id[0] == 'X') && strlen(id) >= 16) {
+        struct tm tmv; memset(&tmv, 0, sizeof(tmv));
         char tmp[5];
         strncpy(tmp, id + 1, 4); tmp[4] = 0; tmv.tm_year = atoi(tmp) - 1900;
-        strncpy(tmp, id + 5, 2); tmp[2] = 0; tmv.tm_mon  = atoi(tmp) - 1;
+        strncpy(tmp, id + 5, 2); tmp[2] = 0; tmv.tm_mon = atoi(tmp) - 1;
         strncpy(tmp, id + 7, 2); tmp[2] = 0; tmv.tm_mday = atoi(tmp);
         strncpy(tmp, id + 10, 2); tmp[2] = 0; tmv.tm_hour = atoi(tmp);
-        strncpy(tmp, id + 12, 2); tmp[2] = 0; tmv.tm_min  = atoi(tmp);
-        strncpy(tmp, id + 14, 2); tmp[2] = 0; tmv.tm_sec  = atoi(tmp);
+        strncpy(tmp, id + 12, 2); tmp[2] = 0; tmv.tm_min = atoi(tmp);
+        strncpy(tmp, id + 14, 2); tmp[2] = 0; tmv.tm_sec = atoi(tmp);
         tmv.tm_isdst = -1;
         out->start_ts = (int32_t)mktime(&tmv);
     }
-
-    /* CSV durchscannen: t_elapsed, temp, rh, aufguss(opt-string).
-     * Header ueberspringen, peaks tracken, letztes t_elapsed merken,
-     * jede non-leere aufguss-spalte = +1.                            */
-    char line[96];
-    int line_idx = 0;
-    float peak_t = -1000.0f, peak_rh = -1000.0f;
-    uint32_t last_t = 0;
-    uint32_t aufg_count = 0;
-    /* v0.3.3: WDT zeit-basiert (alle ~1.5s) statt zeilen-basiert (alle 1024).
-     * Bei langen sessions (sauna 60min @ 2Hz = 7200 zeilen) konnte SD-read
-     * mit FATFS-blockwechseln 10ms/zeile kosten -> 1024 zeilen = 10s
-     * zwischen WDT-feeds -> reboot bei WDT_TIMEOUT < 10s.                 */
-    uint32_t last_wdt_ms = millis();
-
+    char line[96]; size_t len = 0;
+    bool v2 = false, first = true;
+    float pt = -1000, prh = -1000; uint32_t last_t = 0, n = 0;
     while (f.available()) {
-        size_t len = f.readBytesUntil('\n', line, sizeof(line) - 1);
-        line[len] = 0;
-        if (len == 0) break;
-        if (line_idx++ == 0) continue;  /* header */
-
-        char *p = line;
-        uint32_t t_el = (uint32_t)atol(p);
-        char *c = strchr(p, ','); if (!c) continue;
-        float temp = (float)atof(c + 1);
-        c = strchr(c + 1, ','); if (!c) continue;
-        float rh = (float)atof(c + 1);
-        c = strchr(c + 1, ',');
-        if (c && *(c + 1) != 0 && *(c + 1) != '\r') aufg_count++;
-
-        if (temp > peak_t)  peak_t  = temp;
-        if (rh   > peak_rh) peak_rh = rh;
-        last_t = t_el;
-        if ((uint32_t)(millis() - last_wdt_ms) > 1500) {
-            rp2040.wdt_reset();
-            last_wdt_ms = millis();
-        }
+        int c = f.read();
+        if (c < 0) break;
+        if (c != '\n') { if (len < sizeof(line) - 1) line[len++] = (char)c; continue; }
+        line[len] = 0; len = 0;
+        if (first) { first = false; v2 = strncmp(line, "t_ms", 4) == 0; continue; }
+        uint32_t t; float a = 0, b = 0; bool hv = false;
+        if (!csv_parse_line(line, v2, &t, &a, &b, &hv)) continue;
+        if (hv) { if (a > pt) pt = a; if (b > prh) prh = b; }
+        last_t = t;
+        if ((++n & 0xFF) == 0) rt_service();
     }
     f.close();
-
-    if (peak_t  < -500.0f) peak_t  = 0.0f;
-    if (peak_rh < -500.0f) peak_rh = 0.0f;
-    out->peak_temp = peak_t;
-    out->peak_rh   = peak_rh;
-    out->end_ts    = out->start_ts + (int32_t)last_t;
-    out->aufguss_count = (uint8_t)(aufg_count > 255 ? 255 : aufg_count);
+    out->peak_temp = pt > -500 ? pt : 0;
+    out->peak_rh = prh > -500 ? prh : 0;
+    out->end_ts = out->start_ts ? out->start_ts + (int32_t)(last_t / 1000UL) : 0;
     return 0;
 }
 
-/* Eine session-meta als framed packet senden.                          */
-static void send_session_meta(const ssc_meta_wire_t *m) {
+static void send_session_meta(ssc_meta_wire_t *m) {
+    ssc_meta_seal(m);
     uint8_t pkt[1 + sizeof(ssc_meta_wire_t)];
-    pkt[0] = PKT_TYPE_SESSION_META_RESP;
+    pkt[0] = SSC_PKT_META_RESP;
     memcpy(pkt + 1, m, sizeof(*m));
     raw_packet_send(pkt, sizeof(pkt));
 }
 
-/* CMD-handler: enumeriert /sessions/, sendet pro CSV ein META_RESP
- * (json wenn vorhanden, sonst synthesize), abschliessend META_DONE.    */
 static void handle_list_sessions(void) {
     uint16_t count = 0;
     if (sd_init_flag) {
@@ -1342,506 +1987,281 @@ static void handle_list_sessions(void) {
         if (dir) {
             File entry;
             while ((entry = dir.openNextFile())) {
+                rt_service();
                 const char *name = entry.name();
-                bool is_csv = (name && strstr(name, ".csv") != NULL);
+                size_t nl = name ? strlen(name) : 0;
+                bool is_csv = nl > 4 && strcmp(name + nl - 4, ".csv") == 0;
                 if (!is_csv) { entry.close(); continue; }
-                char id[24] = {0};
-                size_t cp = strlen(name);
-                if (cp >= sizeof(id)) cp = sizeof(id) - 1;
+                char id[SSC_ID_LEN] = {0};
+                size_t cp = nl - 4;
+                if (cp >= sizeof(id)) { entry.close(); continue; }
                 memcpy(id, name, cp);
-                /* trailing .csv strippen */
-                char *dot = strstr(id, ".csv");
-                if (dot) *dot = 0;
-                /* Skip leere/komische ids (e.g. ".csv" -> "") */
-                if (id[0] == 0) { entry.close(); continue; }
                 entry.close();
-
-                ssc_meta_wire_t meta;
-                int r = read_session_json(id, &meta);
-                if (r != 0) {
+                if (!ssc_id_valid(id, SSC_ID_LEN)) continue;
+                ssc_meta_wire_t meta; bool meas;
+                if (read_session_json(id, &meta, &meas) != 0) {
                     if (synthesize_meta_from_csv(id, &meta) != 0) continue;
                 }
+                if (g_rec.active && strcmp(id, g_rec.id) == 0) rec_fill_measured(&meta, false);
                 send_session_meta(&meta);
                 count++;
-                rp2040.wdt_reset();
-                /* Kleine pause damit ESP32-rx nicht ueberlauft. */
-                delay(5);
+                /* ESP32 verarbeitet jedes META in NVS - nicht fluten */
+                uint32_t t0 = millis();
+                while (millis() - t0 < 25) rt_service();   /* KEIN update(): wir sind im Callback */
             }
             dir.close();
         }
     }
-    uint8_t done[3];
-    done[0] = PKT_TYPE_SESSION_META_DONE;
-    done[1] = (uint8_t)(count & 0xFF);
-    done[2] = (uint8_t)((count >> 8) & 0xFF);
+    uint8_t done[3] = { SSC_PKT_META_DONE, (uint8_t)(count & 0xFF), (uint8_t)(count >> 8) };
     raw_packet_send(done, sizeof(done));
-    Serial.print(LOG_TAG); Serial.print("LIST_SESSIONS sent ");
-    Serial.print(count); Serial.println(" entries");
+    Serial.print(LOG_TAG); Serial.print("LIST_SESSIONS sent "); Serial.print(count); Serial.println(" entries");
 }
 
-/* CMD-handler: ESP32 schickt eine session-meta - JSON sidecar schreiben. */
-static void handle_session_meta_push(const uint8_t *payload, size_t len) {
-    if (len < sizeof(ssc_meta_wire_t)) return;
+static uint8_t handle_meta_push(const uint8_t *p) {
     ssc_meta_wire_t m;
-    memcpy(&m, payload, sizeof(m));
+    memcpy(&m, p, sizeof(m));
+    if (ssc_meta_check(&m) != 1) { g_bad_crc++; return SSC_RC_BAD_CRC; }
     m.id[sizeof(m.id) - 1] = 0;
-    if (m.id[0] == 0) return;
-    int rc = write_session_json(&m);
-    Serial.print(LOG_TAG); Serial.print("META_PUSH "); Serial.print(m.id);
-    Serial.print(" rc="); Serial.println(rc);
-}
-
-/* CMD-handler: ESP32 will eine session vollstaendig loeschen - CSV +
- * JSON sidecar aus /sessions/ entfernen. Eingabe: id (24 byte null-term).
- * Schluckt safety-checks: leere id ablehnen, nur [A-Za-z0-9_-] erlauben.   */
-static void handle_session_delete_file(const uint8_t *payload, size_t len) {
-    if (!sd_init_flag || len < 1) return;
-    char id[24] = {0};
-    size_t cp = (len < sizeof(id) - 1) ? len : sizeof(id) - 1;
-    memcpy(id, payload, cp);
-    id[cp] = 0;
-    if (id[0] == 0) return;
-    /* Pfad-injection abwehren: nur safe chars. */
-    for (size_t i = 0; id[i]; i++) {
-        char c = id[i];
-        bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-                  (c >= '0' && c <= '9') || c == '_' || c == '-';
-        if (!ok) {
-            Serial.print(LOG_TAG); Serial.print("DELETE rejected unsafe id: ");
-            Serial.println(id);
-            return;
+    if (!ssc_id_valid(m.id, SSC_ID_LEN)) return SSC_RC_BAD_ID;
+    if (!sd_init_flag) return SSC_RC_SD_ERR;
+    if (g_rec.active && strcmp(m.id, g_rec.id) == 0) {
+        g_rec.user = m;
+        g_rec.have_user = true;
+        rec_write_json(false);
+        return SSC_RC_OK;
+    }
+    char path[44];
+    snprintf(path, sizeof(path), "/sessions/%s.csv", m.id);
+    if (!SD.exists(path)) return SSC_RC_NOT_FOUND;
+    /* vergangene Session: Messwerte aus bestehender v0.4-JSON behalten */
+    ssc_meta_wire_t old; bool meas = false;
+    int gaenge = -1, lueften = 0;
+    if (read_session_json(m.id, &old, &meas) == 0 && meas) {
+        m.start_ts = old.start_ts; m.end_ts = old.end_ts;
+        m.peak_temp = old.peak_temp; m.peak_rh = old.peak_rh;
+        m.aufguss_count = old.aufguss_count;
+        /* Gaenge/Lueften aus .evt neu zaehlen */
+        int ne = evt_read(m.id, g_tmp_ev, g_tmp_lbl);
+        gaenge = 0;
+        for (int i = 0; i < ne; i++) {
+            if (g_tmp_ev[i].flags & SSC_EVF_DELETED) continue;
+            if (g_tmp_ev[i].kind == SSC_EK_GANG) gaenge++;
+            if (g_tmp_ev[i].kind == SSC_EK_LUEFTEN) lueften++;
         }
     }
-    char path[60];
-    int csv_ok = -1, json_ok = -1;
-    snprintf(path, sizeof(path), "/sessions/%s.csv", id);
-    if (SD.exists(path)) csv_ok = SD.remove(path) ? 0 : -1;
-    snprintf(path, sizeof(path), "/sessions/%s.json", id);
-    if (SD.exists(path)) json_ok = SD.remove(path) ? 0 : -1;
-    Serial.print(LOG_TAG); Serial.print("DELETE id="); Serial.print(id);
-    Serial.print(" csv="); Serial.print(csv_ok);
-    Serial.print(" json="); Serial.println(json_ok);
+    int rc = write_session_json(&m, gaenge, lueften, 0, m.id[0] == 'X', 0, 0);
+    return rc == 0 ? SSC_RC_OK : SSC_RC_SD_ERR;
 }
 
-/* v0.3.0+: nur das .json sidecar loeschen (csv bleibt). Wird vom ESP32
- * fuer den legacy-fix verwendet: alte JSONs mit kaputtem start_ts werden
- * weggeworfen, beim naechsten LIST laeuft synthesize_meta_from_csv mit
- * dem TZ-fix und gibt korrekte zeiten zurueck.                          */
-static void handle_session_delete_json(const uint8_t *payload, size_t len) {
-    if (!sd_init_flag || len < 1) return;
-    char id[24] = {0};
-    size_t cp = (len < sizeof(id) - 1) ? len : sizeof(id) - 1;
-    memcpy(id, payload, cp);
-    id[cp] = 0;
-    if (id[0] == 0) return;
-    for (size_t i = 0; id[i]; i++) {
-        char c = id[i];
-        bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-                  (c >= '0' && c <= '9') || c == '_' || c == '-';
-        if (!ok) {
-            Serial.print(LOG_TAG); Serial.print("DELJSON rejected unsafe id: ");
-            Serial.println(id);
-            return;
-        }
+static uint8_t handle_delete(const uint8_t *p, bool json_only) {
+    char id[SSC_ID_LEN];
+    memcpy(id, p, SSC_ID_LEN - 1);
+    id[SSC_ID_LEN - 1] = 0;
+    if (!ssc_id_valid(id, SSC_ID_LEN)) return SSC_RC_BAD_ID;
+    if (g_rec.active && strcmp(id, g_rec.id) == 0) return SSC_RC_STATE;  /* nie die aktive */
+    if (!sd_init_flag) return SSC_RC_SD_ERR;
+    char path[48];
+    const char *ext_all[] = { ".csv", ".json", ".evt" };
+    int n = json_only ? 1 : 3;
+    for (int i = 0; i < n; i++) {
+        snprintf(path, sizeof(path), "/sessions/%s%s", id, json_only ? ".json" : ext_all[i]);
+        if (SD.exists(path)) SD.remove(path);
     }
-    char path[60];
-    snprintf(path, sizeof(path), "/sessions/%s.json", id);
-    int json_ok = SD.exists(path) ? (SD.remove(path) ? 0 : -1) : -2;
-    Serial.print(LOG_TAG); Serial.print("DELJSON id="); Serial.print(id);
-    Serial.print(" json="); Serial.println(json_ok);
+    if (strcmp(g_rbk_sid, id) == 0) { g_rbk_sid[0] = 0; g_rbk_size = 0; }
+    Serial.print(LOG_TAG); Serial.print(json_only ? "DELJSON " : "DELETE "); Serial.println(id);
+    return SSC_RC_OK;
 }
 
-static bool session_ensure_dir(void) {
-    if (!sd_init_flag) return false;
-    if (SD.exists("/sessions")) {
-        /* Verifizieren dass es wirklich eine funktionsfaehige Directory ist.
-         * Nach brownout mid-mkdir kann dir-entry da sein, aber der FAT-
-         * cluster-chain unvollstaendig - exists=true aber open=false. */
-        File d = SD.open("/sessions");
-        if (!d) {
-            Serial.println("session: /sessions exists but unopenable, recreate");
-            SD.rmdir("/sessions");  /* best effort */
-            if (!SD.mkdir("/sessions")) {
-                Serial.println("session: mkdir failed after cleanup");
-                return false;
-            }
-        } else {
-            d.close();
-        }
-        return true;
+/* ---------------- Events lesen / labeln ----------------------------- */
+static void handle_get_events(const uint8_t *p) {
+    char id[SSC_ID_LEN];
+    memcpy(id, p, SSC_ID_LEN - 1);
+    id[SSC_ID_LEN - 1] = 0;
+    const ssc_event_rec_t *ev = NULL; const ssc_event_label_body_t *lb = NULL;
+    int n = 0; uint8_t rc = SSC_RC_OK;
+    if (!ssc_id_valid(id, SSC_ID_LEN)) rc = SSC_RC_BAD_ID;
+    else if (g_rec.active && strcmp(id, g_rec.id) == 0) { ev = g_rec.ev; lb = g_rec.lbl; n = g_rec.n_ev; }
+    else {
+        n = evt_read(id, g_tmp_ev, g_tmp_lbl);
+        if (n < 0) { n = 0; rc = SSC_RC_NOT_FOUND; }
+        ev = g_tmp_ev; lb = g_tmp_lbl;
     }
-    if (!SD.mkdir("/sessions")) {
-        Serial.println("session: mkdir /sessions failed");
-        return false;
+    for (int i = 0; i < n; i++) {
+        ssc_event_full_t m;
+        memset(&m, 0, sizeof(m));
+        memcpy(m.id, id, SSC_ID_LEN);
+        m.e = ev[i]; m.l = lb[i];
+        uint8_t pkt[1 + sizeof(m)];
+        pkt[0] = SSC_PKT_EVENT_REC;
+        memcpy(pkt + 1, &m, sizeof(m));
+        raw_packet_send(pkt, sizeof(pkt));
+        rt_service();
     }
-    return true;
+    uint8_t done[1 + SSC_ID_LEN + 2];
+    done[0] = SSC_PKT_EVENTS_DONE;
+    memcpy(done + 1, id, SSC_ID_LEN);
+    done[1 + SSC_ID_LEN] = (uint8_t)n;
+    done[2 + SSC_ID_LEN] = rc;
+    raw_packet_send(done, sizeof(done));
 }
 
-static void session_start(const char *id) {
-    if (g_session_active) {
-        /* State-desync handling: ESP32 kann rebootet sein waehrend
-         * unsere session noch aktiv war, schickt dann einen neuen
-         * START. Wir schliessen die alte sauber ab und starten die
-         * neue - sonst wird keine CSV auf SD angelegt und die ESP-
-         * seite hat metadata ohne samples.                          */
-        Serial.println("session: already active - auto-end then restart");
-        session_end();
-    }
-    if (!session_ensure_dir()) return;
-
-    strncpy(g_session_id, id, SSC_SESSION_ID_LEN - 1);
-    g_session_id[SSC_SESSION_ID_LEN - 1] = 0;
-
-    /* Leere ID ablehnen: ESP32 koennte bei leerem Payload ein SESSION_START
-     * schicken, sonst wuerde eine Datei "/sessions/.csv" entstehen. */
-    if (g_session_id[0] == 0) {
-        Serial.println("session: empty id, abort");
-        return;
-    }
-
-    /* Sanity check: nur [A-Za-z0-9_-] erlauben, damit kein Pfad-
-     * escape via ".." oder "/" moeglich ist. */
-    for (size_t i = 0; g_session_id[i]; i++) {
-        char c = g_session_id[i];
-        bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-                  (c >= '0' && c <= '9') || c == '_' || c == '-';
-        if (!ok) {
-            Serial.print("session: invalid char in id, abort: ");
-            Serial.println(g_session_id);
-            memset(g_session_id, 0, sizeof(g_session_id));
-            return;
-        }
-    }
-
-    session_path_from_id(g_session_id);
-
-    /* Health-Probe vor write-mutating Operation: verhindert SD.remove/SD.open
-     * auf einer gezogenen oder neu-eingesteckten Karte, was den in-memory FAT-
-     * cache inkonsistent zur physischen Karte machen wuerde. */
-    if (!sd_health_probe()) {
-        Serial.println("session: SD vanished before open, abort");
-        return;
-    }
-
-    /* Arduino-SD oeffnet FILE_WRITE im Append-Modus. Wenn der letzte Lauf
-     * abgebrochen war (Watchdog/Brownout) und die CSV existiert, wuerde der
-     * Header ein zweites Mal drangehaengt. Sauber vorher loeschen. */
-    if (SD.exists(g_session_path)) {
-        SD.remove(g_session_path);
-    }
-
-    g_session_file = SD.open(g_session_path, FILE_WRITE);
-    if (!g_session_file) {
-        Serial.print("session: cannot open ");
-        Serial.println(g_session_path);
-        return;
-    }
-    g_session_file.println("t_elapsed_s,temp,rh,aufguss");
-    g_session_file.flush();
-    g_session_started_ms = millis();
-    g_session_active = true;
-    Serial.print("session start: ");
-    Serial.println(g_session_id);
+static uint8_t handle_event_label(const uint8_t *p) {
+    ssc_event_label_t m;
+    memcpy(&m, p, sizeof(m));
+    if (ssc_crc16(&m, offsetof(ssc_event_label_t, crc)) != m.crc) { g_bad_crc++; return SSC_RC_BAD_CRC; }
+    m.id[SSC_ID_LEN - 1] = 0;
+    if (!ssc_id_valid(m.id, SSC_ID_LEN)) return SSC_RC_BAD_ID;
+    m.l.operator_tag[SSC_LBL_OP - 1] = 0;
+    m.l.name[SSC_LBL_NAME - 1] = 0;
+    m.l.aroma[SSC_LBL_AROMA - 1] = 0;
+    bool act = g_rec.active && strcmp(m.id, g_rec.id) == 0;
+    ssc_event_rec_t *ev = act ? g_rec.ev : g_tmp_ev;
+    ssc_event_label_body_t *lb = act ? g_rec.lbl : g_tmp_lbl;
+    int n = act ? g_rec.n_ev : evt_read(m.id, g_tmp_ev, g_tmp_lbl);
+    if (n <= 0 || m.no == 0 || m.no > n) return SSC_RC_NOT_FOUND;
+    int i = m.no - 1;
+    if (m.delete_flag == 1) ev[i].flags |= SSC_EVF_DELETED;
+    else if (m.delete_flag == 2) ev[i].flags &= (uint8_t)~SSC_EVF_DELETED;
+    else { lb[i] = m.l; ev[i].flags |= SSC_EVF_LABELED; }
+    int rc = evt_write(m.id, ev, lb, (uint8_t)n);
+    if (act) { g_state_dirty = true; rec_write_json(false); }
+    return rc == 0 ? SSC_RC_OK : SSC_RC_SD_ERR;
 }
 
-static void session_write_line(uint32_t dt, const char *marker) {
-    /* CSV-Format: t_elapsed_s,temp,rh,aufguss
-     * Wir nutzen bewusst print()/println() statt printf() - printf auf
-     * Arduino-File-Objekten ist nicht ueberall verfuegbar (abhaengig
-     * von der SD-Library). Das hier baut sich mit String-Konkatenation
-     * sauber zusammen. */
-    float t  = isnan(g_sauna_temp) ? 0.0f : g_sauna_temp;
-    float rh = isnan(g_sauna_rh)   ? 0.0f : g_sauna_rh;
-    g_session_file.print(dt);
-    g_session_file.print(',');
-    g_session_file.print(t, 2);
-    g_session_file.print(',');
-    g_session_file.print(rh, 2);
-    g_session_file.print(',');
-    if (marker) g_session_file.print(marker);
-    g_session_file.print('\n');
-}
-
-static void session_write_sample(void) {
-    if (!g_session_active || !g_session_file) return;
-    uint32_t dt = (millis() - g_session_started_ms) / 1000;
-    session_write_line(dt, nullptr);
-
-    /* Defensive: wenn der SD-Write intern fehlschlug (z.B. SPI-Glitch hat den
-     * FAT-Handle invalidiert), ist getWriteError() gesetzt. Dann nicht weiter
-     * auf dem kaputten Handle arbeiten - sonst faulty deref moeglich. Karte
-     * ebenfalls als kaputt markieren, damit der main-loop sd_try_init erneut
-     * aufruft (alle 15 s). */
-    if (g_session_file.getWriteError()) {
-        Serial.println("[SAUNA] session: write error -> closing session, remount SD");
-        g_session_file.close();
-        g_session_file = File();
-        g_session_active = false;
-        sd_init_flag = false;     /* triggert sd_try_init re-retry im loop */
-        return;
-    }
-
-    /* Flush einmal pro 10s, um SD-Lebensdauer zu schonen und Datenverluste bei
-     * Stromausfall zu begrenzen. Im Boost-Modus laeuft der Zyklus aber mit
-     * 2 Hz, d.h. `dt % 10 == 0` wuerde 2x/s fuer eine Sekunde feuern. Daher
-     * auf den zuletzt-geflushten Sekunden-Stempel konditionieren.
-     * WDT nach flush kicken: billige cards koennen GC-Pause bis ~1 s haben,
-     * das frisst einen merklichen Anteil des 8 s-Budgets.                 */
-    static uint32_t last_flush_s = UINT32_MAX;
-    if ((dt % 10) == 0 && dt != last_flush_s) {
-        last_flush_s = dt;
-        g_session_file.flush();
-        rp2040.wdt_reset();
-    }
-}
-
-static void session_mark_aufguss(const char *name) {
-    if (!g_session_active || !g_session_file) return;
-    uint32_t dt = (millis() - g_session_started_ms) / 1000;
-    session_write_line(dt, name);
-    g_session_file.flush();
-    Serial.print(LOG_TAG);
-    Serial.print("aufguss: ");
-    Serial.println(name);
-
-    /* Aufguss-Boost: waehrend der naechsten 2 Minuten doppelt so oft
-     * messen, damit der RH-Peak und Temp-Drop feiner aufgezeichnet
-     * werden. Nach Boost-Ende faellt der Takt automatisch zurueck.   */
-    g_boost_until_ms = millis() + SSC_BOOST_DURATION_MS;
-    g_interval_ms = SSC_INTERVAL_BOOST_MS;
-    slog("aufguss-boost: 2 Hz fuer 120 s");
-}
-
-static void session_end(void) {
-    if (!g_session_active) return;
-    if (g_session_file) {
-        g_session_file.flush();
-        g_session_file.close();
-    }
-    g_session_file = File();  /* handle zuruecksetzen, damit spaetere truthy-checks sauber sind */
-    Serial.print("session end: ");
-    Serial.println(g_session_id);
-    memset(g_session_id, 0, sizeof(g_session_id));
-    memset(g_session_path, 0, sizeof(g_session_path));
-    g_session_active = false;
-}
-
-/* ------------------------------------------------------------------ */
-/* SD-Readback (fuer ESP32 History-Detail-View)                       */
-/* ------------------------------------------------------------------ */
-/* Request-Layout (payload nach type-byte):
- *   [2B req_id][24B session_id + NUL-pad][4B byte_offset][2B max_len]
- * Antwort (0xC1):
- *   [2B req_id][4B total_size][2B offset][2B len][data...]
- */
-/* Seit v0.2.5: Stream-Modus.
- *   max_len == 0         -> ESP32 will alles bis EOF; RP2040 pumpt alle
- *                           Chunks in einer Schleife ohne auf Per-Request
- *                           zu warten. Keine Debug-Prints im Hot-Path.
- *   max_len > 0          -> Legacy-Single-Chunk-Mode (abwaertskompatibel).
- * Ergebnis: 25 KB Session in ~3-5 s statt >60 s bzw. stuck. */
-static void handle_sd_readback(const uint8_t *payload, size_t len) {
-    rp2040.wdt_reset();
+static void auto_cfg_load(void) {
     if (!sd_init_flag) return;
-    if (len < 2 + SSC_SESSION_ID_LEN + 4 + 2) return;
+    File f = SD.open("/ssc_auto.cfg", FILE_READ);
+    if (!f) return;
+    int c = f.read();
+    f.close();
+    if (c == '0') g_auto_enabled = 0;
+    else if (c == '1') g_auto_enabled = 1;
+}
+static void auto_cfg_save(void) {
+    if (!sd_init_flag) return;
+    SD.remove("/ssc_auto.cfg");
+    File f = SD.open("/ssc_auto.cfg", FILE_WRITE);
+    if (!f) return;
+    f.write((uint8_t)(g_auto_enabled ? '1' : '0'));
+    f.close();
+}
 
-    uint16_t req_id = (uint16_t(payload[0]) << 8) | payload[1];
-    char sid[SSC_SESSION_ID_LEN];
-    memcpy(sid, payload + 2, SSC_SESSION_ID_LEN - 1);
-    sid[SSC_SESSION_ID_LEN - 1] = 0;
-
-    /* Pfad-Escape-Sanity (". ." / "/" / leer). */
-    if (sid[0] == 0) return;
-    for (size_t i = 0; sid[i]; i++) {
-        char c = sid[i];
-        bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-                  (c >= '0' && c <= '9') || c == '_' || c == '-';
-        if (!ok) return;
-    }
-
-    uint32_t offset =
-        (uint32_t(payload[2 + SSC_SESSION_ID_LEN]) << 24) |
-        (uint32_t(payload[3 + SSC_SESSION_ID_LEN]) << 16) |
-        (uint32_t(payload[4 + SSC_SESSION_ID_LEN]) << 8)  |
-         uint32_t(payload[5 + SSC_SESSION_ID_LEN]);
-    uint16_t max_len =
-        (uint16_t(payload[6 + SSC_SESSION_ID_LEN]) << 8) |
-         uint16_t(payload[7 + SSC_SESSION_ID_LEN]);
-
-    /* Concurrent-Access-Guard gegen aktive Session (siehe v0.2.3 Analyse). */
-    if (g_session_active && strncmp(sid, g_session_id, SSC_SESSION_ID_LEN) == 0) {
-        if (g_session_file) g_session_file.flush();
-        uint8_t err[13] = { PKT_TYPE_SD_READBACK_CHUNK,
-                            (uint8_t)(req_id>>8),(uint8_t)req_id,
-                            0,0,0,0,  0,0,0,0,  0,0 };
-        raw_packet_send(err, sizeof(err));
-        return;
-    }
-
-    /* Downsample-Buffer: bei neuer Session einmalig aufbauen (decimieren
-     * falls gross), danach liest jeder Chunk aus dem DRAM-Buffer. */
-    if (strncmp(sid, g_rbk_ds_sid, SSC_SESSION_ID_LEN) != 0 || g_rbk_ds_size == 0) {
-        g_rbk_ds_sid[0] = 0;
-        if (!rbk_build_downsampled(sid)) {
-            Serial.print(LOG_TAG);
-            Serial.print("readback: downsample build FAILED for sid=");
-            Serial.println(sid);
-            return;
-        }
-        strncpy(g_rbk_ds_sid, sid, SSC_SESSION_ID_LEN - 1);
-        g_rbk_ds_sid[SSC_SESSION_ID_LEN - 1] = 0;
-        Serial.print(LOG_TAG);
-        Serial.printf("readback: downsampled sid=%s size=%u\n",
-                      sid, (unsigned)g_rbk_ds_size);
-    }
-    uint32_t total = g_rbk_ds_size;
-    if (offset >= total) return;
-
-    uint8_t chunk[256];
-    chunk[0] = PKT_TYPE_SD_READBACK_CHUNK;
-    chunk[1] = uint8_t(req_id >> 8);
-    chunk[2] = uint8_t(req_id & 0xFF);
-    chunk[3] = uint8_t(total >> 24);
-    chunk[4] = uint8_t(total >> 16);
-    chunk[5] = uint8_t(total >> 8);
-    chunk[6] = uint8_t(total);
-
-    /* Per-chunk-mode: lese aus downsampled-Buffer (DRAM), nicht File. */
-    uint16_t per_call_limit = (max_len == 0 || max_len > 200) ? 200 : max_len;
-    uint32_t available = total - offset;
-    uint16_t got = (uint16_t)(available < per_call_limit ? available : per_call_limit);
-    memcpy(chunk + 13, g_rbk_ds_buf + offset, got);
-    chunk[7]  = uint8_t(offset >> 24);
-    chunk[8]  = uint8_t(offset >> 16);
-    chunk[9]  = uint8_t(offset >> 8);
-    chunk[10] = uint8_t(offset);
-    chunk[11] = uint8_t(got >> 8);
-    chunk[12] = uint8_t(got & 0xFF);
-    raw_packet_send(chunk, 13 + got);
-    rp2040.wdt_reset();
+static void send_hello(void) {
+    ssc_hello_resp_t h;
+    memset(&h, 0, sizeof(h));
+    h.proto = SSC_PROTO_VERSION;
+    strncpy(h.fw, VERSION, sizeof(h.fw) - 1);
+    h.boot_count = g_boot_count;
+    h.reset_reason = g_last_reset_reason;
+    h.caps = 0x07;
+    uint8_t pkt[1 + sizeof(h)];
+    pkt[0] = SSC_PKT_HELLO_RESP;
+    memcpy(pkt + 1, &h, sizeof(h));
+    raw_packet_send(pkt, sizeof(pkt));
 }
 
 /* ================================================================== */
-/* ESP32 -> RP: Kommandoverarbeitung                                  */
+/* ESP32 -> RP: Kommandoverarbeitung (Protokoll v2)                   */
 /* ================================================================== */
-static bool shutdown_flag = false;
-
 static void onPacketReceived(const uint8_t *buffer, size_t size) {
     if (size < 1) return;
-    g_pkt_rx++;   /* v0.2.8: jedes packet das die size-hurde passiert */
-
-#if DEBUG
-    Serial.printf("<--- recv len:%u, type=0x%02X\n", (unsigned)size, buffer[0]);
-#endif
-
-    switch (buffer[0]) {
-    case PKT_TYPE_CMD_SHUTDOWN:
-        Serial.println("cmd: shutdown");
-        shutdown_flag = true;
-        session_end();
+    g_pkt_rx++;
+    uint8_t cmd = buffer[0];
+    int want = ssc_cmd_len(cmd);
+    const uint8_t *p = buffer + 1;
+    size_t len = size - 1;
+    if (want < 0) { g_pkt_rx_unk++; return; }
+    if ((int)len != want) {
+        /* exakte Laenge: verschmolzene/abgeschnittene Frames haben keine
+         * Seiteneffekte mehr (v0.3.3: kaputte Sidecar, .csv-Datei).   */
+        g_bad_len++;
+        Serial.print(LOG_TAG); Serial.print("cmd 0x"); Serial.print(cmd, HEX);
+        Serial.print(" bad len "); Serial.println(len);
+        if (cmd != SSC_CMD_SESSION_START || len != 0) send_ack(cmd, SSC_RC_BAD_LEN, 0);
+        return;
+    }
+    switch (cmd) {
+    case SSC_CMD_SHUTDOWN:
+        slog("cmd shutdown ignoriert (v0.4: Aufzeichnung laeuft weiter)");
         break;
-
-    case PKT_TYPE_CMD_COLLECT_INTERVAL:
-        if (size >= 5) {
-            uint32_t ival = (uint32_t(buffer[1]) << 24) |
-                            (uint32_t(buffer[2]) << 16) |
-                            (uint32_t(buffer[3]) << 8)  |
-                             uint32_t(buffer[4]);
-            if (ival >= 250 && ival <= 60000) {
-                g_interval_base = ival;
-                /* Wenn kein Boost laeuft, sofort uebernehmen.
-                 * Rollover-sicher per signed diff. */
-                if (!g_boost_until_ms || (int32_t)(millis() - g_boost_until_ms) >= 0)
-                    g_interval_ms = ival;
-                Serial.print(LOG_TAG);
-                Serial.print("cmd interval=");
-                Serial.print(ival);
-                Serial.println(" ms");
+    case SSC_CMD_COLLECT_INTERVAL: {
+        uint32_t iv = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
+        if (iv >= 250 && iv <= 60000) { g_interval_ms = iv; g_interval_base = iv; }
+        break;
+    }
+    case SSC_CMD_SESSION_START: {
+        uint8_t origin = (p[0] == SSC_ORIGIN_AUTO) ? SSC_ORIGIN_AUTO : SSC_ORIGIN_MANUAL;
+        uint8_t rc = rec_start(origin);
+        send_ack(cmd, rc, 0);
+        send_session_state();
+        break;
+    }
+    case SSC_CMD_SESSION_END: {
+        if (!g_rec.active) { send_ack(cmd, SSC_RC_STATE, 0); break; }
+        rec_end(p[0] == SSC_END_AUTO ? SSC_END_AUTO : SSC_END_MANUAL);
+        send_ack(cmd, SSC_RC_OK, 0);
+        send_session_state();
+        break;
+    }
+    case SSC_CMD_ADD_EVENT: {
+        ssc_add_event_t a; memcpy(&a, p, sizeof(a));
+        if (!g_rec.active || a.kind != SSC_EK_AUFGUSS) { send_ack(cmd, SSC_RC_STATE, 0); break; }
+        rec_on_aufguss(NULL, true, g_sauna_temp, g_sauna_rh);
+        send_ack(cmd, SSC_RC_OK, g_rec.n_ev);
+        break;
+    }
+    case SSC_CMD_SD_READBACK:   handle_sd_readback(p, len); break;
+    case SSC_CMD_GET_RP_STATUS: rp2040_send_status(); break;
+    case SSC_CMD_LIST_SESSIONS: handle_list_sessions(); break;
+    case SSC_CMD_META_PUSH:     send_ack(cmd, handle_meta_push(p), 0); break;
+    case SSC_CMD_DELETE_FILE:   send_ack(cmd, handle_delete(p, false), 0); break;
+    case SSC_CMD_DELETE_JSON:   send_ack(cmd, handle_delete(p, true), 0); break;
+    case SSC_CMD_SENSOR_SELFTEST: {
+        uint8_t why = selftest_refuse_reason();
+        if (g_st_phase != ST_IDLE) why = SSC_STR_TOO_SOON;
+        if (why) {
+            g_st_result = SSC_ST_REFUSED; g_st_reason = why;
+            send_ack(cmd, SSC_RC_REFUSED, why);
+        } else {
+            selftest_start();
+            send_ack(cmd, SSC_RC_OK, 0);
+        }
+        sensor_health_send();
+        break;
+    }
+    case SSC_CMD_TIME_SYNC: {
+        ssc_time_sync_t t; memcpy(&t, p, sizeof(t));
+        if (t.utc > 1600000000UL) {
+            /* monoton: nie hinter eine bereits bekannte gute Zeit zurueck */
+            uint32_t cur = utc_now();
+            if (!(time_valid() && t.source < g_ts_src && t.utc + 120 < cur)) {
+                g_ts_utc = t.utc; g_ts_ms = millis(); g_ts_tz = t.tz_off_s;
+                g_ts_src = t.source; g_ts_have = true;
             }
+            if (g_rec.active && g_rec.start_utc == 0 && time_valid())
+                g_rec.start_utc = utc_now() - rec_t_ms() / 1000UL;
+            rec_check_resume_gap();
         }
-        break;
-
-    case PKT_TYPE_CMD_SESSION_START: {
-        char id[SSC_SESSION_ID_LEN] = {0};
-        size_t cp = (size - 1) < (SSC_SESSION_ID_LEN - 1)
-                    ? (size - 1) : (SSC_SESSION_ID_LEN - 1);
-        memcpy(id, buffer + 1, cp);
-        session_start(id);
         break;
     }
-
-    case PKT_TYPE_CMD_SESSION_AUFGUSS: {
-        char name[SSC_AUFGUSS_LEN] = {0};
-        size_t cp = (size - 1) < (SSC_AUFGUSS_LEN - 1)
-                    ? (size - 1) : (SSC_AUFGUSS_LEN - 1);
-        memcpy(name, buffer + 1, cp);
-        session_mark_aufguss(name);
+    case SSC_CMD_AUTO_CFG: {
+        ssc_auto_cfg_t c; memcpy(&c, p, sizeof(c));
+        if (ssc_crc16(&c, offsetof(ssc_auto_cfg_t, crc)) != c.crc) { send_ack(cmd, SSC_RC_BAD_CRC, 0); break; }
+        uint8_t en = c.enabled ? 1 : 0;
+        if (en != g_auto_enabled) { g_auto_enabled = en; auto_cfg_save(); g_state_dirty = true; }
+        send_ack(cmd, SSC_RC_OK, en);
         break;
     }
-
-    case PKT_TYPE_CMD_SESSION_END:
-        session_end();
-        break;
-
-    case PKT_TYPE_CMD_SD_READBACK:
-        handle_sd_readback(buffer + 1, size - 1);
-        break;
-
-    case PKT_TYPE_CMD_GET_RP_STATUS:
-        /* v0.2.7: ESP32 fragt nach Boot-Counter + Reset-Reason */
-        rp2040_send_status();
-        break;
-
-    case PKT_TYPE_CMD_LIST_SESSIONS:
-        /* v0.3.0: hybrid storage - alle session-metadata aus /sessions/
-         * lesen und an ESP32 streamen. Falls .json sidecar fehlt, aus
-         * CSV synthesisieren.                                          */
-        handle_list_sessions();
-        break;
-
-    case PKT_TYPE_CMD_SESSION_META_PUSH:
-        /* v0.3.0: ESP32 schickt finale session-metadata - JSON sidecar
-         * neben /sessions/<id>.csv schreiben.                          */
-        handle_session_meta_push(buffer + 1, size - 1);
-        break;
-
-    case PKT_TYPE_CMD_SESSION_DELETE_FILE:
-        /* v0.3.0+: ESP32 loescht eine session - CSV + JSON-sidecar
-         * von SD entfernen damit storage konsistent bleibt.            */
-        handle_session_delete_file(buffer + 1, size - 1);
-        break;
-
-    case PKT_TYPE_CMD_SESSION_DELETE_JSON:
-        /* v0.3.0+: legacy-fix - nur JSON sidecar weg, csv bleibt.      */
-        handle_session_delete_json(buffer + 1, size - 1);
-        break;
-
-    case PKT_TYPE_CMD_SHT85_HEATER: {
-        /* manueller heater-trigger vom ESP32. payload = 1B power-level.
-         * abgelehnt wenn aufguss-boost laeuft oder cooldown <60s.      */
-        if (g_sauna_probe != SAUNA_PROBE_SHT85) {
-            slog("heater-cmd ignoriert: kein SHT85 aktiv");
-            break;
-        }
-        if (g_boost_until_ms != 0) {
-            slog("heater-cmd ignoriert: aufguss-boost laeuft");
-            break;
-        }
-        if (g_sht_heater_last_ms != 0 &&
-            (millis() - g_sht_heater_last_ms) < 60000UL) {
-            slog("heater-cmd ignoriert: cooldown <60s");
-            break;
-        }
-        uint8_t power = (size >= 2 && buffer[1] != 0) ? 1 : 0;
-        sht85_heater_cycle(power);
-        break;
-    }
-
+    case SSC_CMD_EVENT_LABEL:   send_ack(cmd, handle_event_label(p), p[SSC_ID_LEN]); break;
+    case SSC_CMD_GET_EVENTS:    handle_get_events(p); break;
+    case SSC_CMD_HELLO:         send_hello(); send_session_state(); break;
+    case SSC_CMD_GET_STATE:     send_session_state(); sensor_health_send(); break;
     default:
-        g_pkt_rx_unk++;   /* v0.2.8: unknown cmd-byte */
+        g_pkt_rx_unk++;
         break;
     }
 }
+
 
 /* ================================================================== */
 /* Setup / Loop                                                       */
@@ -1853,13 +2273,15 @@ static void sensor_power_on(void) {
 
 void setup() {
     Serial.begin(115200);
-
-    /* Reset-Reason SOFORT einfangen (bevor wdt_begin sie zuruecksetzen
-     * koennte). watchdog_caused_reboot() ist die SDK-API des RP2040.     */
     bool was_wdt_reset = watchdog_caused_reboot();
 
     Serial1.setRX(17);
     Serial1.setTX(16);
+    /* v0.4.0 (Audit C1): Core-Default ist 32 B RX-FIFO = 2.7 ms bei
+     * 115200. Jede laengere loop()-Phase hat Bytes verloren und COBS-
+     * Frames verschmolzen (Ursache der kaputten JSON-Sidecar). 4 KB
+     * puffern ~350 ms Dauerstrom.                                     */
+    Serial1.setFIFOSize(4096);
     Serial1.begin(115200);
     myPacketSerial.setStream(&Serial1);
     myPacketSerial.setPacketHandler(&onPacketReceived);
@@ -1867,54 +2289,22 @@ void setup() {
     uint32_t t_power_on = millis();
     sensor_power_on();
 
-    /* I²C-Bus-Unlock-Preamble: falls ein Slave (SHT85 auf dem 2m-Kabel)
-     * bei einem frueheren Brownout/WDT-Reset mid-transaction abgebrochen
-     * wurde, haelt er evtl. SDA LOW. Wire.begin() kann das NICHT loesen -
-     * es wuerde naiv START-Bit senden und stuck-bleiben. Manuelles 9-Clock-
-     * Recovery BEVOR Wire den Controller uebernimmt ist Pflicht, sonst
-     * Boot-Loop bis Power-Cycle. */
     i2c_bus_unlock(20, 21);
-
     Wire.setSDA(20);
     Wire.setSCL(21);
     Wire.begin();
-    /* 50 kHz I2C fuer 2m-Silikonkabel zum externen SHT85:
-     * Rise-time-Budget 2 us statt 1 us. Mit on-board 4.7k-Pullups und
-     * ~300 pF Kabelkapazitaet liegen wir bei real ~1.4 us - bei 100 kHz
-     * marginal, bei 50 kHz komfortabel in-spec. I²C-Bandbreiten-Verlust
-     * ist irrelevant (Sensor-Wartezeiten dominieren die Messdauer).    */
-    Wire.setClock(50000);
-    /* Clock-Stretch-Timeout: SCD41 stretched bis 1.5 ms, SGP40 bis ~12 ms.
-     * 25 ms mit reset_on_timeout=true sprengt das 8 s-WDT auch bei 3 retries
-     * (3*25 = 75 ms) nicht, fuettert aber nicht-mehr-antwortende Slaves nicht
-     * in einen unbegrenzten busy-loop. WICHTIG: arduino-pico-API heisst
-     * setTimeout(ms, reset_with_timeout) - NICHT das AVR-`setWireTimeout`
-     * mit us-Einheit. Ohne diesen Call bleibt Stream-Default 1000 ms ohne
-     * Controller-Reset aktiv - reicht bei 2m-SHT85-Kabel fuer WDT-Loop. */
-    Wire.setTimeout(25, true);
+    Wire.setClock(50000);       /* 2-m-Silikonkabel: Rise-Time-Budget  */
+    Wire.setTimeout(25, true);  /* arduino-pico: ms + Controller-Reset  */
 
-    /* Serial-Init etwas warten damit USB-CDC enumeriert ist bevor wir
-     * die ersten diagnose-messages schicken (sonst weg).             */
     uint32_t t0 = millis();
     while (!Serial && millis() - t0 < 2000) { delay(10); }
 
-    /* v0.2.7: Reset-Reason + Boot-Counter capturen BEVOR wir was
-     * anderes machen. EEPROM-tick ist flash-write, schlaegt bei einem
-     * I2C-Crash vorher ohnehin niemals zu, daher frueh hier.
-     * v0.2.8: scratch-canary-detection gibt 3-state statt bool.          */
     g_last_reset_reason = (uint8_t)rp2040_detect_reset_reason(was_wdt_reset);
     g_boot_count        = rp2040_boot_counter_tick_and_get();
-
     const char *rr_boot_txt =
         g_last_reset_reason == SSC_RST_POR  ? "POR"  :
         g_last_reset_reason == SSC_RST_WDT  ? "WDT"  :
         g_last_reset_reason == SSC_RST_SOFT ? "SOFT" : "???";
-
-    /* Sehr frueher Boot-Banner mit explizitem flush() - garantiert dass bei
-     * einem Crash-Loop mindestens DIESE Zeile pro Boot durchkommt. Reset-
-     * reason gibt uns die Diagnose: WDT (code haengt/missed-feed), SOFT
-     * (hardfault-handler, NVIC_SystemReset, external-reset), POR
-     * (power-loss/brown-out - echter hw-power-cycle).                    */
     Serial.println();
     Serial.print(LOG_TAG); Serial.print("BOOT ");  Serial.print(VERSION);
     Serial.print(" reset_reason="); Serial.print(rr_boot_txt);
@@ -1922,13 +2312,11 @@ void setup() {
     Serial.println(g_boot_count);
     Serial.flush();
 
-    slog("boot start, I2C-bus klar");
-    i2c_scan_log("boot-early");  /* sehr frueh - zeigt was vor sensor-init da ist */
+    ssc_det_init(&g_det);   /* g_rec ist global null-initialisiert (enthaelt File - kein memset!) */
 
-    /* SD-Karte am SPI1 (SCK=10, TX=11, RX=12, CS=13).
-     * CS explizit HIGH treiben BEVOR SPI1.setSCK/TX/RX aktiv werden - sonst
-     * floatet GP13 waehrend der 74-Clock-Wakeup-Sequenz von SD.begin() und
-     * die Karte interpretiert das als Command-Start. */
+    slog("boot start, I2C-bus klar");
+    i2c_scan_log("boot-early");
+
     pinMode(13, OUTPUT);
     digitalWrite(13, HIGH);
     SPI1.setSCK(10);
@@ -1937,14 +2325,8 @@ void setup() {
     sd_init_flag = sd_try_init();
     if (sd_init_flag) session_recovery_scan();
 
-    /* I2C-Scan zur Diagnose - zeigt beim Boot, welche Slaves da sind */
     i2c_scan_log("boot");
 
-    /* SCD41 braucht nach power-on bis zu 1000 ms bevor er I²C-Kommandos
-     * akzeptiert. Wenn wir frueher begin()en, NACKt er und die Wire-Impl
-     * kann den Bus fuer >50 ms blockieren. Das bisherige delay(25) war zu
-     * kurz. Hier ziehen wir das volle 1s-Wakeup-Fenster, abzueglich der
-     * Zeit die USB-Wait + SD-Init + I2C-Scan bereits verbraucht haben.    */
     while (millis() - t_power_on < 1000) {
         delay(5);
         rp2040.wdt_reset();
@@ -1952,9 +2334,6 @@ void setup() {
     sensor_sgp40_init();
     sensor_scd4x_init();
 
-    /* Sauna-Fuehler: zuerst SHT85 probieren (bevorzugt, bis 105 °C),
-     * dann AHT20 als Fallback (bis 85 °C - gut fuers Entwicklungs-
-     * testen, aber in der echten Sauna sollte ein SHT85/SHT31 hin). */
     sht_ready = sht85_init();
     if (sht_ready) {
         g_sauna_probe = SAUNA_PROBE_SHT85;
@@ -1963,15 +2342,18 @@ void setup() {
         aht_ready = aht20_fallback_init();
         if (aht_ready) {
             g_sauna_probe = SAUNA_PROBE_AHT20;
-            slog("Fallback-Betrieb: AHT20 als sauna-fuehler "
-                 "(Spec bis 85 degC - nur fuer Test!)");
+            slog("Fallback-Betrieb: AHT20 als sauna-fuehler (Spec bis 85 degC - nur fuer Test!)");
         } else if (scd_ready) {
             g_sauna_probe = SAUNA_PROBE_SCD41;
-            slog("!!! kein externer Fuehler - interner SCD41 "
-                 "wird parallel als Sauna-Proxy gesendet (Dev-Mode)");
+            slog("!!! kein externer Fuehler - keine Kabinenwerte (Dev-Mode)");
         } else {
-            slog("!!! kein Sauna-Fuehler gefunden - kurve bleibt leer");
+            slog("!!! kein Sauna-Fuehler gefunden");
         }
+    }
+
+    if (sd_init_flag) {
+        auto_cfg_load();
+        rec_try_resume();
     }
 
     Serial.print(LOG_TAG);
@@ -1980,179 +2362,249 @@ void setup() {
     Serial.print(" ready: SD=");  Serial.print(sd_init_flag);
     Serial.print(" SCD41=");      Serial.print(scd_ready);
     Serial.print(" SGP40=");      Serial.print(sgp_ready);
-    Serial.print(" SHT85=");      Serial.print(sht_ready);
+    Serial.print(" SHT=");        Serial.print(sht_ready);
     Serial.print(" AHT20fb=");    Serial.print(aht_ready);
-    Serial.print(" probe=");      Serial.println(
-        g_sauna_probe == SAUNA_PROBE_SHT85 ? "SHT3x" :
-        g_sauna_probe == SAUNA_PROBE_AHT20 ? "AHT20" :
-        g_sauna_probe == SAUNA_PROBE_SCD41 ? "SCD41-PROXY" : "NONE");
+    Serial.print(" auto=");       Serial.print(g_auto_enabled);
+    Serial.print(" rec=");        Serial.println(g_rec.active ? g_rec.id : "-");
 
-    /* Watchdog-Timer starten - wenn loop() mal haengen sollte
-     * (z.B. durch defekten I2C-pullup an der Sauna-Kabelstrecke),
-     * resetet sich der Chip nach 8 s selbst.                       */
     rp2040.wdt_begin(SSC_WATCHDOG_MS);
     slog("watchdog armed (8 s)");
-
     g_last_tick_ms = millis();
+}
+
+/* Health-Zeile (60 s und auf ?H) */
+static void print_health(void) {
+    float t_out  = isnan(g_sauna_temp) ? 0.0f : g_sauna_temp;
+    float rh_out = isnan(g_sauna_rh)   ? 0.0f : g_sauna_rh;
+    const char *probe_str =
+        g_sauna_probe == SAUNA_PROBE_SHT85 ? "SHT3x" :
+        g_sauna_probe == SAUNA_PROBE_AHT20 ? "AHT20" :
+        g_sauna_probe == SAUNA_PROBE_SCD41 ? "SCD41-PROXY" : "NONE";
+    const char *rr =
+        g_last_reset_reason == SSC_RST_POR  ? "POR"  :
+        g_last_reset_reason == SSC_RST_WDT  ? "WDT"  :
+        g_last_reset_reason == SSC_RST_SOFT ? "SOFT" : "???";
+    char b[360];
+    snprintf(b, sizeof(b),
+        "%shealth: up=%lus probe=%s temp=%.1f rh=%.1f fails=%lu heater=%d stuck=%d "
+        "rec=%s rows=%lu werr=%u phase=%u gang=%u aufg=%u auto=%u sim=%d sd=%d "
+        "time=%d rp_die=%.1f boot=%lu rst=%s pkt=%u unk=%u badlen=%u badcrc=%u ovf=%u",
+        LOG_TAG, (unsigned long)(millis() / 1000UL), probe_str, (double)t_out, (double)rh_out,
+        (unsigned long)g_sht85_fails, g_sht_heater_on, g_sht_heater_stuck,
+        g_rec.active ? g_rec.id : "-", (unsigned long)g_rec.rows, g_rec.write_errs,
+        g_det.phase, g_rec.gang, g_rec.n_aufguss, g_auto_enabled, g_sim, sd_init_flag,
+        time_valid(), (double)analogReadTemp(), (unsigned long)g_boot_count, rr,
+        g_pkt_rx, g_pkt_rx_unk, g_bad_len, g_bad_crc, g_uart_ovf);
+    Serial.println(b);
+}
+
+static void periodic(uint32_t now) {
+    /* Zustand alle 2 s (und sofort bei Aenderung) an den ESP32 */
+    static uint32_t last_state = 0;
+    if (g_state_dirty || now - last_state >= 2000) {
+        g_state_dirty = false;
+        last_state = now;
+        send_session_state();
+    }
+    static uint32_t last_probe_send = 0;
+    if (now - last_probe_send > 15000) {
+        last_probe_send = now;
+        uint8_t ps[3] = { PKT_TYPE_PROBE_STATE, (uint8_t)g_sauna_probe, (uint8_t)(sd_init_flag ? 1 : 0) };
+        raw_packet_send(ps, sizeof(ps));
+    }
+    static uint32_t last_health = 0;
+    if (now - last_health >= 5000) {
+        last_health = now;
+        sensor_health_send();
+    }
+    /* Heater jede Minute verifizieren (ausser waehrend Selbsttest-Heizen) */
+    static uint32_t last_hv = 0;
+    if (now - last_hv >= 60000UL && g_st_phase != ST_HEAT &&
+        g_sauna_probe == SAUNA_PROBE_SHT85 && sht_ready && !g_sim) {
+        last_hv = now;
+        uint16_t st;
+        if (sht_status_read(&st)) {
+            g_sht_status = st;
+            if (st & SHT_STATUS_HEATER) {
+                slog("!!! Heater unerwartet AN -> force off");
+                sht_heater_force_off("periodic");
+                if (g_rec.active) set_marker("HEATER_OFF");
+            } else {
+                g_sht_heater_on = false;
+                g_sht_heater_stuck = false;
+            }
+        }
+    }
+    selftest_service();
+
+    /* Sim-Modus endet 5 s nach dem letzten ?F */
+    if (g_sim && now - g_sim_last_feed > 5000UL) {
+        slog("SIM-Modus beendet");
+        if (g_rec.active && g_rec.sim) rec_end(SSC_END_MANUAL);
+        g_sim = false;
+        ssc_det_init(&g_det);
+        g_state_dirty = true;
+    }
+
+    static uint32_t last_scan = 0;
+    if (!sht_ready && !aht_ready && now - last_scan > 30000) {
+        last_scan = now;
+        i2c_scan_log("periodic");
+    }
+    static uint32_t last_reprobe = 0;
+    bool need_reprobe = (!sht_ready && !aht_ready) ||
+                        (g_sauna_probe == SAUNA_PROBE_SHT85 && g_sht_consec_fails > 30) ||
+                        (g_sauna_probe == SAUNA_PROBE_AHT20);   /* SHT bevorzugt */
+    if (need_reprobe && now - last_reprobe > 8000) {
+        last_reprobe = now;
+        if (sht85_init()) {
+            sht_ready = true;
+            g_sht_consec_fails = 0;
+            g_sauna_probe = SAUNA_PROBE_SHT85;
+            slog("re-probe: SHT3x da");
+        } else if (!aht_ready && aht20_fallback_init()) {
+            aht_ready = true;
+            g_sauna_probe = SAUNA_PROBE_AHT20;
+        }
+    }
+    /* SD neu mounten (echter Remount: SD.end + begin) und laufende
+     * Session wieder anhaengen.                                       */
+    static uint32_t last_sd_retry = 0;
+    if (!sd_init_flag && now - last_sd_retry > 15000) {
+        last_sd_retry = now;
+        SD.end(false);
+        sd_init_flag = sd_try_init();
+        if (sd_init_flag && g_rec.active && !g_rec.file_ok) {
+            g_rec.f = SD.open(g_rec.path, FILE_WRITE);
+            if (g_rec.f) {
+                g_rec.file_ok = true;
+                set_marker("SD_GAP");
+                slog("SD wieder da - Session wird fortgesetzt");
+            }
+        }
+        g_state_dirty = true;
+    }
+    static uint32_t last_hlog = 0;
+    if (now - last_hlog >= 60000) {
+        last_hlog = now;
+        rp2040.wdt_reset();
+        print_health();
+        rp2040.wdt_reset();
+    }
+}
+
+/* USB-CDC-Debug: strikt '?'-Prefix (feedback-sicher, siehe v0.2.14).
+ *   ?L            Dateiliste       ?D <datei>  Datei dumpen
+ *   ?H            Health-Zeile     ?S          Session-Zustand
+ *   ?F t T RH     Sim-Sample (t in ms, Replay)  ?X  WDT-Test (haengt) */
+static void usb_cdc_service(void) {
+    static char buf[96];
+    static uint8_t idx = 0;
+    static bool discard = false;
+    int budget = 512;
+    while (Serial.available() && budget-- > 0) {
+        char c = Serial.read();
+        if (c == '\r') continue;
+        if (c != '\n') {
+            if (discard) continue;
+            if (idx == 0 && c != '?') { discard = true; continue; }
+            if (idx < sizeof(buf) - 1) buf[idx++] = c; else { discard = true; idx = 0; }
+            continue;
+        }
+        bool ok = !discard && idx > 1 && buf[0] == '?';
+        buf[idx] = 0;
+        idx = 0; discard = false;
+        if (!ok) continue;
+        char op = buf[1];
+        if (op == 'L' || op == 'l') {
+            Serial.println(F("[SAUNA] LIST_BEGIN"));
+            if (sd_init_flag) {
+                File dir = SD.open("/sessions");
+                if (dir) {
+                    File f;
+                    while ((f = dir.openNextFile())) {
+                        Serial.print(F("[SAUNA] FILE "));
+                        Serial.print(f.name()); Serial.print(' '); Serial.println(f.size());
+                        f.close();
+                        rt_service();
+                    }
+                    dir.close();
+                }
+            } else Serial.println(F("[SAUNA] SD not ready"));
+            Serial.println(F("[SAUNA] LIST_END"));
+        } else if ((op == 'D' || op == 'd') && buf[2] == ' ' && sd_init_flag) {
+            const char *nm = buf + 3;
+            bool safe = nm[0] && !strstr(nm, "..") && !strchr(nm, '/');
+            char path[100];
+            snprintf(path, sizeof(path), "/sessions/%s", nm);
+            File f = safe ? SD.open(path) : File();
+            if (f) {
+                Serial.print(F("[SAUNA] DUMP_BEGIN ")); Serial.println(nm);
+                uint8_t blk[256];
+                while (f.available()) {
+                    int n = f.read(blk, sizeof(blk));
+                    if (n <= 0) break;
+                    Serial.write(blk, (size_t)n);
+                    rt_service();
+                }
+                f.close();
+                Serial.println();
+                Serial.print(F("[SAUNA] DUMP_END ")); Serial.println(nm);
+            } else {
+                Serial.print(F("[SAUNA] DUMP_ERR not found ")); Serial.println(path);
+            }
+        } else if (op == 'H' || op == 'h') {
+            print_health();
+        } else if (op == 'S' || op == 's') {
+            Serial.print(F("[SAUNA] STATE rec=")); Serial.print(g_rec.active ? g_rec.id : "-");
+            Serial.print(F(" t_ms=")); Serial.print(g_rec.active ? rec_t_ms() : 0);
+            Serial.print(F(" phase=")); Serial.print(g_det.phase);
+            Serial.print(F(" gang=")); Serial.print(g_rec.gang);
+            Serial.print(F(" aufguss=")); Serial.print(g_rec.n_aufguss);
+            Serial.print(F(" lueften=")); Serial.print(g_rec.n_luef);
+            Serial.print(F(" events=")); Serial.print(g_rec.n_ev);
+            Serial.print(F(" auto=")); Serial.print(g_auto_enabled);
+            Serial.print(F(" sim=")); Serial.println(g_sim);
+        } else if (op == 'F' || op == 'f') {
+            /* ?F <t_ms> <temp> <rh> - Replay-Sample. Nur wenn keine echte
+             * Session laeuft (sonst wuerden echte Daten verfaelscht).   */
+            unsigned long t; float T, RH;
+            if (sscanf(buf + 2, "%lu %f %f", &t, &T, &RH) == 3) {
+                if (!g_sim) {
+                    if (g_rec.active && !g_rec.sim) { Serial.println(F("[SAUNA] SIM_REFUSED session")); continue; }
+                    g_sim = true;
+                    ssc_det_init(&g_det);
+                    slog("SIM-Modus aktiv (Replay)");
+                }
+                g_sim_t = (uint32_t)t;
+                g_sim_last_feed = millis();
+                sensor_data_send(SSC_PKT_SAUNA_TEMP, T);
+                sensor_data_send(SSC_PKT_SAUNA_RH, RH);
+                process_sample(g_sim_t, T, RH, true);
+            }
+        } else if (op == 'X' || op == 'x') {
+            slog("WDT-Test: haenge loop() absichtlich");
+            Serial.flush();
+            while (1) { }
+        }
+    }
 }
 
 void loop() {
     uint32_t now = millis();
-
-    /* Watchdog alive halten - wird jeden Loop-Durchlauf aufgefrischt.
-     * Wenn sht85_read_and_send() oder sensor_scd4x_read_and_send()
-     * mal laenger als SSC_WATCHDOG_MS haengen, triggert der WDT den
-     * Chip-Reset - erwuenschtes Verhalten, Session-File wird beim
-     * naechsten Boot bereinigt, ESP32 bekommt sauberen Restart.     */
     rp2040.wdt_reset();
 
-    /* Aufguss-Boost-Ablauf: nach 120 s zurueck auf Basis-Intervall.
-     * Signed-diff gegen millis()-Rollover (nach 49.7 Tagen Dauerbetrieb). */
-    if (g_boost_until_ms && (int32_t)(now - g_boost_until_ms) >= 0) {
-        g_boost_until_ms = 0;
-        g_interval_ms = g_interval_base;
-        g_sht_boost_ended_ms = now;   /* fuer stuck-detector post-boost-guard */
-        slog("aufguss-boost ende, zurueck zu basistakt");
-    }
-
+    /* Fester 2-Hz-Raster (v0.4.0: last += interval statt = now, damit
+     * der Takt nicht driftet).                                         */
     if (now - g_last_tick_ms >= g_interval_ms) {
-        g_last_tick_ms = now;
-
-        /* Messzyklus: Sauna zuerst (wichtigste Daten), dann Vorraum.
-         * Sauna-Fuehler ist entweder SHT85 oder als Fallback AHT20.
-         * Vorraum-Sensoren bekommen nur jeden 2. Tick (weniger Daten-
-         * Traffic, SCD41 misst eh nur alle ~5 s neu).                */
-        static uint8_t slow_divider = 0;
-        if (g_sauna_probe == SAUNA_PROBE_SHT85) sht85_read_and_send();
-        else if (g_sauna_probe == SAUNA_PROBE_AHT20) aht20_read_and_send();
-        if ((slow_divider++ & 1) == 0) {
-            if (scd_ready) sensor_scd4x_read_and_send();
-            if (sgp_ready) sensor_sgp40_read_and_send();
-        }
-
-        /* Fuer laufende Session: Sample auf SD schreiben */
-        if (g_session_active) session_write_sample();
-
-        /* Probe-State alle 15 s an ESP32 senden - damit UI ggf. einen
-         * DEV-MODE-Badge oder SD-Warnung anzeigen kann.             */
-        static uint32_t last_probe_send = 0;
-        if (now - last_probe_send > 15000) {
-            last_probe_send = now;
-            uint8_t ps[3] = { PKT_TYPE_PROBE_STATE,
-                              (uint8_t)g_sauna_probe,
-                              (uint8_t)(sd_init_flag ? 1 : 0) };
-            raw_packet_send(ps, sizeof(ps));
-        }
-
-        /* Stuck-at-low eval alle 10 s (nicht jedes 500ms-tick - spart cpu
-         * und der ringbuffer-snapshot stabilisiert sich besser).         */
-        static uint32_t last_stuck_eval = 0;
-        if (now - last_stuck_eval >= 10000) {
-            last_stuck_eval = now;
-            sht_eval_stuck_at_low();
-        }
-
-        /* Health-heartbeat alle 5 s (state-change-pakete kommen sofort
-         * aus sht85_heater_cycle / sht_eval_stuck_at_low).               */
-        static uint32_t last_health_send = 0;
-        if (now - last_health_send >= 5000) {
-            last_health_send = now;
-            sht_send_health();
-        }
-
-        /* Alle 30 s: I2C-Scan bei nicht-ready-Fuehler, damit wir im
-         * Log sehen koennen, welche Slaves tatsaechlich antworten. */
-        static uint32_t last_scan = 0;
-        if (!sht_ready && !aht_ready && now - last_scan > 30000) {
-            last_scan = now;
-            i2c_scan_log("periodic");
-        }
-
-        /* Alle 8 s: wenn kein externer Fuehler da ODER der Fuehler viele
-         * fails akkumuliert hat (>30 = mindestens 30 s hart kaputt), neu
-         * probieren. So faengt der RP2040 einen spaeter angesteckten oder
-         * nach Brownout recovernden SHT35 automatisch ohne Reboot auf. */
-        static uint32_t last_reprobe = 0;
-        bool need_reprobe = (!sht_ready && !aht_ready) ||
-                            (g_sauna_probe == SAUNA_PROBE_SHT85 && g_sht85_fails > 30);
-        if (need_reprobe && now - last_reprobe > 8000) {
-            last_reprobe = now;
-            if (sht85_init()) {
-                sht_ready = true;
-                g_sht85_fails = 0;
-                g_sauna_probe = SAUNA_PROBE_SHT85;
-                slog("re-probe: SHT3x jetzt da -> wechsle zu echtem Fuehler");
-            } else if (aht20_fallback_init()) {
-                aht_ready = true;
-                g_sauna_probe = SAUNA_PROBE_AHT20;
-                slog("re-probe: AHT20 fallback erkannt");
-            }
-        }
-
-        /* Alle 15 s: wenn SD nicht bereit, versuch neu zu mounten. */
-        static uint32_t last_sd_retry = 0;
-        if (!sd_init_flag && now - last_sd_retry > 15000) {
-            last_sd_retry = now;
-            sd_init_flag = sd_try_init();
-        }
-
-        /* Alle 60 s health-summary: Fehlerzaehler + Interval.
-         * WDT sowohl vor als auch nach dem Block fuettern: wenn der USB-CDC
-         * Host-Puffer voll ist, kann Serial.print() einige hundert ms blocken,
-         * im worst-case zusammen mit einem langsamen SD-flush das 8s-Budget
-         * sprengen. NAN-Werte explizit durch 0.0 ersetzen - manche Arduino-
-         * Cores haben in der dtostrf-Pfad fuer NAN noch Probleme. */
-        static uint32_t last_health = 0;
-        if ((int32_t)(now - last_health) >= 60000) {
-            last_health = now;
-            rp2040.wdt_reset();
-            float t_out  = isnan(g_sauna_temp) ? 0.0f : g_sauna_temp;
-            float rh_out = isnan(g_sauna_rh)   ? 0.0f : g_sauna_rh;
-            const char *probe_str =
-                g_sauna_probe == SAUNA_PROBE_SHT85 ? "SHT3x" :
-                g_sauna_probe == SAUNA_PROBE_AHT20 ? "AHT20" :
-                g_sauna_probe == SAUNA_PROBE_SCD41 ? "SCD41-PROXY" : "NONE";
-            /* RP2040 die-temp (arduino-pico analogReadTemp): zeigt ob der
-             * ESP32-Nachbar den RP2040 thermisch mitreisst. Idle ~30-35 degC,
-             * WiFi-TX-burst ~50-55 degC, >80 degC = thermal runaway. */
-            float rp_die_c = analogReadTemp();
-            Serial.print(LOG_TAG);
-            Serial.print("health: intvl=");     Serial.print(g_interval_ms);
-            Serial.print("ms probe=");          Serial.print(probe_str);
-            Serial.print(" temp=");             Serial.print(t_out, 1);
-            Serial.print(" rh=");               Serial.print(rh_out, 1);
-            Serial.print(" fails=");            Serial.print(g_sht85_fails);
-            Serial.print(" session=");          Serial.print(g_session_active);
-            Serial.print(" sd=");               Serial.print(sd_init_flag);
-            Serial.print(" rp_die=");           Serial.print(rp_die_c, 1);
-            /* v0.2.7: boot-counter + last-reset-reason jede minute im
-             * health-log. Einfach zu grep'en, sichtbar ohne INFO-screen.
-             * v0.2.8: rst zeigt 3-state (POR/WDT/SOFT), plus UART-counter
-             * pkt (total) + unk (unknown cmd-byte). Wenn bei einem
-             * reboot-loop `unk` bei jedem boot hochgeht, ist UART-traffic
-             * die ursache. Wenn unk=0 aber rst=SOFT, war's vermutlich
-             * hardfault aus anderer quelle.                               */
-            const char *rr_h_txt =
-                g_last_reset_reason == SSC_RST_POR  ? "POR"  :
-                g_last_reset_reason == SSC_RST_WDT  ? "WDT"  :
-                g_last_reset_reason == SSC_RST_SOFT ? "SOFT" : "???";
-            Serial.print(" boot=");             Serial.print(g_boot_count);
-            Serial.print(" rst=");              Serial.print(rr_h_txt);
-            Serial.print(" pkt=");              Serial.print(g_pkt_rx);
-            Serial.print(" unk=");              Serial.println(g_pkt_rx_unk);
-            rp2040.wdt_reset();
-        }
+        g_last_tick_ms += g_interval_ms;
+        if (now - g_last_tick_ms >= g_interval_ms) g_last_tick_ms = now;
+        measure_tick(now);
     }
+    periodic(now);
 
     myPacketSerial.update();
     if (myPacketSerial.overflow()) {
-        /* Overflow = PacketSerial-Decoder ist desynced und schluckt alles
-         * bis zum naechsten 0x00-Frame-Terminator. Nach einem laengeren
-         * Stream-Readback oder einem Glitch kann das "permanent stuck"
-         * werden - RP2040 ignoriert dann alle ESP32-Commands. Recovery:
-         * Instanz via placement-new neu aufbauen, Stream + Handler neu
-         * binden. Cooldown 2 s damit wir nicht in einer re-init-Schleife
-         * landen wenn ESP32 gerade wirklich viel schickt. */
         static uint32_t last_recovery = 0;
         if (millis() - last_recovery > 2000) {
             last_recovery = millis();
@@ -2163,97 +2615,9 @@ void loop() {
             myPacketSerial.setPacketHandler(&onPacketReceived);
         }
     }
-
-    /* v0.2.14: USB-CDC debug-cmd-handler mit feedback-loop-schutz.
-     *
-     * Bug v0.2.13: kernel-tty-mode war nicht "raw -echo", sondern default
-     * canonical+echo. Folge: jede [SAUNA]...-zeile die der chip druckte
-     * wurde vom host an den chip zurueck geschickt. Die alte version
-     * druckte dann "[SAUNA] cmd unknown: ..." was wieder geechoed wurde
-     * -> selbsterhaltender flood -> USB-CDC-tx-buffer voll -> Serial.print
-     * blockiert -> WDT(8s) feuert -> 1185+ reboots.
-     *
-     * Fix: STRICT prefix '?'. Jeder andere first-char setzt eine discard-
-     * bis-newline-flag und droppt silent. Keine echos auf unknowns.
-     * Unsere log-prefixe ([SAUNA], SGP40, session:) starten nicht mit '?'
-     * -> komplette feedback-immunitaet.
-     *
-     * Plus: max 256 chars pro loop()-iteration (sonst lasst dieser handler
-     * andere arbeit verhungern wenn host viel schickt).
-     *
-     * Commands:
-     *   ?L           -> listet /sessions/ als "[SAUNA] FILE name size"
-     *   ?D <fname>   -> dumpt CSV-content zwischen DUMP_BEGIN/DUMP_END
-     */
-    static char usbcdc_buf[80];
-    static uint8_t usbcdc_idx = 0;
-    static bool   usbcdc_discard = false;  /* true = drop bis '\n' */
-    int budget = 256;
-    while (Serial.available() && budget-- > 0) {
-        char c = Serial.read();
-        if (c == '\r') continue;
-        if (c == '\n') {
-            if (!usbcdc_discard && usbcdc_idx > 0 && usbcdc_buf[0] == '?') {
-                usbcdc_buf[usbcdc_idx] = 0;
-                char op = usbcdc_buf[1];
-                if (op == 'L' || op == 'l') {
-                    Serial.println(F("[SAUNA] LIST_BEGIN"));
-                    if (sd_init_flag) {
-                        File dir = SD.open("/sessions");
-                        if (dir) {
-                            File f;
-                            while ((f = dir.openNextFile())) {
-                                Serial.print(F("[SAUNA] FILE "));
-                                Serial.print(f.name());
-                                Serial.print(F(" "));
-                                Serial.println(f.size());
-                                f.close();
-                                rp2040.wdt_reset();
-                            }
-                            dir.close();
-                        } else {
-                            Serial.println(F("[SAUNA] cannot open /sessions"));
-                        }
-                    } else {
-                        Serial.println(F("[SAUNA] SD not ready"));
-                    }
-                    Serial.println(F("[SAUNA] LIST_END"));
-                } else if ((op == 'D' || op == 'd') &&
-                           usbcdc_buf[2] == ' ' && sd_init_flag) {
-                    char path[100];
-                    snprintf(path, sizeof(path), "/sessions/%s", usbcdc_buf+3);
-                    File f = SD.open(path);
-                    if (f) {
-                        Serial.print(F("[SAUNA] DUMP_BEGIN "));
-                        Serial.println(usbcdc_buf+3);
-                        while (f.available()) {
-                            Serial.write(f.read());
-                            if ((f.position() & 0x3FF) == 0) rp2040.wdt_reset();
-                        }
-                        f.close();
-                        Serial.println();
-                        Serial.print(F("[SAUNA] DUMP_END "));
-                        Serial.println(usbcdc_buf+3);
-                    } else {
-                        Serial.print(F("[SAUNA] DUMP_ERR not found "));
-                        Serial.println(path);
-                    }
-                }
-                /* unbekannter ?-cmd: silent ignore (kein echo - feedback-safe) */
-            }
-            usbcdc_idx = 0;
-            usbcdc_discard = false;
-        } else if (usbcdc_discard) {
-            /* drop char silent */
-        } else if (usbcdc_idx == 0 && c != '?') {
-            /* first char ist nicht '?' -> komplette zeile silent verwerfen */
-            usbcdc_discard = true;
-        } else if (usbcdc_idx < sizeof(usbcdc_buf)-1) {
-            usbcdc_buf[usbcdc_idx++] = c;
-        } else {
-            /* buffer-overrun: drop rest und ignore */
-            usbcdc_discard = true;
-            usbcdc_idx = 0;
-        }
+    if (Serial1.overflow()) {
+        if (g_uart_ovf < 0xFFFF) g_uart_ovf++;
+        slog("UART1 RX overflow");
     }
+    usb_cdc_service();
 }

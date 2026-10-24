@@ -121,7 +121,7 @@ void app_main(void)
      * 16 KB stack in PSRAM = 16 KB DRAM gewinn (vorher in DRAM via
      * esp_event_loop_create internal allocation).                       */
     esp_event_loop_args_t view_event_task_args = {
-        .queue_size = 32,           /* 32 statt 10: bei 1-Hz session-worker +
+        .queue_size = 64,           /* v0.4.0: 64 (State+Events+Sensor), vorher 32 statt 10: bei 1-Hz session-worker +
                                        sensor-events. Volle queue fuehrt zu
                                        gedroppten live-events (20ms timeout). */
         .task_name = NULL,

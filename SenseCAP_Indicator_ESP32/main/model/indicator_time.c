@@ -415,7 +415,13 @@ static void __time_state_persist_if_trusted(void)
     src = __g_time_model.src;
     xSemaphoreGive(__g_data_mutex);
 
-    if (src != TIME_SRC_NTP_SYNCED && src != TIME_SRC_MANUAL) {
+    /* v0.4.0 (Audit H5): auch im Fallback-Betrieb weiter persistieren.
+     * Sonst startet die Uhr ohne WLAN nach JEDEM Reset wieder auf dem
+     * gleichen Stand -> doppelte Session-IDs, falsche Daten. So laeuft
+     * die "beste bekannte Zeit" monoton weiter. Compile-Time allein wird
+     * nicht gespeichert (sonst zementiert ein Reset ohne NVS den Build-
+     * Zeitpunkt).                                                       */
+    if (src == TIME_SRC_UNKNOWN || src == TIME_SRC_COMPILE_TIME) {
         return;
     }
 

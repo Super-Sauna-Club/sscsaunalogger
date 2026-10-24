@@ -56,6 +56,13 @@ bool indicator_session_is_active(void);
  */
 void indicator_session_request_sd_list(void);
 
+/**
+ * v0.4.0: Ereignisliste (Aufguesse/Lueften/Gaenge) der zuletzt per
+ * VIEW_EVENT_EVENTS_REQ angeforderten Session kopieren.
+ * @return Anzahl, -1 wenn die Liste fuer diese ID (noch) nicht geladen ist.
+ */
+int indicator_session_events_copy(const char *id, ssc_event_full_t *out, int max);
+
 #ifdef __cplusplus
 }
 #endif

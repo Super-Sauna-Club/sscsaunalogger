@@ -45,6 +45,9 @@ int  indicator_session_store_get(const char *id,
 
 int  indicator_session_store_delete(const char *id);
 
+/** v0.4.0: Messwerte setzen (Upsert), User-Felder bleiben. */
+int  indicator_session_store_put_measured(const struct view_data_session_meta *meta);
+
 /**
  * Bearbeitet einen existierenden session-record. Findet slot mit
  * match auf meta->id und ersetzt NUR die user-editierbaren felder

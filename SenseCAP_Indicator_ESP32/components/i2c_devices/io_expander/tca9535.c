@@ -55,6 +55,18 @@ esp_err_t tca9535_init(uint8_t i2c_addr)
     bsp_i2c_add_device(&tca9535_handle, i2c_addr);
     ESP_RETURN_ON_FALSE(NULL != tca9535_handle, ESP_FAIL, TAG, "add i2c bus device failed");
 
+    /* sscsaunalogger v0.4.0: Schattenregister aus dem Chip lesen. Der
+     * TCA9535 behaelt Ausgangs- und Richtungsregister ueber einen ESP32-
+     * Reset hinweg. Mit output_reg=0 hat der erste set_level() nach dem
+     * Boot ALLE Ausgaenge auf LOW geschrieben - u.a. EXPANDER_IO_RP2040_
+     * RESET (Pin 8) -> jeder ESP32-Neustart hat den RP2040 und damit die
+     * laufende Aufzeichnung zurueckgesetzt. Fallback = Power-On-Default
+     * des Chips (alles 1 / Eingang).                                     */
+    uint16_t v = 0;
+    output_reg = (tca9535_read_16(tca9535_OUTPUT_PORT_REG, &v) == ESP_OK) ? v : 0xFFFF;
+    configuration_reg = (tca9535_read_16(tca9535_CONFIGURATION_REG, &v) == ESP_OK) ? v : 0xFFFF;
+    ESP_LOGI(TAG, "tca9535 init: output=0x%04x config=0x%04x", output_reg, configuration_reg);
+
     return ESP_OK;
 
     //output_reg = 0;
