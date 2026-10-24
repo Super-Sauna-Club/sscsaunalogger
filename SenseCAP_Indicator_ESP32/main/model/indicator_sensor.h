@@ -27,6 +27,19 @@ int indicator_sensor_get_data(struct view_data_sensor *out_data);
  */
 int indicator_sensor_rp2040_cmd(uint8_t cmd, const void *data, uint16_t len);
 
+/**
+ * Manueller heater-trigger fuer SHT85-filter-recovery.
+ * Sendet PKT_TYPE_CMD_SHT85_HEATER (0xAD) mit 1B power-level.
+ *
+ * @param high_power  false = 33 mW low-power-long (0x306D)
+ *                    true  = 200 mW high-power-long (0x3039)
+ * @return            >=0: bytes versendet, <0: fehler
+ *
+ * Hinweis: der RP2040 lehnt den cmd ab wenn aufguss-boost aktiv ist
+ * oder der cooldown (60 s) noch nicht abgelaufen.
+ */
+int indicator_sensor_trigger_heater(bool high_power);
+
 #ifdef __cplusplus
 }
 #endif

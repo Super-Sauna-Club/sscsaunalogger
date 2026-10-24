@@ -351,6 +351,9 @@ enum {
     VIEW_EVENT_SD_META_RESP,            // ssc_meta_wire_t  (RP -> ESP, ein eintrag)
     VIEW_EVENT_SD_META_DONE,            // uint16_t         (count)
 
+    /* === SHT85 filter-health + heater ================================= */
+    VIEW_EVENT_SENSOR_HEALTH,           // struct view_data_sensor_health (vom RP2040)
+
     VIEW_EVENT_ALL,
 };
 
@@ -398,6 +401,18 @@ struct view_data_boot_info {
 struct view_data_rp_boot_info {
     uint32_t boot_count;
     uint8_t  reset_reason; /* 0=normal, 1=watchdog, sonst raw */
+};
+
+/* SHT85-filter-health vom RP2040 (kontinuierlich gesendet als 0xC6).
+ * state-enum: 0=OK, 1=STUCK_LOW, 2=HEATING, 3=RECOVERING.
+ * minutes_since: 0xFFFF = noch nie geheizt seit boot.
+ * rh_std_x100: rh-stdabweichung der letzten ~5 min, x100 (50 = 0.50 %RH). */
+struct view_data_sensor_health {
+    uint8_t  state;
+    uint8_t  last_heater_hp; /* 0=33mW, 1=200mW */
+    uint16_t minutes_since;
+    uint16_t heater_count;
+    int16_t  rh_std_x100;
 };
 
 

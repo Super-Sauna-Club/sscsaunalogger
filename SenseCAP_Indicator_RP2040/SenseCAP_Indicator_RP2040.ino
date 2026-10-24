@@ -142,8 +142,12 @@ static inline void slogf(const char *lbl, float v, int decimals = 2) {
 #define PKT_TYPE_CMD_SESSION_META_PUSH   0xAA  /* payload: ssc_meta_wire_t */
 #define PKT_TYPE_CMD_SESSION_DELETE_FILE 0xAB  /* payload: id (24B null-term) */
 #define PKT_TYPE_CMD_SESSION_DELETE_JSON 0xAC  /* payload: id (24B null-term), nur .json sidecar */
+#define PKT_TYPE_CMD_SHT85_HEATER        0xAD  /* payload: 1B power (0=33mW, 1=200mW) */
 #define PKT_TYPE_SESSION_META_RESP       0xC4  /* payload: ssc_meta_wire_t */
 #define PKT_TYPE_SESSION_META_DONE       0xC5  /* 2B: count */
+#define PKT_TYPE_SENSOR_HEALTH           0xC6  /* SHT85 filter-health, 8B:
+                                                  [state][last_hp][2B min_since LE]
+                                                  [2B count LE][2B std_x100 LE] */
 
 /* Wire-struct fuer hybrid-storage. MUSS byte-identisch zu ssc_meta_wire_t
  * im ESP32 view_data.h sein. Alle ints little-endian, packed.          */
@@ -562,28 +566,99 @@ static bool sht85_init(void) {
 }
 
 /* ------------------------------------------------------------------ */
-/* SHT85 Heater-Cycle fuer RH-Stuck-at-100 nach Aufguss              */
+/* SHT85 Heater-Cycle + Filter-Health-Tracking                        */
 /* ------------------------------------------------------------------ */
-/* Sensirion Heater-Commands (SHT85 datasheet Tab. 10):
- *   0x3039 Heater 200 mW, 1  s (high power, long)
- *   0x306D Heater  33 mW, 1  s (low  power, long) <- unser Default
- * Low-power-long reicht fuer Kondensat-Abbau am Polymer-Kappen, ohne
- * die Messung durch Selbsterwaermung zu verfaelschen. Nach Aufguss
- * (RH >= 99.5 % fuer 60+ Samples) einmal feuern und dann 3 s kuehlen. */
-#define SHT85_CMD_HEATER_LP_LONG  0x306D
-static uint32_t g_sht_heater_last_ms = 0;
-static uint16_t g_sht_rh100_count    = 0;
+/* Sensirion SHT85 datasheet Section 4.10 "Heater": der heater ist ein
+ * TOGGLE-pair (kein pulse!). 0x306D enable, 0x3066 disable. Heater
+ * laeuft kontinuierlich bis disable kommt. Spec: max 3 min am stueck,
+ * dann mindestens 3 min cooldown.                                      *
+ * Nur EIN power-level (~32 mW typical bei 3.3 V supply) - die SHT4x-
+ * codes (0x3039 etc.) sind NICHT gueltig fuer SHT85.                  */
+#define SHT85_CMD_HEATER_ON       0x306D
+#define SHT85_CMD_HEATER_OFF      0x3066
 
-static void sht85_heater_cycle(void) {
-    slog("SHT3x heater cycle (RH stuck at 100%)");
-    sht85_write_cmd(SHT85_CMD_HEATER_LP_LONG);
-    /* Heater laeuft ca. 1 s, dann 3 s Polymer kuehlen, WDT-sicher. */
-    for (int i = 0; i < 16; i++) {
+/* Heater-duration im manuellen modus. 0 = kurz (5 s), 1 = lang (30 s).
+ * Spec erlaubt bis 3 min, aber wir bleiben konservativ - kondensat
+ * sollte bei 30 s @ 32 mW komplett ausgetrieben sein.                 */
+#define SHT85_HEATER_DURATION_SHORT_MS  5000UL
+#define SHT85_HEATER_DURATION_LONG_MS   30000UL
+
+/* Filter-state-machine fuer 0xC6 PKT_TYPE_SENSOR_HEALTH (siehe top). */
+enum sht_state_t {
+    SHT_OK         = 0,
+    SHT_STUCK_LOW  = 1,
+    SHT_HEATING    = 2,
+    SHT_RECOVERING = 3,
+};
+
+static uint32_t g_sht_heater_last_ms  = 0;
+static uint16_t g_sht_rh100_count     = 0;
+static uint8_t  g_sht_state           = SHT_OK;
+static uint32_t g_sht_state_since_ms  = 0;
+static uint16_t g_sht_heater_count    = 0;   /* seit boot */
+static uint8_t  g_sht_last_heater_hp  = 0;
+static int16_t  g_sht_rh_std_x100     = 0;   /* letzte berechnete std, *100 */
+static uint32_t g_sht_boost_ended_ms  = 0;   /* fuer post-boost-guard */
+
+/* Ringbuffer fuer stuck-at-low detection: 600 samples = 5 min @ 2 Hz.
+ * 600 * 4 byte * 2 buffer = 4.8 KB. RP2040 hat 264 KB SRAM, easy.    */
+#define SHT_RING_N 600
+static float    g_sht_rh_buf[SHT_RING_N];
+static float    g_sht_temp_buf[SHT_RING_N];
+static uint16_t g_sht_buf_idx    = 0;
+static uint16_t g_sht_buf_filled = 0;   /* cap at SHT_RING_N, dann immer voll */
+
+/* sht85_heater_cycle(long_mode):
+ *   long_mode = 0: kurz  (5 s heater on)  - "sanft" - fuer normales kondensat
+ *   long_mode = 1: lang (30 s heater on)  - "stark" - fuer hartnaeckige
+ *                                            verstopfung (oel-kontamination)
+ *
+ * Korrekte SHT85-sequenz: explizit OFF -> ON -> warten -> OFF. Heater ist
+ * ein toggle, KEIN pulse - laeuft sonst bis zum naechsten reboot.        */
+static void sht_send_health(void);    /* forward decl, def. weiter unten */
+
+static void sht85_heater_cycle(uint8_t long_mode) {
+    uint32_t duration_ms = long_mode ? SHT85_HEATER_DURATION_LONG_MS
+                                     : SHT85_HEATER_DURATION_SHORT_MS;
+    Serial.print(LOG_TAG);
+    Serial.print("SHT3x heater cycle: ");
+    Serial.print(long_mode ? "LANG 30s" : "KURZ 5s");
+    Serial.println(" (32 mW)");
+
+    g_sht_state          = SHT_HEATING;
+    g_sht_state_since_ms = millis();
+    g_sht_last_heater_hp = long_mode ? 1 : 0;
+    sht_send_health();   /* UI sofort updaten - bevor wir blocken */
+
+    /* Defensiv: erst explizit OFF, falls heater noch laeuft von vorigem
+     * (unsauber abgebrochenen) cycle. Spec erlaubt redundant disable.   */
+    sht85_write_cmd(SHT85_CMD_HEATER_OFF);
+    delay(20);
+
+    /* Jetzt heater AN. */
+    if (!sht85_write_cmd(SHT85_CMD_HEATER_ON)) {
+        slog("SHT3x heater ENABLE failed (i2c error)");
+    }
+
+    /* Warten in 250ms-schritten mit WDT-feeding. duration_ms/250 ticks. */
+    uint32_t ticks = duration_ms / 250UL;
+    for (uint32_t i = 0; i < ticks; i++) {
         delay(250);
         rp2040.wdt_reset();
     }
+
+    /* Explizit AUS - sonst laeuft heater permanent! */
+    if (!sht85_write_cmd(SHT85_CMD_HEATER_OFF)) {
+        slog("SHT3x heater DISABLE failed (i2c error)");
+    }
+    delay(30);   /* sensor settling */
+
     g_sht_heater_last_ms = millis();
-    g_sht_rh100_count = 0;
+    g_sht_rh100_count    = 0;
+    if (g_sht_heater_count < 0xFFFF) g_sht_heater_count++;
+    g_sht_state          = SHT_RECOVERING;
+    g_sht_state_since_ms = millis();
+    sht_send_health();   /* ende-event sofort melden */
 }
 
 /* ================================================================== */
@@ -677,6 +752,12 @@ static void sht85_read_and_send(void) {
     sensor_data_send(PKT_TYPE_SENSOR_SAUNA_TEMP, t);
     sensor_data_send(PKT_TYPE_SENSOR_SAUNA_RH, rh);
 
+    /* ringbuffer fuer stuck-at-low eval (siehe sht_eval_stuck_at_low) */
+    g_sht_rh_buf[g_sht_buf_idx]   = rh;
+    g_sht_temp_buf[g_sht_buf_idx] = t;
+    g_sht_buf_idx = (uint16_t)((g_sht_buf_idx + 1) % SHT_RING_N);
+    if (g_sht_buf_filled < SHT_RING_N) g_sht_buf_filled++;
+
     /* RH-Stuck-at-100-Detektion: Nach Aufguss haelt sich der Polymer-Kappen
      * oft minutenlang bei 100 %RH (Kondensat haengt physisch am Sensor),
      * obwohl die Luft schon trocknet. Wenn wir 60 consecutive Samples bei
@@ -686,7 +767,139 @@ static void sht85_read_and_send(void) {
     if (g_sht_rh100_count >= 60 &&
         g_boost_until_ms == 0 &&
         (millis() - g_sht_heater_last_ms) > 600000UL) {
-        sht85_heater_cycle();
+        sht85_heater_cycle(0);   /* sanft - kondensat reicht 33 mW */
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* sht_send_health: PKT_TYPE_SENSOR_HEALTH (0xC6) an den ESP32         */
+/* ------------------------------------------------------------------ */
+/* 9-byte paket: [0xC6][state][last_hp][2B min_since LE]
+ *               [2B count LE][2B std_x100 LE]                          */
+static void sht_send_health(void) {
+    uint8_t pkt[9];
+    pkt[0] = PKT_TYPE_SENSOR_HEALTH;
+    pkt[1] = g_sht_state;
+    pkt[2] = g_sht_last_heater_hp;
+
+    uint16_t min_since;
+    if (g_sht_heater_last_ms == 0) {
+        min_since = 0xFFFF;   /* sentinel: noch nie geheizt seit boot */
+    } else {
+        uint32_t ms = millis() - g_sht_heater_last_ms;
+        uint32_t mn = ms / 60000UL;
+        min_since = (mn > 0xFFFE) ? 0xFFFE : (uint16_t)mn;
+    }
+    pkt[3] = (uint8_t)(min_since & 0xFF);
+    pkt[4] = (uint8_t)((min_since >> 8) & 0xFF);
+
+    pkt[5] = (uint8_t)(g_sht_heater_count & 0xFF);
+    pkt[6] = (uint8_t)((g_sht_heater_count >> 8) & 0xFF);
+
+    uint16_t std_u = (uint16_t)g_sht_rh_std_x100;   /* int16 -> bytes */
+    pkt[7] = (uint8_t)(std_u & 0xFF);
+    pkt[8] = (uint8_t)((std_u >> 8) & 0xFF);
+
+    raw_packet_send(pkt, sizeof(pkt));
+}
+
+/* ------------------------------------------------------------------ */
+/* sht_eval_stuck_at_low: state-machine fuer filter-verstopfung        */
+/* ------------------------------------------------------------------ */
+/* Wird alle ~10 s aufgerufen aus loop(). Berechnet std(RH) und        */
+/* ptp(temp) ueber das ringbuffer-fenster (5 min @ 2 Hz).              */
+/*                                                                     */
+/*   STUCK_LOW enter: rh_std < 0.5 AND temp_ptp > 5 AND !boost         */
+/*                    AND heater_age > 10 min AND probe == SHT85       */
+/*   STUCK_LOW exit:  rh_std >= 1.0   (hysterese)                      */
+/*   RECOVERING exit: 60 s nach heater-cycle-ende -> eval (OK / STUCK) */
+static void sht_eval_stuck_at_low(void) {
+    if (g_sauna_probe != SAUNA_PROBE_SHT85) {
+        if (g_sht_state != SHT_OK) {
+            g_sht_state = SHT_OK;
+            g_sht_state_since_ms = millis();
+        }
+        return;
+    }
+    if (g_sht_buf_filled < SHT_RING_N) return;   /* warmup 5 min */
+
+    /* std + ptp ueber alle 600 samples (one-pass mean + sum-of-diffs²) */
+    float rh_sum = 0.0f;
+    float tp_min = g_sht_temp_buf[0], tp_max = g_sht_temp_buf[0];
+    for (uint16_t i = 0; i < SHT_RING_N; i++) {
+        rh_sum += g_sht_rh_buf[i];
+        float tp = g_sht_temp_buf[i];
+        if (tp < tp_min) tp_min = tp;
+        if (tp > tp_max) tp_max = tp;
+    }
+    float rh_mean = rh_sum / (float)SHT_RING_N;
+    float ssq = 0.0f;
+    for (uint16_t i = 0; i < SHT_RING_N; i++) {
+        float d = g_sht_rh_buf[i] - rh_mean;
+        ssq += d * d;
+    }
+    float rh_std  = sqrtf(ssq / (float)SHT_RING_N);
+    float temp_ptp = tp_max - tp_min;
+    int32_t std_x = (int32_t)(rh_std * 100.0f);
+    if (std_x > 32767) std_x = 32767;
+    g_sht_rh_std_x100 = (int16_t)std_x;
+
+    uint32_t now = millis();
+
+    /* RECOVERING: 60 s post-heater-cooldown */
+    if (g_sht_state == SHT_HEATING) {
+        /* fall-through - heater-cycle setzt selbst RECOVERING. */
+    } else if (g_sht_state == SHT_RECOVERING) {
+        if (now - g_sht_state_since_ms > 60000UL) {
+            /* reeval: stuck noch da? */
+            if (rh_std < 0.5f && temp_ptp > 5.0f) {
+                g_sht_state = SHT_STUCK_LOW;
+            } else {
+                g_sht_state = SHT_OK;
+            }
+            g_sht_state_since_ms = now;
+            sht_send_health();
+        }
+        return;
+    }
+
+    /* post-boost-guard: 60 s nach boost-ende ignorieren wir den       */
+    /* detector, weil aufguss-feuchte noch im ringbuffer "nachschwingt". */
+    bool boost_active = (g_boost_until_ms != 0);
+    bool in_boost_recovery = (g_sht_boost_ended_ms != 0) &&
+                             (now - g_sht_boost_ended_ms < 60000UL);
+
+    bool heater_cold = (g_sht_heater_last_ms == 0) ||
+                       ((now - g_sht_heater_last_ms) > 600000UL);
+
+    uint8_t prev_state = g_sht_state;
+
+    if (g_sht_state == SHT_OK) {
+        if (rh_std < 0.5f && temp_ptp > 5.0f &&
+            !boost_active && !in_boost_recovery && heater_cold) {
+            g_sht_state = SHT_STUCK_LOW;
+            g_sht_state_since_ms = now;
+        }
+    } else if (g_sht_state == SHT_STUCK_LOW) {
+        /* hysterese: exit nur wenn varianz wieder klar gesund */
+        if (rh_std >= 1.0f) {
+            g_sht_state = SHT_OK;
+            g_sht_state_since_ms = now;
+        }
+    }
+
+    if (g_sht_state != prev_state) {
+        Serial.print(LOG_TAG);
+        Serial.print("SHT3x state change ");
+        Serial.print(prev_state);
+        Serial.print(" -> ");
+        Serial.print(g_sht_state);
+        Serial.print("  (rh_std=");
+        Serial.print(rh_std, 2);
+        Serial.print(", temp_ptp=");
+        Serial.print(temp_ptp, 1);
+        Serial.println(")");
+        sht_send_health();
     }
 }
 
@@ -1603,6 +1816,27 @@ static void onPacketReceived(const uint8_t *buffer, size_t size) {
         handle_session_delete_json(buffer + 1, size - 1);
         break;
 
+    case PKT_TYPE_CMD_SHT85_HEATER: {
+        /* manueller heater-trigger vom ESP32. payload = 1B power-level.
+         * abgelehnt wenn aufguss-boost laeuft oder cooldown <60s.      */
+        if (g_sauna_probe != SAUNA_PROBE_SHT85) {
+            slog("heater-cmd ignoriert: kein SHT85 aktiv");
+            break;
+        }
+        if (g_boost_until_ms != 0) {
+            slog("heater-cmd ignoriert: aufguss-boost laeuft");
+            break;
+        }
+        if (g_sht_heater_last_ms != 0 &&
+            (millis() - g_sht_heater_last_ms) < 60000UL) {
+            slog("heater-cmd ignoriert: cooldown <60s");
+            break;
+        }
+        uint8_t power = (size >= 2 && buffer[1] != 0) ? 1 : 0;
+        sht85_heater_cycle(power);
+        break;
+    }
+
     default:
         g_pkt_rx_unk++;   /* v0.2.8: unknown cmd-byte */
         break;
@@ -1777,6 +2011,7 @@ void loop() {
     if (g_boost_until_ms && (int32_t)(now - g_boost_until_ms) >= 0) {
         g_boost_until_ms = 0;
         g_interval_ms = g_interval_base;
+        g_sht_boost_ended_ms = now;   /* fuer stuck-detector post-boost-guard */
         slog("aufguss-boost ende, zurueck zu basistakt");
     }
 
@@ -1807,6 +2042,22 @@ void loop() {
                               (uint8_t)g_sauna_probe,
                               (uint8_t)(sd_init_flag ? 1 : 0) };
             raw_packet_send(ps, sizeof(ps));
+        }
+
+        /* Stuck-at-low eval alle 10 s (nicht jedes 500ms-tick - spart cpu
+         * und der ringbuffer-snapshot stabilisiert sich besser).         */
+        static uint32_t last_stuck_eval = 0;
+        if (now - last_stuck_eval >= 10000) {
+            last_stuck_eval = now;
+            sht_eval_stuck_at_low();
+        }
+
+        /* Health-heartbeat alle 5 s (state-change-pakete kommen sofort
+         * aus sht85_heater_cycle / sht_eval_stuck_at_low).               */
+        static uint32_t last_health_send = 0;
+        if (now - last_health_send >= 5000) {
+            last_health_send = now;
+            sht_send_health();
         }
 
         /* Alle 30 s: I2C-Scan bei nicht-ready-Fuehler, damit wir im

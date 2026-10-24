@@ -7,9 +7,10 @@ CSV-format: t_elapsed_s,temp,rh,aufguss   (aufguss-spalte wird ignoriert)
 filename:   S<YYYYMMDD>_<HHMMSS>.csv      (titel + sortierung)
 
 optional companion json (gleicher basename):
-    S20260427_180047.json
-    {"name": "Thomas", "type": "session nur aufguss"}
-ohne json: titel zeigt nur datum + uhrzeit.
+    S20260511_175812.json
+    {"operator": "Marco", "aufguss_headline": "Partysauna", "participants": 7, ...}
+legacy schema {"name", "type"} wird ebenfalls erkannt.
+ohne operator/name: titel zeigt nur datum + uhrzeit.
 """
 import argparse, datetime, glob, json, os, re, sys
 
@@ -45,7 +46,8 @@ plt.rcParams.update({
 
 
 def parse_dt(filename):
-    m = re.match(r"S(\d{8})_(\d{6})\.csv$", os.path.basename(filename))
+    # erlaubt optionalen _suffix (z.b. _clean fuer manuell gekuerzte varianten)
+    m = re.match(r"S(\d{8})_(\d{6})(?:_\w+)?\.csv$", os.path.basename(filename))
     if not m:
         return None
     return datetime.datetime.strptime(f"{m.group(1)}{m.group(2)}",
@@ -104,25 +106,46 @@ def plot_session(df, dt, meta, out_path):
                                 transform=ax_head.transAxes,
                                 facecolor=T_COLOR, edgecolor="none"))
 
-    if meta and meta.get("name"):
-        # mit companion: name oben gross, type-zeile darunter
-        ax_head.text(0.0, 0.62, meta["name"],
-                     transform=ax_head.transAxes,
-                     color=TEXT, fontsize=27, weight="bold",
-                     va="top", ha="left")
-        sub = meta.get("type", "session")
-        ax_head.text(0.0, 0.10, sub,
-                     transform=ax_head.transAxes,
-                     color=TEXT_DIM, fontsize=11.5, va="top", ha="left")
+    m = meta or {}
+    chart_end_min = int(round(float(t_min[-1]))) if len(t_min) else 0
+    operator = m.get("operator") or m.get("name")
+    if operator:
+        title, title_size = operator, 27
+        parts = []
+        head = (m.get("aufguss_headline") or "").strip()
+        if head:
+            parts.append(head)
+        p = m.get("participants")
+        if isinstance(p, int) and p > 0:
+            parts.append("1 person" if p == 1 else f"{p} personen")
+        ac = m.get("aufguss_count")
+        if isinstance(ac, int) and ac > 0:
+            parts.append("1 aufguss" if ac == 1 else f"{ac} aufgüsse")
+        vs = m.get("vent_start_s")
+        ve = m.get("vent_end_s")
+        if isinstance(vs, (int, float)) and vs > 0:
+            vs_min = int(round(float(vs) / 60.0))
+            if isinstance(ve, (int, float)) and ve > vs:
+                ve_min = int(round(float(ve) / 60.0))
+                parts.append(f"lüften {vs_min}–{ve_min} min")
+                if ve_min < chart_end_min:
+                    parts.append(f"geschlossen {ve_min}–{chart_end_min} min")
+            elif vs_min < chart_end_min:
+                parts.append(f"lüften {vs_min}–{chart_end_min} min")
+        if not parts and m.get("type"):
+            parts.append(m["type"])
+        subtitle = "  ·  ".join(parts) if parts else "session"
     else:
-        # ohne companion: datum + uhrzeit als titel
-        ax_head.text(0.0, 0.62, fmt_de_date(dt),
-                     transform=ax_head.transAxes,
-                     color=TEXT, fontsize=24, weight="bold",
-                     va="top", ha="left")
-        ax_head.text(0.0, 0.10, "session",
-                     transform=ax_head.transAxes,
-                     color=TEXT_DIM, fontsize=11.5, va="top", ha="left")
+        title, title_size = fmt_de_date(dt), 24
+        subtitle = "session"
+
+    ax_head.text(0.0, 0.62, title,
+                 transform=ax_head.transAxes,
+                 color=TEXT, fontsize=title_size, weight="bold",
+                 va="top", ha="left")
+    ax_head.text(0.0, 0.10, subtitle,
+                 transform=ax_head.transAxes,
+                 color=TEXT_DIM, fontsize=11.5, va="top", ha="left")
     ax_head.text(1.0, 0.10, fmt_de_date(dt),
                  transform=ax_head.transAxes,
                  color=TEXT_FAINT, fontsize=10.5, va="top", ha="right")
@@ -148,6 +171,34 @@ def plot_session(df, dt, meta, out_path):
     ax.plot([t_min[peak_idx]], [temp[peak_idx]], 'o', color=T_COLOR,
             markersize=7, markeredgecolor=BG_DEEP, markeredgewidth=1.5,
             zorder=6)
+
+    # optionale annotation: lueften-bereich (vent_start_s..vent_end_s) +
+    # geschlossen-bereich (vent_end_s..ende). farben unterscheiden tuer-offen
+    # (kuehl-blau) von tuer-geschlossen-nachheizen (warm-orange).
+    vent_s = m.get("vent_start_s")
+    vent_e = m.get("vent_end_s")
+    chart_end = float(t_min[-1])
+    if isinstance(vent_s, (int, float)) and vent_s > 0:
+        vs = float(vent_s) / 60.0
+        ve = float(vent_e) / 60.0 if isinstance(vent_e, (int, float)) and vent_e > vent_s else chart_end
+        y_label = t_hi - (t_hi - t_lo) * 0.05
+
+        def annotate(x0, x1, color, text):
+            ax.axvspan(x0, x1, facecolor=color, alpha=0.12, zorder=1.5)
+            ax.axvline(x0, color=TEXT_DIM, linewidth=0.8, alpha=0.55, zorder=2)
+            ax.text((x0 + x1) / 2.0, y_label, text,
+                    color=TEXT_DIM, fontsize=10.5, ha="center", va="top",
+                    style="italic", zorder=7,
+                    bbox=dict(facecolor=BG_DEEP, edgecolor=RULE,
+                              linewidth=0.6, alpha=0.85, pad=5,
+                              boxstyle="round,pad=0.4"))
+
+        if vs < chart_end:
+            annotate(vs, min(ve, chart_end), RH_COLOR,
+                     m.get("vent_label") or "lüften")
+        if ve < chart_end:
+            annotate(ve, chart_end, T_COLOR,
+                     m.get("reheat_label") or "tür geschlossen")
 
     ax2 = ax.twinx()
     ax2.plot(t_min, rh, color=RH_COLOR, linewidth=1.9, alpha=0.94,

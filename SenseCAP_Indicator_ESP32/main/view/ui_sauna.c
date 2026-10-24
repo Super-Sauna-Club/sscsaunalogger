@@ -43,6 +43,7 @@
 #include "../ui/theme.h"
 #include "../model/indicator_ssc_settings.h"
 #include "../model/indicator_session.h"
+#include "../model/indicator_sensor.h"
 #include "bsp_lcd.h"
 
 /* Forward-decl aus indicator_session.h (wird hier gebraucht um edit-
@@ -73,6 +74,8 @@ static void history_apply(const struct view_data_session_list *L);
 static void on_history_row_clicked(lv_event_t *e);
 static void on_detail_delete_clicked(lv_event_t *e);
 static void on_detail_edit_clicked(lv_event_t *e);
+static void on_cat_sensor_wartung_clicked(lv_event_t *e);  /* deep-link von home_filter_warn */
+static void wartung_update_labels(void);                    /* live-update aus g_ui_sht_health */
 static void rebuild_operator_dropdown(void);
 static void apply_operator_presets_to_widgets(void);
 typedef void (*confirm_cb_t)(void *user_data);
@@ -112,9 +115,22 @@ static lv_obj_t *home_letzte_sessions_hdr;
 static lv_obj_t *home_tvoc_val;
 static lv_obj_t *home_clock_val;
 static lv_obj_t *home_clock_warn;    /* v0.2.7: "!" wenn zeit nicht NTP-synced */
+static lv_obj_t *home_filter_warn;   /* SHT85-filter-stuck warnsymbol */
 static lv_obj_t *home_recent_list;
 static lv_obj_t *home_status_pill;
 static lv_obj_t *home_probe_badge;   /* DEV/AHT20-FB/SD-warn-Hinweis */
+
+/* Cache der letzten sensor-health: fuers wartungs-submenu beim oeffnen
+ * und fuer dashboard-rebuilds nach screen-wechsel.                     */
+static struct view_data_sensor_health g_ui_sht_health = {
+    .state = 0, .last_heater_hp = 0, .minutes_since = 0xFFFF,
+    .heater_count = 0, .rh_std_x100 = 0,
+};
+
+/* Cache der letzten sauna-temp/rh - fuer live-anzeige im wartungs-menu. */
+static float g_ui_sauna_temp_last = 0.0f;
+static float g_ui_sauna_rh_last   = 0.0f;
+static bool  g_ui_sauna_have_vals = false;
 
 /* v0.2.7: Cache des letzten time-state und boot-info, fuers INFO-screen
  * + home-badge. Aktualisiert durch event-handler.                       */
@@ -406,11 +422,18 @@ static lv_obj_t *scr_set_operators;
 static lv_obj_t *scr_set_diag;
 static lv_obj_t *scr_set_danger;
 static lv_obj_t *scr_set_speicher;
+static lv_obj_t *scr_set_sensor_wartung;
 /* Diag-screen-eigene labels (heap-snapshot, wifi-status, sd/sessions) */
 static lv_obj_t *set_heap_label = NULL;
 static lv_obj_t *set_speicher_label = NULL;
 /* v0.2.7: dynamisches Diagnose-Label in Settings - zeit-source + boot-info */
 static lv_obj_t *set_diag_label = NULL;
+/* SENSOR/WARTUNG-screen-labels: live-update aus on_sensor_health.   */
+static lv_obj_t *wart_live_lbl     = NULL;   /* "rh 18.5 %    T 24.9 °C" gross */
+static lv_obj_t *wart_status_lbl   = NULL;
+static lv_obj_t *wart_lastheat_lbl = NULL;
+static lv_obj_t *wart_count_lbl    = NULL;
+static lv_obj_t *wart_std_lbl      = NULL;
 
 /* ======================================================================= */
 /*   Style-Helper                                                            */
@@ -711,6 +734,19 @@ static void build_home(void) {
     lv_obj_set_style_text_color(home_clock_warn, lv_color_hex(0xff8080), 0);
     lv_obj_align(home_clock_warn, LV_ALIGN_RIGHT_MID, -220, 0);
     lv_obj_add_flag(home_clock_warn, LV_OBJ_FLAG_HIDDEN);
+
+    /* SHT85-filter-warnung: warnsymbol (stuck) bzw. refresh-symbol
+     * (heating/recovering). Default hidden. Click oeffnet wartungs-
+     * submenu direkt (deep-link). Position links neben clock_warn.    */
+    home_filter_warn = lv_label_create(hdr);
+    lv_label_set_text(home_filter_warn, LV_SYMBOL_WARNING);
+    lv_obj_set_style_text_font(home_filter_warn, F_MD, 0);
+    lv_obj_set_style_text_color(home_filter_warn, lv_color_hex(0xffa040), 0);
+    lv_obj_align(home_filter_warn, LV_ALIGN_RIGHT_MID, -260, 0);
+    lv_obj_add_flag(home_filter_warn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(home_filter_warn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(home_filter_warn, on_cat_sensor_wartung_clicked,
+                        LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *btn_settings = lv_btn_create(hdr);
     style_icon_btn(btn_settings);
@@ -2813,6 +2849,7 @@ static void build_set_operators(void);
 static void build_set_diag(void);
 static void build_set_danger(void);
 static void build_set_speicher(void);
+static void build_set_sensor_wartung(void);
 static void diag_refresh_snapshots(void);
 
 /* Smartphone-style toggle-row: label links, switch rechts, optional
@@ -2967,6 +3004,36 @@ static void on_cat_speicher_clicked(lv_event_t *e) {
     diag_refresh_snapshots();
     lv_scr_load_anim(scr_set_speicher, LV_SCR_LOAD_ANIM_OVER_LEFT, 220, 0, false);
 }
+static void on_cat_sensor_wartung_clicked(lv_event_t *e) {
+    (void)e;
+    build_set_sensor_wartung();
+    wartung_update_labels();   /* sofort aus cache fuellen */
+    lv_scr_load_anim(scr_set_sensor_wartung, LV_SCR_LOAD_ANIM_OVER_LEFT, 220, 0, false);
+}
+
+/* Sanft ausheizen (33 mW). Kein modal - low-power ist harmlos.        */
+static void on_heater_btn_low_clicked(lv_event_t *e) {
+    (void)e;
+    indicator_sensor_trigger_heater(false);
+}
+
+/* Lang ausheizen (30 s heater on): confirmation-modal, weil RP2040
+ * waehrend der 30 s blockiert ist (keine messdaten-updates). Plus die
+ * naechsten ~60 s state=RECOVERING. User soll bewusst klicken.        */
+static void do_heater_high(void *ud) {
+    (void)ud;
+    indicator_sensor_trigger_heater(true);
+}
+static void on_heater_btn_high_clicked(lv_event_t *e) {
+    (void)e;
+    show_confirm("LANG AUSHEIZEN",
+                 "heizer laeuft 30 sekunden.\n"
+                 "danach ca. 1 minute warten -\n"
+                 "rh-werte sind solange verfaelscht.\n\n"
+                 "fuer hartnaeckig verstopften filter.",
+                 "LOS GEHTS", do_heater_high, NULL);
+}
+
 static void on_cat_danger_clicked(lv_event_t *e) {
     build_set_danger();
     lv_scr_load_anim(scr_set_danger, LV_SCR_LOAD_ANIM_OVER_LEFT, 220, 0, false);
@@ -3364,6 +3431,83 @@ static void build_set_speicher(void)
     lv_obj_set_style_text_font(hint, F_XS, 0);
 }
 
+/* SENSOR / WARTUNG: live rh/temp + filter-status + manueller heater.  */
+static void build_set_sensor_wartung(void)
+{
+    if (scr_set_sensor_wartung) return;
+    scr_set_sensor_wartung = lv_obj_create(NULL);
+    style_screen(scr_set_sensor_wartung);
+    make_sub_header(scr_set_sensor_wartung, "SENSOR / WARTUNG");
+    lv_obj_t *body = make_sub_body(scr_set_sensor_wartung);
+
+    /* LIVE-WERTE-ZEILE: das wichtigste damit man sofort sieht ob das
+     * ausheizen wirkt (anhauchen -> rh sollte sichtbar steigen).      */
+    wart_live_lbl = lv_label_create(body);
+    lv_obj_set_width(wart_live_lbl, 420);
+    lv_obj_set_style_text_color(wart_live_lbl, SSC_C_ACCENT, 0);
+    lv_obj_set_style_text_font(wart_live_lbl, F_LG, 0);
+    lv_obj_set_style_text_align(wart_live_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(wart_live_lbl, "rh  -- %    temp  -- \xC2\xB0""C");
+
+    lv_obj_t *test_hint = lv_label_create(body);
+    lv_obj_set_width(test_hint, 420);
+    lv_obj_set_style_text_color(test_hint, SSC_C_TEXT_FAINT, 0);
+    lv_obj_set_style_text_font(test_hint, F_XS, 0);
+    lv_obj_set_style_text_align(test_hint, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(test_hint,
+        "test: sensor anhauchen -> rh soll spuerbar steigen");
+
+    /* FILTER-STATUS - eine zeile, kompakt. */
+    wart_status_lbl = lv_label_create(body);
+    lv_obj_set_width(wart_status_lbl, 420);
+    lv_obj_set_style_text_color(wart_status_lbl, SSC_C_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(wart_status_lbl, F_SM, 0);
+    lv_label_set_text(wart_status_lbl, "filter: lade ...");
+
+    /* Zwei buttons direkt - keine sektionen-titel mehr, spart platz. */
+    lv_obj_t *btn_low = lv_btn_create(body);
+    style_primary_btn(btn_low);
+    lv_obj_set_size(btn_low, 420, 44);
+    lv_obj_t *ll = lv_label_create(btn_low);
+    lv_label_set_text(ll, LV_SYMBOL_REFRESH "  KURZ AUSHEIZEN  (5 s)");
+    lv_obj_set_style_text_font(ll, F_SM, 0);
+    lv_obj_center(ll);
+    lv_obj_add_event_cb(btn_low, on_heater_btn_low_clicked,
+                        LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *btn_high = lv_btn_create(body);
+    style_primary_btn(btn_high);
+    lv_obj_set_size(btn_high, 420, 44);
+    lv_obj_set_style_bg_color(btn_high, lv_color_hex(0x6a3a2a), 0);
+    lv_obj_set_style_bg_color(btn_high, lv_color_hex(0x8a4a3a), LV_STATE_PRESSED);
+    lv_obj_t *hl = lv_label_create(btn_high);
+    lv_label_set_text(hl, LV_SYMBOL_WARNING "  LANG AUSHEIZEN  (30 s)");
+    lv_obj_set_style_text_font(hl, F_SM, 0);
+    lv_obj_center(hl);
+    lv_obj_add_event_cb(btn_high, on_heater_btn_high_clicked,
+                        LV_EVENT_CLICKED, NULL);
+
+    /* counter-zeilen ganz nach unten - weniger wichtig, klein. */
+    wart_lastheat_lbl = lv_label_create(body);
+    lv_obj_set_width(wart_lastheat_lbl, 420);
+    lv_obj_set_style_text_color(wart_lastheat_lbl, SSC_C_TEXT_FAINT, 0);
+    lv_obj_set_style_text_font(wart_lastheat_lbl, F_XS, 0);
+    lv_label_set_text(wart_lastheat_lbl, "letztes ausheizen: -");
+
+    wart_count_lbl = lv_label_create(body);
+    lv_obj_set_width(wart_count_lbl, 420);
+    lv_obj_set_style_text_color(wart_count_lbl, SSC_C_TEXT_FAINT, 0);
+    lv_obj_set_style_text_font(wart_count_lbl, F_XS, 0);
+    lv_label_set_text(wart_count_lbl, "ausheizungen seit boot: -");
+
+    wart_std_lbl = lv_label_create(body);
+    lv_obj_set_width(wart_std_lbl, 420);
+    lv_obj_set_style_text_color(wart_std_lbl, SSC_C_TEXT_FAINT, 0);
+    lv_obj_set_style_text_font(wart_std_lbl, F_XS, 0);
+    lv_label_set_text(wart_std_lbl,
+        "rh-varianz: -   (gesund >1.0, stuck <0.5)");
+}
+
 /* Snapshot-refresh fuer DIAGNOSE + SPEICHER labels. Wird beim oeffnen
  * der jeweiligen sub-screens aufgerufen. settings_update_diag_label
  * fuellt set_diag_label automatisch (event-getrieben). Hier filen wir
@@ -3537,6 +3681,8 @@ static void build_settings(void)
                  "wlan ein/aus, ssid + passwort", on_cat_verbindung_clicked);
     make_cat_btn(list, LV_SYMBOL_REFRESH,  "ZEIT",
                  "ntp auto-sync, manuell setzen", on_cat_zeit_clicked);
+    make_cat_btn(list, LV_SYMBOL_REFRESH,  "SENSOR / WARTUNG",
+                 "filter-status, ausheizen",      on_cat_sensor_wartung_clicked);
     make_cat_btn(list, LV_SYMBOL_IMAGE,    "ANZEIGE",
                  "geraet-intern, helligkeit",     on_cat_anzeige_clicked);
     make_cat_btn(list, LV_SYMBOL_UPLOAD,   "DATEN-EXPORT",
@@ -3648,6 +3794,8 @@ static void on_sensor_data(const struct view_data_sensor_data *d) {
     switch (d->sensor_type) {
     case SENSOR_DATA_SAUNA_TEMP:
         if (!isnan(d->vaule)) {
+            g_ui_sauna_temp_last = d->vaule;
+            g_ui_sauna_have_vals = true;
             snprintf(buf, sizeof(buf), "%.1f", d->vaule);
             if (live_temp_val) lv_label_set_text(live_temp_val, buf);
             /* Split-labels: int-teil GROSS, ".X °C" klein. */
@@ -3664,15 +3812,19 @@ static void on_sensor_data(const struct view_data_sensor_data *d) {
                 if (home_sauna_temp_frac)
                     lv_label_set_text(home_sauna_temp_frac, fbuf);
             }
+            wartung_update_labels();   /* live-zeile mit-updaten */
         }
         break;
     case SENSOR_DATA_SAUNA_RH:
         if (!isnan(d->vaule)) {
+            g_ui_sauna_rh_last = d->vaule;
+            g_ui_sauna_have_vals = true;
             snprintf(buf, sizeof(buf), "%.0f", d->vaule);
             if (live_rh_val) lv_label_set_text(live_rh_val, buf);
             if (home_sauna_rh_int) {
                 lv_label_set_text(home_sauna_rh_int, buf);
             }
+            wartung_update_labels();
         }
         break;
     case SENSOR_DATA_TEMP:
@@ -3902,6 +4054,132 @@ static void on_probe_state(const struct view_data_probe_state *ps) {
     }
 }
 
+/* wartungs-submenu live-update aus dem cached health-struct.
+ * Skip wenn screen nicht offen - sonst 28+ label-writes/s belasten
+ * den LVGL-render-task unnoetig (hackelig wenn submenu zu).           */
+static void wartung_update_labels(void) {
+    if (!scr_set_sensor_wartung || lv_scr_act() != scr_set_sensor_wartung) {
+        return;
+    }
+    const struct view_data_sensor_health *h = &g_ui_sht_health;
+
+    /* Live rh + temp - das wichtigste sichtbare feedback ob ausheizen
+     * was bringt. Anhauchen sollte rh sofort hoch ziehen.             */
+    if (wart_live_lbl) {
+        char buf[64];
+        if (g_ui_sauna_have_vals) {
+            snprintf(buf, sizeof(buf),
+                     "rh  %.1f %%    temp  %.1f \xC2\xB0""C",
+                     g_ui_sauna_rh_last, g_ui_sauna_temp_last);
+        } else {
+            snprintf(buf, sizeof(buf),
+                     "rh  -- %%    temp  -- \xC2\xB0""C");
+        }
+        lv_label_set_text(wart_live_lbl, buf);
+    }
+
+    if (wart_status_lbl) {
+        const char *st_text;
+        lv_color_t  st_col;
+        switch (h->state) {
+        case 1:
+            st_text = "filter: verstopft (rh-werte konstant)";
+            st_col  = lv_color_hex(0xffa040);
+            break;
+        case 2:
+            st_text = "filter: heize ... (UI eingefroren)";
+            st_col  = lv_color_hex(0x60c0ff);
+            break;
+        case 3:
+            st_text = "filter: recovery (60 s evaluierung)";
+            st_col  = lv_color_hex(0x508aaa);
+            break;
+        case 0:
+        default:
+            st_text = "filter: ok (rh schwankt normal)";
+            st_col  = SSC_C_ACCENT;
+            break;
+        }
+        lv_label_set_text(wart_status_lbl, st_text);
+        lv_obj_set_style_text_color(wart_status_lbl, st_col, 0);
+    }
+
+    if (wart_std_lbl) {
+        char buf[64];
+        float std = (float)h->rh_std_x100 / 100.0f;
+        snprintf(buf, sizeof(buf),
+                 "rh-varianz: %.2f %%   (gesund >1.0, stuck <0.5)", std);
+        lv_label_set_text(wart_std_lbl, buf);
+    }
+
+    if (wart_lastheat_lbl) {
+        char buf[64];
+        const char *dur = h->last_heater_hp ? "30 s" : "5 s";
+        if (h->minutes_since == 0xFFFF) {
+            snprintf(buf, sizeof(buf),
+                     "letztes ausheizen: noch nie (seit boot)");
+        } else if (h->minutes_since < 1) {
+            snprintf(buf, sizeof(buf),
+                     "letztes ausheizen: gerade eben (%s)", dur);
+        } else if (h->minutes_since < 60) {
+            snprintf(buf, sizeof(buf),
+                     "letztes ausheizen: vor %u min  (%s)",
+                     (unsigned)h->minutes_since, dur);
+        } else {
+            unsigned hr = h->minutes_since / 60;
+            unsigned mn = h->minutes_since % 60;
+            snprintf(buf, sizeof(buf),
+                     "letztes ausheizen: vor %u h %u min  (%s)",
+                     hr, mn, dur);
+        }
+        lv_label_set_text(wart_lastheat_lbl, buf);
+    }
+
+    if (wart_count_lbl) {
+        char buf[48];
+        snprintf(buf, sizeof(buf),
+                 "ausheizungen seit boot: %u", (unsigned)h->heater_count);
+        lv_label_set_text(wart_count_lbl, buf);
+    }
+}
+
+/* SHT85 filter-health vom RP2040. State steuert:
+ *  - dashboard warn-icon (sichtbar + farbe + symbol)
+ *  - cache g_ui_sht_health (fuers wartungs-submenu)
+ *  - submenu-labels (live update, no-op wenn screen nicht aktiv)      */
+static void on_sensor_health(const struct view_data_sensor_health *h) {
+    if (!h) return;
+    g_ui_sht_health = *h;
+
+    if (home_filter_warn) {
+        switch (h->state) {
+        case 1: /* STUCK_LOW */
+            lv_label_set_text(home_filter_warn, LV_SYMBOL_WARNING);
+            lv_obj_set_style_text_color(home_filter_warn,
+                                        lv_color_hex(0xffa040), 0);
+            lv_obj_clear_flag(home_filter_warn, LV_OBJ_FLAG_HIDDEN);
+            break;
+        case 2: /* HEATING */
+            lv_label_set_text(home_filter_warn, LV_SYMBOL_REFRESH);
+            lv_obj_set_style_text_color(home_filter_warn,
+                                        lv_color_hex(0x60c0ff), 0);
+            lv_obj_clear_flag(home_filter_warn, LV_OBJ_FLAG_HIDDEN);
+            break;
+        case 3: /* RECOVERING */
+            lv_label_set_text(home_filter_warn, LV_SYMBOL_REFRESH);
+            lv_obj_set_style_text_color(home_filter_warn,
+                                        lv_color_hex(0x508aaa), 0);
+            lv_obj_clear_flag(home_filter_warn, LV_OBJ_FLAG_HIDDEN);
+            break;
+        case 0: /* OK */
+        default:
+            lv_obj_add_flag(home_filter_warn, LV_OBJ_FLAG_HIDDEN);
+            break;
+        }
+    }
+    wartung_update_labels();
+}
+
 /* Letzter preset-zustand fuer re-sort bei neuer history-liste. */
 static struct view_data_operator_presets s_preset_cache;
 static bool s_preset_cache_valid = false;
@@ -3997,7 +4275,8 @@ static bool ui_sauna_is_known_screen(lv_obj_t *s)
            s == scr_set_verbindung || s == scr_set_zeit ||
            s == scr_set_anzeige || s == scr_set_export ||
            s == scr_set_operators || s == scr_set_diag ||
-           s == scr_set_danger || s == scr_set_speicher;
+           s == scr_set_danger || s == scr_set_speicher ||
+           s == scr_set_sensor_wartung;
 }
 
 /* Watchdog-timer: prueft ob der aktuelle screen einer unserer sauna-
@@ -4034,7 +4313,8 @@ static void clock_tick(lv_timer_t *t) {
         (cur == scr_set_operators)    ? "SET-OPERATORS" :
         (cur == scr_set_diag)         ? "SET-DIAG" :
         (cur == scr_set_danger)       ? "SET-DANGER" :
-        (cur == scr_set_speicher)     ? "SET-SPEICHER" : "LEGACY!!";
+        (cur == scr_set_speicher)     ? "SET-SPEICHER" :
+        (cur == scr_set_sensor_wartung)? "SET-WARTUNG" : "LEGACY!!";
     ESP_LOGI(TAG, "heartbeat: scr=%s running=%d", sname, live_running);
 
     /* v0.2.7: last-active-screen in NVS persistieren. v0.2.12: zusaetzlich
@@ -4161,6 +4441,9 @@ static void on_view_event(void *arg, esp_event_base_t base,
             settings_update_diag_label();
         }
         break;
+    case VIEW_EVENT_SENSOR_HEALTH:
+        if (ev_data) on_sensor_health(ev_data);
+        break;
     case VIEW_EVENT_WIFI_ST:
         if (ev_data && set_wifi_info) {
             const struct view_data_wifi_st *st = ev_data;
@@ -4282,6 +4565,7 @@ void ui_sauna_init(void) {
         VIEW_EVENT_TIME_STATE_UPDATE,
         VIEW_EVENT_BOOT_INFO,
         VIEW_EVENT_RP_BOOT_INFO,
+        VIEW_EVENT_SENSOR_HEALTH,
     };
     for (size_t i = 0; i < sizeof(listened)/sizeof(listened[0]); i++) {
         esp_err_t e = esp_event_handler_register_with(

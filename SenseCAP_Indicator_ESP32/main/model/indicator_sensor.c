@@ -87,6 +87,10 @@ enum  pkt_type {
      * Payload RESP: ssc_meta_wire_t (302 byte). Payload DONE: [2B count]. */
     PKT_TYPE_SESSION_META_RESP = 0xC4,
     PKT_TYPE_SESSION_META_DONE = 0xC5,
+
+    /* SHT85 filter-health (RP -> ESP, alle ~5s + bei state-change).
+     * Payload: [1B state][1B last_heater_hp][2B min_since LE][2B count LE][2B std_x100 LE] */
+    PKT_TYPE_SENSOR_HEALTH = 0xC6,
 };
 
 /* Session-Steuerung ESP -> RP (als defines, damit sie ausserhalb des
@@ -105,6 +109,10 @@ enum  pkt_type {
 #define SSC_CMD_SESSION_META_PUSH     0xAA
 #define SSC_CMD_SESSION_DELETE_FILE   0xAB
 #define SSC_CMD_SESSION_DELETE_JSON   0xAC
+
+/* manueller heater-trigger fuer SHT85-filter-recovery.
+ * Payload: [1B power] (0=33mW low, 1=200mW high). */
+#define SSC_CMD_SHT85_HEATER          0xAD
 
 
 struct sensor_present_data
@@ -1169,6 +1177,25 @@ static int __data_parse_handle(uint8_t *p_data, ssize_t len)
             break;
         }
 
+        case PKT_TYPE_SENSOR_HEALTH: {
+            /* SHT85 filter-health vom RP2040. 9B paket inkl. type-byte:
+             * [0xC6][state][last_hp][2B min_since LE][2B count LE][2B std LE] */
+            if (len < 9) break;
+            struct view_data_sensor_health sh;
+            sh.state          = p_data[1];
+            sh.last_heater_hp = p_data[2];
+            sh.minutes_since  = (uint16_t)p_data[3] |
+                                ((uint16_t)p_data[4] << 8);
+            sh.heater_count   = (uint16_t)p_data[5] |
+                                ((uint16_t)p_data[6] << 8);
+            sh.rh_std_x100    = (int16_t)((uint16_t)p_data[7] |
+                                          ((uint16_t)p_data[8] << 8));
+            (void)esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
+                                    VIEW_EVENT_SENSOR_HEALTH, &sh, sizeof(sh),
+                                    pdMS_TO_TICKS(5));
+            break;
+        }
+
         default:
             break;
     }
@@ -1725,5 +1752,11 @@ int indicator_sensor_get_data(struct view_data_sensor *out_data)
     memcpy(out_data, &__g_current_sensor_data, sizeof(struct view_data_sensor));
     xSemaphoreGive(__g_data_mutex);
     return 0;
+}
+
+int indicator_sensor_trigger_heater(bool high_power)
+{
+    uint8_t power = high_power ? 1 : 0;
+    return __cmd_send(SSC_CMD_SHT85_HEATER, &power, 1);
 }
 
