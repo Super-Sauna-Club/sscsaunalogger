@@ -78,6 +78,14 @@ static time_t __boot_compile_time(void) {
     tmv.tm_hour = atoi(t + 0);
     tmv.tm_min  = atoi(t + 3);
     tmv.tm_sec  = atoi(t + 6);
+    /* __DATE__/__TIME__ sind Ortszeit des Build-PCs (Wien). Ohne TZ-env
+     * rechnet mktime UTC -> Uhr 1 h (Winter) bzw. 2 h (Sommer) vor.    */
+    const char *cur_tz = getenv("TZ");
+    if (!cur_tz || !cur_tz[0]) {
+        setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
+        tzset();
+    }
+    tmv.tm_isdst = -1;
     return mktime(&tmv);
 }
 
