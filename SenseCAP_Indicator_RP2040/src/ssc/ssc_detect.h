@@ -117,6 +117,9 @@ typedef struct {
     uint32_t cool_since_ms;
     uint32_t ended_ms;          /* Ende der letzten Session (Restart-Sperre) */
     bool     ever_ended;
+    bool     hot_armed;          /* Hot-Trigger erst wieder nach Abkuehlen */
+    uint32_t last_valid_ms;      /* letztes gueltiges Sample */
+    bool     end_sent;
 
     /* Session-Stats */
     float    peak_t, peak_rh;

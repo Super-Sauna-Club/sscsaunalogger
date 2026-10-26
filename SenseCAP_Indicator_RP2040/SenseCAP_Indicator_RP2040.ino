@@ -927,6 +927,7 @@ static bool rec_write(const char *buf, size_t n) {
 
 static void active_file_save(void) {
     if (!g_rec.active || !sd_init_flag) return;
+    SD.remove("/ssc_active.tmp");   /* FILE_WRITE haengt an - frisch anlegen */
     File a = SD.open("/ssc_active.tmp", FILE_WRITE);
     if (!a) return;
     char b[160];
@@ -986,6 +987,10 @@ static int evt_read(const char *id, ssc_event_rec_t *ev, ssc_event_label_body_t 
     if (!sd_init_flag) return -1;
     char p[48]; evt_path(id, p, sizeof(p));
     File f = SD.open(p, FILE_READ);
+    if (!f) {   /* Strom weg zwischen remove und rename: .evx ist aktuell */
+        snprintf(p, sizeof(p), "/sessions/%s.evx", id);
+        f = SD.open(p, FILE_READ);
+    }
     if (!f) return -2;
     int n = 0;
     char line[224];
@@ -1419,6 +1424,12 @@ static void rec_try_resume(void) {
     File f = SD.open(path, FILE_WRITE);   /* Append-Modus */
     if (!f) return;
     rec_reset_counters();
+    {   /* Events/Metadaten laden BEVOR active gesetzt wird (evt_read ruft
+         * rt_service - dort duerfen noch keine Zeilen geschrieben werden). */
+        int ne0 = evt_read(id, g_rec.ev, g_rec.lbl);
+        g_rec.n_ev = ne0 > 0 ? (uint8_t)ne0 : 0;
+        for (uint8_t i = 0; i < g_rec.n_ev; i++) g_rec.ev[i].flags &= (uint8_t)~SSC_EVF_OPEN;
+    }
     g_rec.f = f;
     g_rec.file_ok = true;
     g_rec.active = true;
@@ -1433,8 +1444,6 @@ static void rec_try_resume(void) {
     g_rec.t_off = (uint32_t)t_ms + 1000UL;
     g_rec.gang = (uint8_t)gang; g_rec.n_aufguss = (uint8_t)na; g_rec.n_luef = (uint8_t)nl;
     g_rec.peak_t = pt; g_rec.peak_rh = prh;
-    int ne = evt_read(id, g_rec.ev, g_rec.lbl);
-    g_rec.n_ev = ne > 0 ? (uint8_t)ne : 0;
     ssc_meta_wire_t um; bool meas;
     if (read_session_json(id, &um, &meas) == 0) { g_rec.user = um; g_rec.have_user = true; }
     g_rec.last_flush_ms = g_rec.last_save_ms = g_rec.last_probe_ms = millis();
@@ -1453,13 +1462,18 @@ static void rec_try_resume(void) {
 
 /* Nach TIME_SYNC: Luecke eines Resumes auf echte Zeit korrigieren. */
 static void rec_check_resume_gap(void) {
-    if (!g_rec.active || g_rec.resume_checked || !time_valid()) return;
+    /* Nur mit wirklich bekannter Zeit (manuell gesetzt oder NTP). Die
+     * NVS-Fallback-Zeit des ESP32 kennt den Stromausfall selbst nicht
+     * und wuerde die Luecke als 0 messen (Review H1).                  */
+    if (!g_rec.active || g_rec.resume_checked || !time_valid() || g_ts_src < 3) return;
     g_rec.resume_checked = true;
-    if (g_rec.start_utc == 0) return;
-    uint32_t real = (utc_now() - g_rec.start_utc) * 1000UL;
+    uint32_t now_utc = utc_now();
+    if (g_rec.start_utc == 0 || now_utc < g_rec.start_utc) return;
+    uint64_t real64 = (uint64_t)(now_utc - g_rec.start_utc) * 1000ULL;
     uint32_t cur = rec_t_ms();
-    if (real > cur + 5000UL) {
-        uint32_t gap = real - cur;
+    if (real64 > (uint64_t)cur + 5000ULL) {
+        uint64_t gap64 = real64 - cur;
+        uint32_t gap = gap64 > 0xF0000000ULL ? 0xF0000000UL : (uint32_t)gap64;
         if (gap > 2UL * 3600000UL) {
             /* Strom war Stunden weg: alte Session abschliessen */
             Serial.print(LOG_TAG); Serial.println("resume: Luecke > 2 h -> Session beenden");
@@ -1484,7 +1498,9 @@ static void rec_handle_det_events(ssc_det_event_t *ev, int n, float T, float RH)
             }
             break;
         case SSC_EV_AUTO_END:
-            if (g_rec.active && (g_auto_enabled || g_rec.origin == SSC_ORIGIN_AUTO)) rec_end(SSC_END_AUTO);
+            /* Auto-Ende bei Auto-Modus/Auto-Session - und immer, wenn der
+             * Fuehler seit 30 min nichts liefert (t0 = NaN, Review H3). */
+            if (g_rec.active && (g_auto_enabled || g_rec.origin == SSC_ORIGIN_AUTO || isnan(e->t0))) rec_end(SSC_END_AUTO);
             break;
         case SSC_EV_GANG_START:
             if (!g_rec.active) break;
@@ -1542,7 +1558,8 @@ static void rec_handle_det_events(ssc_det_event_t *ev, int n, float T, float RH)
 
 static void process_sample(uint32_t t_clk, float T, float RH, bool valid) {
     uint8_t q = 0;
-    bool heat = (g_st_phase == ST_HEAT || g_st_phase == ST_SETTLE);
+    /* Heizer betrifft nur den echten Fuehler, nicht Replay-Daten */
+    bool heat = !g_sim && (g_st_phase == ST_HEAT || g_st_phase == ST_SETTLE);
     if (heat) q |= Q_HEATER;
     if (g_det.rh_suspect) q |= Q_RH_SUSP;
     if (valid && RH >= 98.0f) q |= Q_RH_WET;
@@ -1562,6 +1579,7 @@ static void process_sample(uint32_t t_clk, float T, float RH, bool valid) {
     unsigned long t = (unsigned long)rec_t_ms();
     if (valid) k = snprintf(b, sizeof(b), "%lu,%.2f,%.2f,%u,%s\n", t, (double)T, (double)RH, q, g_rec.marker);
     else       k = snprintf(b, sizeof(b), "%lu,,,%u,%s\n", t, q, g_rec.marker);
+    if (k >= (int)sizeof(b)) { k = (int)sizeof(b) - 1; b[k - 1] = '\n'; }
     if (k > 0 && rec_write(b, (size_t)k)) {
         g_rec.rows++;
         g_rec.marker[0] = 0;
@@ -1620,6 +1638,9 @@ static void measure_tick(uint32_t now) {
         if (scd_ready) sensor_scd4x_read_and_send();
         if (sgp_ready) sensor_sgp40_read_and_send();
     }
+    /* Heizer-30-s-Limit auch waehrend langer Operationen (LIST/RBK/?D)
+     * durchsetzen - measure_tick laeuft dort via rt_service weiter.   */
+    if (g_st_phase == ST_HEAT) selftest_service();
     g_in_tick = false;
 }
 
@@ -2146,6 +2167,7 @@ static uint8_t handle_event_label(const uint8_t *p) {
     int i = m.no - 1;
     if (m.delete_flag == 1) ev[i].flags |= SSC_EVF_DELETED;
     else if (m.delete_flag == 2) ev[i].flags &= (uint8_t)~SSC_EVF_DELETED;
+    else if (m.delete_flag == 3) lb[i] = m.l;   /* nur vorbelegen, nicht bestaetigt */
     else { lb[i] = m.l; ev[i].flags |= SSC_EVF_LABELED; }
     int rc = evt_write(m.id, ev, lb, (uint8_t)n);
     if (act) { g_state_dirty = true; rec_write_json(false); }
@@ -2412,13 +2434,13 @@ static void print_health(void) {
     snprintf(b, sizeof(b),
         "%shealth: up=%lus probe=%s temp=%.1f rh=%.1f fails=%lu heater=%d stuck=%d "
         "rec=%s rows=%lu werr=%u phase=%u gang=%u aufg=%u auto=%u sim=%d sd=%d "
-        "time=%d rp_die=%.1f boot=%lu rst=%s pkt=%u unk=%u badlen=%u badcrc=%u ovf=%u",
+        "time=%d rp_die=%.1f boot=%lu rst=%s pkt=%u unk=%u badlen=%u badcrc=%u ovf=%u st=%u/%u k=%u",
         LOG_TAG, (unsigned long)(millis() / 1000UL), probe_str, (double)t_out, (double)rh_out,
         (unsigned long)g_sht85_fails, g_sht_heater_on, g_sht_heater_stuck,
         g_rec.active ? g_rec.id : "-", (unsigned long)g_rec.rows, g_rec.write_errs,
         g_det.phase, g_rec.gang, g_rec.n_aufguss, g_auto_enabled, g_sim, sd_init_flag,
         time_valid(), (double)analogReadTemp(), (unsigned long)g_boot_count, rr,
-        g_pkt_rx, g_pkt_rx_unk, g_bad_len, g_bad_crc, g_uart_ovf);
+        g_pkt_rx, g_pkt_rx_unk, g_bad_len, g_bad_crc, g_uart_ovf, g_st_result, g_st_phase, g_st_k_x100);
     Serial.println(b);
 }
 
@@ -2461,6 +2483,22 @@ static void periodic(uint32_t now) {
     }
     selftest_service();
 
+    /* Automatisches taegliches Ausheizen (Sensirion-Plausibilitaetstest):
+     * einmal pro 24 h, nur bei kalter, ruhiger Kabine ohne Session -
+     * dieselben Interlocks wie der manuelle Selbsttest. Nach dem Boot
+     * frhestens nach 30 min (Kabine muss stabil sein).                */
+    static uint32_t last_auto_st_check = 0;
+    if (now - last_auto_st_check >= 60000UL) {
+        last_auto_st_check = now;
+        bool due = g_st_last_ms ? (now - g_st_last_ms >= 24UL * 3600000UL)
+                                : (now >= 30UL * 60000UL);
+        if (due && g_st_phase == ST_IDLE && !g_sim && selftest_refuse_reason() == 0) {
+            slog("Auto-Ausheizen (taeglicher Selbsttest) startet");
+            selftest_start();
+            sensor_health_send();
+        }
+    }
+
     /* Sim-Modus endet 5 s nach dem letzten ?F */
     if (g_sim && now - g_sim_last_feed > 5000UL) {
         slog("SIM-Modus beendet");
@@ -2498,6 +2536,12 @@ static void periodic(uint32_t now) {
         last_sd_retry = now;
         SD.end(false);
         sd_init_flag = sd_try_init();
+        if (sd_init_flag && !g_rec.active) {
+            /* rec_end lief evtl. mit toter SD: Altlast entfernen, sonst
+             * wuerde ein spaeterer Reset die beendete Session fortsetzen. */
+            SD.remove("/ssc_active.txt");
+            SD.remove("/ssc_active.tmp");
+        }
         if (sd_init_flag && g_rec.active && !g_rec.file_ok) {
             g_rec.f = SD.open(g_rec.path, FILE_WRITE);
             if (g_rec.f) {

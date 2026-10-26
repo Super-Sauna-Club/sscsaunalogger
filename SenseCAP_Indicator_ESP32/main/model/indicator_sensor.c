@@ -1359,8 +1359,14 @@ static void esp32_rp2040_comm_task(void *arg)
          * als PKT_TYPE_RP_STATUS zurueck und wird an VIEW_EVENT_RP_BOOT_INFO
          * gepostet.                                                        */
         int64_t now_us = esp_timer_get_time();
+        static int64_t list_at_us = 0;
+        if (list_at_us && now_us >= list_at_us) {
+            list_at_us = 0;
+            __cmd_send(SSC_CMD_LIST_SESSIONS, NULL, 0);
+        }
         if (next_hello_us && now_us >= next_hello_us) {
             next_hello_us = 0;
+            list_at_us = now_us + 40LL * 1000 * 1000;
             uint8_t pv = SSC_PROTO_VERSION;
             __cmd_send(SSC_CMD_HELLO, &pv, 1);
             indicator_sensor_send_auto_cfg();
@@ -1853,10 +1859,16 @@ static void rp_cmd_task(void *arg) {
     while (1) {
         if (xQueueReceive(s_cmd_queue, &c, portMAX_DELAY) != pdTRUE) continue;
         ssc_ack_t res = { c.cmd, 0xFF, 0 };   /* 0xFF = keine Antwort */
+        /* Nur idempotente Kommandos bei Timeout wiederholen. ADD_EVENT und
+         * SELFTEST wuerden doppelt ausgefuehrt, wenn der RP2040 nur kurz
+         * beschaeftigt war (Review H2) - die nur bei BAD_LEN/BAD_CRC.    */
+        bool idem = !(c.cmd == SSC_CMD_ADD_EVENT || c.cmd == SSC_CMD_SENSOR_SELFTEST);
         for (int attempt = 0; attempt < 3; attempt++) {
             xQueueReset(s_ack_queue);
             __cmd_send(c.cmd, c.len ? c.data : NULL, c.len);
-            int64_t deadline = esp_timer_get_time() + 800 * 1000;
+            /* 2.5 s: der RP2040 kann waehrend LIST/Readback einige Sekunden
+             * brauchen, bis er das Kommando aus dem FIFO holt.          */
+            int64_t deadline = esp_timer_get_time() + 2500 * 1000;
             ssc_ack_t a;
             bool got = false;
             while (esp_timer_get_time() < deadline) {
@@ -1867,6 +1879,8 @@ static void rp_cmd_task(void *arg) {
                 res = a;
                 /* BAD_LEN/BAD_CRC: Uebertragungsfehler -> nochmal */
                 if (a.rc != SSC_RC_BAD_LEN && a.rc != SSC_RC_BAD_CRC) break;
+            } else if (!idem) {
+                break;
             }
             ESP_LOGW(TAG, "rp cmd 0x%02X versuch %d: %s rc=%u", c.cmd, attempt + 1,
                      got ? "ack" : "timeout", got ? a.rc : 0);

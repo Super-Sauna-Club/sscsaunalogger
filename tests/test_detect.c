@@ -167,6 +167,27 @@ int main(int argc, char **argv) {
     r = synth(verbose, 1);
     CHECK(r.n_start == 0 && r.n_aufguss == 0, "Anhauchen erzeugte start=%d aufguss=%d", r.n_start, r.n_aufguss);
 
+    printf("== Fuehler faellt waehrend Session aus\n");
+    {
+        ssc_det_t d; ssc_det_init(&d); ssc_det_event_t ev[8]; res_t rr; memset(&rr, 0, sizeof rr);
+        uint32_t t = 3600000UL;
+        ssc_det_session_begin(&d, t, true);
+        for (int i = 0; i < 1200; i++, t += 500) handle(&d, ev, ssc_det_update(&d, t, 85, 10, 1, ev, 8), &rr, 0, 0);
+        for (int i = 0; i < 2 * 60 * 40; i++, t += 500) handle(&d, ev, ssc_det_update(&d, t, NAN, NAN, 0, ev, 8), &rr, 0, 0);
+        CHECK(rr.n_end == 1, "toter Fuehler: auto_end=%d erwartet 1", rr.n_end);
+    }
+    printf("== Kabine noch heiss nach manuellem Stopp\n");
+    {
+        ssc_det_t d; ssc_det_init(&d); ssc_det_event_t ev[8]; res_t rr; memset(&rr, 0, sizeof rr);
+        uint32_t t = 3600000UL;
+        for (int i = 0; i < 1200; i++, t += 500) handle(&d, ev, ssc_det_update(&d, t, 85, 10, 1, ev, 8), &rr, 0, 1);
+        if (!d.session) ssc_det_session_begin(&d, t, true);
+        ssc_det_session_end(&d);
+        memset(&rr, 0, sizeof rr);
+        for (int i = 0; i < 2 * 3600 * 2; i++, t += 500) handle(&d, ev, ssc_det_update(&d, t, 85, 10, 1, ev, 8), &rr, 0, 1);
+        CHECK(rr.n_start == 0, "geister-session nach stopp: start=%d", rr.n_start);
+    }
+
     printf(g_fail ? "\n%d FEHLER\n" : "\nALLE TESTS OK\n", g_fail);
     return g_fail ? 1 : 0;
 }

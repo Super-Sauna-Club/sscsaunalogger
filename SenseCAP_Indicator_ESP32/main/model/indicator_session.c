@@ -129,6 +129,7 @@ static void request_events(const char *id) {
     uint8_t p[SSC_ID_LEN];
     id24(p, id);
     LOCK();
+    if (strncmp(s.ev_id, id, SSC_SESSION_ID_LEN) != 0) memset(s_ev, 0, sizeof(s_ev));
     strncpy(s.ev_id, id, SSC_SESSION_ID_LEN - 1);
     s.ev_id[SSC_SESSION_ID_LEN - 1] = 0;
     s.ev_loading = true;
@@ -407,14 +408,28 @@ static void on_history_list_req(void) {
     post(VIEW_EVENT_HISTORY_LIST, &list, sizeof(list), 100);
 }
 
+static void send_delete(const char *id);
 static void do_job(const job_t *j) {
     struct view_data_session_meta m;
     if (j->kind == JOB_NEW) {
         meta_from_state(&j->st, &m, false);
         int rc = indicator_session_store_put_measured(&m);
         ESP_LOGI(TAG, "Session gestartet (RP2040): %s origin=%u nvs=%d", m.id, j->st.origin, rc);
-        on_history_list_req();
+        post(VIEW_EVENT_HISTORY_LIST_REQ, NULL, 0, 50);   /* Liste nur im Event-Task bauen */
     } else if (j->kind == JOB_ENDED) {
+        /* ABBRECHEN: hier (nach dem Ende) loeschen - im ACK-Pfad konnte der
+         * Record danach vom Ende-Job wieder angelegt werden (Review M1). */
+        LOCK();
+        bool cancelled = s.cancel_id[0] && strncmp(s.cancel_id, j->st.id, SSC_ID_LEN) == 0;
+        if (cancelled) s.cancel_id[0] = 0;
+        UNLOCK();
+        if (cancelled) {
+            ESP_LOGW(TAG, "Session %s abgebrochen -> loeschen", j->st.id);
+            indicator_session_store_delete(j->st.id);
+            send_delete(j->st.id);
+            post(VIEW_EVENT_HISTORY_LIST_REQ, NULL, 0, 50);
+            return;
+        }
         meta_from_state(&j->st, &m, true);
         int rc = indicator_session_store_put_measured(&m);
         ESP_LOGI(TAG, "Session beendet: %s dauer=%lus aufguss=%u nvs=%d", m.id,
@@ -429,7 +444,7 @@ static void do_job(const job_t *j) {
          * Stopp per Knopf kam (Auto-Ende stoert niemanden).              */
         post(VIEW_EVENT_SESSION_ENDED, &m, sizeof(m), 100);
         if (by_user) post(VIEW_EVENT_SESSION_SUMMARY_READY, &m, sizeof(m), 100);
-        on_history_list_req();
+        post(VIEW_EVENT_HISTORY_LIST_REQ, NULL, 0, 50);
     }
 }
 
@@ -463,7 +478,8 @@ static void session_worker(void *arg) {
                         rbk_request(s_rbk_next_off);
                     } else {
                         ESP_LOGE(TAG, "RBK aufgegeben");
-                        if (s_rbk_buf) { heap_caps_free(s_rbk_buf); s_rbk_buf = NULL; s_rbk_size = 0; }
+                        /* Puffer gehoert dem UART-Task (Review M3) - nur beenden;
+                         * er wird beim naechsten Readback (offset 0) ersetzt. */
                         rbk_done();
                         rbk_retries = 0;
                     }
@@ -481,9 +497,20 @@ static void session_worker(void *arg) {
 static void on_sd_meta_resp(const ssc_meta_wire_t *w) {
     if (!w || w->id[0] == 0) return;
     struct view_data_session_meta existing;
-    if (indicator_session_store_get(w->id, &existing) == 0) return;
     struct view_data_session_meta meta;
     meta_unpack_from_wire(w, &meta);
+    if (indicator_session_store_get(w->id, &existing) == 0) {
+        /* Offener Record (Ende verpasst, z.B. ESP32 war aus): Messwerte vom
+         * RP2040 uebernehmen, aber nie die laufende Session (Review H5). */
+        LOCK();
+        bool active = s.recording && strcmp(w->id, s.rec_id) == 0;
+        UNLOCK();
+        if (existing.end_ts == 0 && meta.end_ts != 0 && !active) {
+            indicator_session_store_put_measured(&meta);
+            ESP_LOGI(TAG, "SD_META_RESP: offener Record %s geschlossen", meta.id);
+        }
+        return;
+    }
     int rs = indicator_session_store_append(&meta);
     ESP_LOGI(TAG, "SD_META_RESP recovered id=%s rc=%d", meta.id, rs);
 }
@@ -543,19 +570,7 @@ static void on_view_event(void *arg, esp_event_base_t base, int32_t id, void *d)
     case VIEW_EVENT_RP_CMD_RESULT: {
         const ssc_ack_t *a = d;
         if (!a) break;
-        if (a->cmd == SSC_CMD_SESSION_END && a->rc == SSC_RC_OK) {
-            char cid[SSC_SESSION_ID_LEN] = {0};
-            LOCK();
-            memcpy(cid, s.cancel_id, sizeof(cid));
-            s.cancel_id[0] = 0;
-            UNLOCK();
-            if (cid[0]) {
-                ESP_LOGW(TAG, "Session %s abgebrochen -> loeschen", cid);
-                indicator_session_store_delete(cid);
-                send_delete(cid);
-                on_history_list_req();
-            }
-        }
+        /* Abbrechen wird im Worker nach JOB_ENDED erledigt (siehe do_job). */
         if (a->cmd == SSC_CMD_EVENT_LABEL || a->cmd == SSC_CMD_ADD_EVENT) {
             char eid[SSC_SESSION_ID_LEN];
             LOCK(); memcpy(eid, s.ev_id, sizeof(eid)); UNLOCK();

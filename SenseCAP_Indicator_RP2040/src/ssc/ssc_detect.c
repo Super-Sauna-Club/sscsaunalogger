@@ -77,6 +77,7 @@ void ssc_det_init(ssc_det_t *d) {
     d->max_session_ms     = 8UL * 3600UL * 1000UL;
     d->phase              = SSC_PH_IDLE;
     d->peak_t = d->peak_rh = -1000.0f;
+    d->hot_armed          = true;
 }
 
 void ssc_det_session_begin(ssc_det_t *d, uint32_t t_ms, bool manual) {
@@ -93,6 +94,8 @@ void ssc_det_session_begin(ssc_det_t *d, uint32_t t_ms, bool manual) {
     d->peak_t = d->peak_rh = -1000.0f;
     d->heatup_start_ms = d->heatup_end_ms = 0;
     d->last_pour_end_ms = 0;
+    d->last_valid_ms  = t_ms;
+    d->end_sent       = false;
     d->phase          = SSC_PH_HEATUP;   /* wird beim naechsten 5-s-Tick
                                             ggf. sofort auf GANG gehoben */
 }
@@ -121,6 +124,7 @@ void ssc_det_session_end(ssc_det_t *d) {
     d->pour_active = false;
     d->ended_ms    = d->last_ms;
     d->ever_ended  = true;
+    d->hot_armed   = false;   /* "heiss"-Trigger erst nach Abkuehlen unter 40 °C */
 }
 
 static int emit(ssc_det_event_t *out, int n, int max, const ssc_det_event_t *e) {
@@ -233,11 +237,16 @@ static int tick5(ssc_det_t *d, uint32_t t, ssc_det_event_t *out, int n, int max)
     /* ---- Auto-Start-Erkennung (nur ohne Session) ---- */
     if (!d->session) {
         bool guard = d->ever_ended && (t - d->ended_ms < 30UL * 60000UL);
+        if (T < d->start_t_min) d->hot_armed = true;
         bool rising = d->r5_fill > 60 && T >= d->start_t_min &&
                       (T - R5(r5_t, 60)) >= d->start_rise_5min;
         bool hot = d->r5_fill > 24 && T >= 60.0f;
         if (hot) for (uint8_t k = 1; k <= 24; k++) if (R5(r5_t, k) < 60.0f) { hot = false; break; }
-        if (guard && !rising) hot = false;   /* nach Ende: nur echtes Neu-Aufheizen */
+        /* Nach einem Ende (z.B. manueller Stopp bei heissem Ofen) nie wegen
+         * "noch heiss" neu starten - nur echtes Neu-Aufheizen (rising) oder
+         * nach Abkuehlen unter start_t_min (Review H4).                   */
+        if (!d->hot_armed || guard) hot = false;
+        if (guard) rising = false;
         if (rising || hot) {
             /* Aufheiz-Beginn: aeltestes Minimum im Ring */
             uint8_t kmin = 0; float mn = T;
@@ -332,8 +341,14 @@ static int tick5(ssc_det_t *d, uint32_t t, ssc_det_event_t *out, int n, int max)
         }
     }
 
+    /* ---- Abkuehlen wieder verlassen, wenn nachgeheizt wird (M6) ---- */
+    if (d->phase == SSC_PH_COOLDOWN && d->r5_fill > 12 && (T - R5(r5_t, 12)) >= 0.8f) {
+        d->phase = d->gang ? SSC_PH_GANG : SSC_PH_HEATUP;
+        d->end_sent = false;
+    }
+
     /* ---- Ende ---- */
-    {
+    if (!d->end_sent) {
         bool fall10 = d->r5_fill > 119 && (T - R5(r5_t, 119)) <= -2.0f;
         bool fall2  = d->r5_fill > 24  && (T - R5(r5_t, 24)) < 0.0f;
         bool end = false;
@@ -350,6 +365,7 @@ static int tick5(ssc_det_t *d, uint32_t t, ssc_det_event_t *out, int n, int max)
             e.tpk = d->peak_t; e.rhpk = d->peak_rh;
             n = emit(out, n, max, &e);
             d->phase = SSC_PH_COOLDOWN;
+            d->end_sent = true;   /* nur einmal melden (Recorder entscheidet) */
         }
     }
 
@@ -395,7 +411,22 @@ int ssc_det_update(ssc_det_t *d, uint32_t t, float T, float rh, bool valid,
     d->last_ms = t;
     if (!d->have_last) { d->have_last = true; d->s1_t0 = t; d->s5_t0 = t; }
 
-    if (!valid || isnan(T) || isnan(rh)) return 0;
+    if (!valid || isnan(T) || isnan(rh)) {
+        /* Fuehler tot: Session darf trotzdem enden (Review H3) - nach
+         * 30 min ohne gueltigen Wert oder bei Ueberschreiten der Maximaldauer. */
+        if (d->session && !d->end_sent &&
+            ((t - d->last_valid_ms) > 30UL * 60000UL || (t - d->sess_start_ms) >= d->max_session_ms)) {
+            ssc_det_event_t e;
+            ev_basic(&e, SSC_EV_AUTO_END, 0, d->gang, t, NAN, NAN);
+            e.t_start_ms = d->sess_start_ms;
+            e.tpk = d->peak_t; e.rhpk = d->peak_rh;
+            d->end_sent = true;
+            d->phase = SSC_PH_COOLDOWN;
+            return emit(out, 0, max, &e);
+        }
+        return 0;
+    }
+    d->last_valid_ms = t;
 
     if (d->session) {
         if (T > d->peak_t)  d->peak_t = T;
