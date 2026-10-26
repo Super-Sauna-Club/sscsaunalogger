@@ -4562,6 +4562,7 @@ static void events_open(const char *id, lv_obj_t *ret) {
 }
 
 static void ev_add_row(const char *txt, const char *right, lv_color_t col, bool clickable, int idx, bool header) {
+    ESP_LOGI(TAG, "ev-zeile: %s | %s", txt, right ? right : "");
     lv_obj_t *row = lv_list_add_btn(ev_list, NULL, txt);
     lv_obj_set_style_bg_color(row, header ? SSC_C_ELEVATED : SSC_C_SURFACE, 0);
     lv_obj_set_style_bg_color(row, SSC_C_ELEVATED, LV_STATE_PRESSED);
@@ -4582,6 +4583,30 @@ static void ev_add_row(const char *txt, const char *right, lv_color_t col, bool 
     else lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
 }
 
+/* Startzeit (Unix) der angezeigten Session - fuer Uhrzeiten in der Liste.
+ * 0 = unbekannt (dann relative Zeit seit Start).                     */
+static time_t ev_session_start(void) {
+    if (s_ui_live.rec_state == SSC_REC_RECORDING && strcmp(s_ui_live.id, s_ev_view_id) == 0)
+        return time(NULL) - (time_t)s_ui_live.t_elapsed_s;
+    if (s_detail_valid && strcmp(s_detail_meta.id, s_ev_view_id) == 0) return s_detail_meta.start_ts;
+    if (s_last_ended_valid && strcmp(s_last_ended.id, s_ev_view_id) == 0) return s_last_ended.start_ts;
+    for (uint16_t i = 0; i < hist_cache_count; i++)
+        if (strcmp(hist_cached[i].id, s_ev_view_id) == 0) return hist_cached[i].start_ts;
+    return 0;
+}
+
+/* "19:32" (Uhrzeit) oder, wenn unbekannt, "0:45" nach Start */
+static void fmt_evtime(char *b, size_t n, time_t st, uint32_t ms) {
+    if (st > 1600000000) {
+        time_t t = st + (time_t)(ms / 1000);
+        struct tm tmv;
+        localtime_r(&t, &tmv);
+        snprintf(b, n, "%02d:%02d", tmv.tm_hour, tmv.tm_min);
+    } else {
+        fmt_hmm(b, n, ms);
+    }
+}
+
 static void events_refresh(void) {
     if (!ev_list) return;
     lv_obj_clean(ev_list);
@@ -4596,17 +4621,38 @@ static void events_refresh(void) {
         return;
     }
     int shown = 0, unl = 0;
+    time_t st0 = ev_session_start();
     for (int i = 0; i < s_ui_ev_n; i++) {
         const ssc_event_rec_t *e = &s_ui_ev[i].e;
         const ssc_event_label_body_t *l = &s_ui_ev[i].l;
         if (e->flags & SSC_EVF_DELETED) continue;
         char t[40], line[120], right[48];
-        fmt_hmm(t, sizeof(t), e->t_start_ms);
+        fmt_evtime(t, sizeof(t), st0, e->t_start_ms);
         switch (e->kind) {
-        case SSC_EK_GANG:
-            snprintf(line, sizeof(line), "GANG %u   ab %s", e->seq, t);
+        case SSC_EK_GANG: {
+            /* Gang-Steckbrief: Uhrzeit von-bis, Aufguesse, Hoechsttemperatur -
+             * damit man den Gang wiedererkennt ("der um halb acht").   */
+            int na = 0; float tmax = 0; uint32_t t_end = 0; bool open = true;
+            for (int k = i + 1; k < s_ui_ev_n; k++) {
+                const ssc_event_rec_t *x = &s_ui_ev[k].e;
+                if (x->flags & SSC_EVF_DELETED) continue;
+                if (x->kind == SSC_EK_GANG) { t_end = x->t_start_ms; open = false; break; }
+                if (x->kind == SSC_EK_LUEFTEN) { t_end = x->t_start_ms; open = false; break; }
+                if (x->kind == SSC_EK_AUFGUSS && x->gang == e->seq) {
+                    na++;
+                    if (x->tpk_x10 / 10.0f > tmax) tmax = x->tpk_x10 / 10.0f;
+                }
+            }
+            char te[16];
+            if (open) snprintf(te, sizeof(te), active ? "jetzt" : "ende");
+            else fmt_evtime(te, sizeof(te), st0, t_end);
+            if (na && tmax > 0)
+                snprintf(line, sizeof(line), "GANG %u   %s - %s   %d aufg.   max %.0f\xC2\xB0", e->seq, t, te, na, tmax);
+            else
+                snprintf(line, sizeof(line), "GANG %u   %s - %s   %d aufg.", e->seq, t, te, na);
             ev_add_row(line, NULL, SSC_C_ACCENT, false, i, true);
             break;
+        }
         case SSC_EK_AUFGUSS: {
             bool lab = e->flags & SSC_EVF_LABELED;
             bool pre = !lab && (l->operator_tag[0] || l->name[0]);
@@ -4627,7 +4673,7 @@ static void events_refresh(void) {
         case SSC_EK_LUEFTEN: {
             char t2[24];
             if (e->flags & SSC_EVF_OPEN) snprintf(t2, sizeof(t2), "laeuft");
-            else fmt_hmm(t2, sizeof(t2), e->t_end_ms);
+            else fmt_evtime(t2, sizeof(t2), st0, e->t_end_ms);
             snprintf(line, sizeof(line), LV_SYMBOL_REFRESH " Lueften   %s - %s", t, t2);
             snprintf(right, sizeof(right), "%.0f -> %.0f\xC2\xB0", e->t0_x10 / 10.0, e->tpk_x10 / 10.0);
             ev_add_row(line, right, SSC_C_TEXT_MUTED, false, i, false);
@@ -4858,8 +4904,8 @@ static void eve_open(int idx) {
     build_ev_edit();
     eve_idx = idx;
     char t[24], b[64];
-    fmt_hmm(t, sizeof(t), x->e.t_start_ms);
-    snprintf(b, sizeof(b), "AUFGUSS %u  (gang %u, %s)", x->e.seq, x->e.gang, t);
+    fmt_evtime(t, sizeof(t), ev_session_start(), x->e.t_start_ms);
+    snprintf(b, sizeof(b), "AUFGUSS %u  -  GANG %u  -  %s", x->e.seq, x->e.gang, t);
     lv_label_set_text(eve_title, b);
     /* Saunameister-Liste vom Session-Formular uebernehmen (haeufigste oben) */
     if (sum_operator_dd) {
