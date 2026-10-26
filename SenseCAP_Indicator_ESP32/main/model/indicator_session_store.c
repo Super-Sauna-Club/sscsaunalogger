@@ -346,14 +346,15 @@ int indicator_session_store_delete(const char *id) {
     }
     if (found < 0) { nvs_close(h); UNLOCK(); return -4; }
 
-    /* Array zusammenschieben: slot[i] = slot[i+1] fuer i=found..total-2 */
-    for (uint16_t i = (uint16_t)found; i + 1 < total; i++) {
+    /* v0.4.0: letzten Slot in die Luecke (Reihenfolge egal - die Liste
+     * wird nach start_ts sortiert). Vorher wurden ALLE folgenden Slots
+     * umgeschrieben: langsam + Flash-Verschleiss (Review M9).         */
+    if ((uint16_t)found + 1 < total) {
         char ka[8], kb[8];
-        key_for_slot(i,   ka, sizeof(ka));
-        key_for_slot(i+1, kb, sizeof(kb));
+        key_for_slot((uint16_t)found, ka, sizeof(ka));
+        key_for_slot(total - 1, kb, sizeof(kb));
         size_t sz = sizeof(tmp);
-        if (nvs_get_blob(h, kb, &tmp, &sz) != ESP_OK) break;
-        nvs_set_blob(h, ka, &tmp, sizeof(tmp));
+        if (nvs_get_blob(h, kb, &tmp, &sz) == ESP_OK) nvs_set_blob(h, ka, &tmp, sizeof(tmp));
     }
     /* letzten Slot entfernen */
     char klast[8]; key_for_slot(total - 1, klast, sizeof(klast));
@@ -440,12 +441,19 @@ int indicator_session_store_wipe(void) {
 /* v0.4.0: Messwerte (vom RP2040 berechnet) setzen - Record anlegen falls
  * er noch nicht existiert. User-Felder (Saunameister, Notizen, ...) eines
  * bestehenden Records bleiben erhalten.                                 */
+static SemaphoreHandle_t s_put_lock = NULL;
 int indicator_session_store_put_measured(const struct view_data_session_meta *meta) {
     if (!meta || !meta->id[0]) return -1;
+    /* get+append atomar gegenueber anderen put_measured-Aufrufen (L2) */
+    if (!s_put_lock) s_put_lock = xSemaphoreCreateMutex();
+    if (s_put_lock) xSemaphoreTake(s_put_lock, portMAX_DELAY);
     struct view_data_session_meta cur;
     if (indicator_session_store_get(meta->id, &cur) != 0) {
-        return indicator_session_store_append(meta);
+        int r = indicator_session_store_append(meta);
+        if (s_put_lock) xSemaphoreGive(s_put_lock);
+        return r;
     }
+    if (s_put_lock) xSemaphoreGive(s_put_lock);
     LOCK();
     nvs_handle_t h;
     if (open_rw(&h) != ESP_OK) { UNLOCK(); return -2; }

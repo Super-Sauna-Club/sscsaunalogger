@@ -43,7 +43,7 @@ extern esp_event_loop_handle_t view_event_handle;
 
 #define SSC_TASK_STACK   (8 * 1024)
 #define SSC_TASK_PRIO    5
-#define SSC_MAX_EV       64
+#define SSC_MAX_EV       128
 
 /* ======================================================================= */
 /* Zustand                                                                  */
@@ -63,6 +63,7 @@ typedef struct {
     uint8_t  ev_n;
     bool     ev_loading;
     int64_t  ev_req_us;
+    int64_t  cancel_us;
 } sess_t;
 
 static sess_t s;
@@ -222,6 +223,12 @@ void indicator_session_on_state(const ssc_session_state_t *st) {
     UNLOCK();
     if (fire) xQueueSend(s_jobs, &job, 0);
     if (want_events && evreq[0]) request_events(evreq);
+    LOCK();
+    if (s.cancel_id[0] && s.cancel_us && esp_timer_get_time() - s.cancel_us > 15000000) {
+        ESP_LOGW(TAG, "Abbrechen von %s nicht ausgefuehrt - verworfen", s.cancel_id);
+        s.cancel_id[0] = 0;
+    }
+    UNLOCK();
 }
 
 void indicator_session_on_event(const ssc_event_msg_t *m) {
@@ -378,6 +385,11 @@ void indicator_session_rx_sd_chunk(const uint8_t *pl, size_t n) {
     if (s_rbk_buf && dlen <= s_rbk_size && off <= s_rbk_size - dlen)
         memcpy(s_rbk_buf + off, pl + 12, dlen);
     s_rbk_next_off = off + dlen;
+    if (dlen == 0 && off < total) {   /* Lesefehler am RP2040: nicht endlos neu anfragen */
+        ESP_LOGW(TAG, "RBK: leerer chunk bei off=%u - abbruch", (unsigned)off);
+        rbk_done();
+        return;
+    }
     if (off + dlen < total) { rbk_request(off + dlen); return; }
     if (s_rbk_buf) rbk_parse_emit(s_rbk_buf, s_rbk_size);
     if (s_rbk_buf) { heap_caps_free(s_rbk_buf); s_rbk_buf = NULL; s_rbk_size = 0; }
@@ -415,7 +427,7 @@ static void do_job(const job_t *j) {
         meta_from_state(&j->st, &m, false);
         int rc = indicator_session_store_put_measured(&m);
         ESP_LOGI(TAG, "Session gestartet (RP2040): %s origin=%u nvs=%d", m.id, j->st.origin, rc);
-        post(VIEW_EVENT_HISTORY_LIST_REQ, NULL, 0, 50);   /* Liste nur im Event-Task bauen */
+        post(VIEW_EVENT_HISTORY_LIST_REQ, NULL, 0, 200);   /* Liste nur im Event-Task bauen */
     } else if (j->kind == JOB_ENDED) {
         /* ABBRECHEN: hier (nach dem Ende) loeschen - im ACK-Pfad konnte der
          * Record danach vom Ende-Job wieder angelegt werden (Review M1). */
@@ -427,7 +439,7 @@ static void do_job(const job_t *j) {
             ESP_LOGW(TAG, "Session %s abgebrochen -> loeschen", j->st.id);
             indicator_session_store_delete(j->st.id);
             send_delete(j->st.id);
-            post(VIEW_EVENT_HISTORY_LIST_REQ, NULL, 0, 50);
+            post(VIEW_EVENT_HISTORY_LIST_REQ, NULL, 0, 200);
             return;
         }
         meta_from_state(&j->st, &m, true);
@@ -444,8 +456,19 @@ static void do_job(const job_t *j) {
          * Stopp per Knopf kam (Auto-Ende stoert niemanden).              */
         post(VIEW_EVENT_SESSION_ENDED, &m, sizeof(m), 100);
         if (by_user) post(VIEW_EVENT_SESSION_SUMMARY_READY, &m, sizeof(m), 100);
-        post(VIEW_EVENT_HISTORY_LIST_REQ, NULL, 0, 50);
+        post(VIEW_EVENT_HISTORY_LIST_REQ, NULL, 0, 200);
     }
+}
+
+static QueueHandle_t s_meta_q = NULL;   /* SD-Liste: ssc_meta_wire_t, PSRAM */
+static void on_sd_meta_resp(const ssc_meta_wire_t *w);
+/* Vom UART-Task: META_RESP nicht durch die Event-Loop (die kopiert jede
+ * Nutzlast ins interne DRAM, Review H3) - direkt in eine PSRAM-Queue,
+ * der Worker sortiert sie in NVS ein.                                  */
+void indicator_session_on_meta_resp(const ssc_meta_wire_t *w) {
+    if (!s_meta_q || !w) return;
+    if (xQueueSend(s_meta_q, w, pdMS_TO_TICKS(100)) != pdTRUE)
+        ESP_LOGW(TAG, "META_RESP verworfen (queue voll) %s", w->id);
 }
 
 static void session_worker(void *arg) {
@@ -454,6 +477,15 @@ static void session_worker(void *arg) {
     while (1) {
         job_t j;
         if (xQueueReceive(s_jobs, &j, pdMS_TO_TICKS(200)) == pdTRUE) do_job(&j);
+        {
+            static ssc_meta_wire_t mw;
+            int nm = 0;
+            static int pending = 0;
+            int got = 0;
+            while (nm++ < 8 && s_meta_q && xQueueReceive(s_meta_q, &mw, 0) == pdTRUE) { on_sd_meta_resp(&mw); got++; }
+            pending += got;
+            if (!got && pending) { pending = 0; post(VIEW_EVENT_HISTORY_LIST_REQ, NULL, 0, 200); }
+        }
         int64_t now = esp_timer_get_time();
         if (now >= next_live) {
             next_live = now + 1000000;
@@ -559,7 +591,7 @@ static void on_view_event(void *arg, esp_event_base_t base, int32_t id, void *d)
         bool rec = s.recording;
         char rid[SSC_SESSION_ID_LEN];
         memcpy(rid, s.rec_id, sizeof(rid));
-        if (rec) memcpy(s.cancel_id, rid, sizeof(rid));
+        if (rec) { memcpy(s.cancel_id, rid, sizeof(rid)); s.cancel_us = esp_timer_get_time(); }
         UNLOCK();
         if (rec) {
             uint8_t r = SSC_END_CANCEL;
@@ -571,10 +603,16 @@ static void on_view_event(void *arg, esp_event_base_t base, int32_t id, void *d)
         const ssc_ack_t *a = d;
         if (!a) break;
         /* Abbrechen wird im Worker nach JOB_ENDED erledigt (siehe do_job). */
+        if (a->cmd == SSC_CMD_SESSION_END && a->rc != SSC_RC_OK && a->rc != 0xFF) {
+            /* Ende abgelehnt (lief schon nicht mehr): Abbrechen/Formular-
+             * Absicht verwerfen, sonst trifft sie spaeter eine andere
+             * Session (Review H1, M1).                                 */
+            LOCK(); s.cancel_id[0] = 0; s.user_stop = false; UNLOCK();
+        }
         if (a->cmd == SSC_CMD_EVENT_LABEL || a->cmd == SSC_CMD_ADD_EVENT) {
             char eid[SSC_SESSION_ID_LEN];
-            LOCK(); memcpy(eid, s.ev_id, sizeof(eid)); UNLOCK();
-            if (eid[0]) request_events(eid);
+            LOCK(); memcpy(eid, s.ev_id, sizeof(eid)); bool busy = s.ev_loading; UNLOCK();
+            if (eid[0] && !busy) request_events(eid);
         }
         break;
     }
@@ -584,6 +622,9 @@ static void on_view_event(void *arg, esp_event_base_t base, int32_t id, void *d)
         if (!m || !m->id[0]) break;
         struct view_data_session_meta cur;
         if (indicator_session_store_get(m->id, &cur) != 0) {
+            /* Nur SAVE darf neu anlegen - EDIT einer geloeschten Session
+             * wuerde sie sonst zurueckholen (Review M3).              */
+            if (id != VIEW_EVENT_SESSION_SAVE) { ESP_LOGW(TAG, "edit: %s existiert nicht mehr", m->id); break; }
             indicator_session_store_append(m);
         } else {
             indicator_session_store_update(m);
@@ -690,6 +731,7 @@ int indicator_session_init(void) {
     s.last_temp = s.last_rh = NAN;
     s_mutex = xSemaphoreCreateMutex();
     s_jobs = xQueueCreate(8, sizeof(job_t));
+    s_meta_q = xQueueCreateWithCaps(32, sizeof(ssc_meta_wire_t), MALLOC_CAP_SPIRAM);
     if (!s_mutex || !s_jobs) return -2;
 
     static const int32_t listened[] = {

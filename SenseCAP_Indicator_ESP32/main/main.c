@@ -135,7 +135,7 @@ void app_main(void)
     TaskHandle_t s_view_loop_task = NULL;
     BaseType_t r = xTaskCreateWithCaps(
         __view_event_loop_task, "view_event_task",
-        16384, NULL, uxTaskPriorityGet(NULL), &s_view_loop_task,
+        16384, NULL, 4 /* v0.4.0: vorher 1 - Queue lief unter Last voll */, &s_view_loop_task,
         MALLOC_CAP_SPIRAM);
     if (r != pdPASS) {
         ESP_LOGE(TAG, "view_event_task PSRAM-stack create failed (rc=%d) "

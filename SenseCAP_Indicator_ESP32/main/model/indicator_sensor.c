@@ -1,6 +1,7 @@
 #include "indicator_sensor.h"
 #include "freertos/idf_additions.h"   /* xTaskCreateWithCaps */
 #include "esp_heap_caps.h"
+#include "esp_attr.h"
 #include "driver/uart.h"
 #include "cobs.h"
 #include "esp_timer.h"
@@ -180,7 +181,9 @@ static const char *TAG = "sensor-model";
 
 static SemaphoreHandle_t       __g_data_mutex;
 
-static struct indicator_sensor_history_data  __g_sensor_history_data;
+/* v0.4.0: Legacy-Verlauf (vom Sauna-UI ungenutzt) ins PSRAM - spart
+ * ~32 KB knappes internes DRAM fuer LVGL/WiFi.                      */
+EXT_RAM_BSS_ATTR static struct indicator_sensor_history_data  __g_sensor_history_data;
 static struct indicator_sensor_present_data  __g_sensor_present_data;
 static struct view_data_sensor_history_data  __g_history_event_buf;
 
@@ -1163,12 +1166,8 @@ static int __data_parse_handle(uint8_t *p_data, ssize_t len)
                 break;
             }
             meta.id[sizeof(meta.id) - 1] = 0;
-            /* v0.4.0: kein portMAX_DELAY im UART-Task (blockierte RX). Der
-             * RP2040 taktet LIST mit 25 ms pro Eintrag.                  */
-            if (esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
-                                  VIEW_EVENT_SD_META_RESP, &meta, sizeof(meta),
-                                  pdMS_TO_TICKS(200)) != ESP_OK)
-                ESP_LOGW(TAG, "META_RESP dropped (queue voll) id=%s", meta.id);
+            extern void indicator_session_on_meta_resp(const ssc_meta_wire_t *w);
+            indicator_session_on_meta_resp(&meta);
             break;
         }
 
@@ -1218,6 +1217,9 @@ static int __data_parse_handle(uint8_t *p_data, ssize_t len)
             ssc_event_full_t m;
             memcpy(&m, &p_data[1], sizeof(m));
             m.id[SSC_ID_LEN - 1] = 0;
+            m.l.operator_tag[SSC_LBL_OP - 1] = 0;
+            m.l.name[SSC_LBL_NAME - 1] = 0;
+            m.l.aroma[SSC_LBL_AROMA - 1] = 0;
             extern void indicator_session_on_event_rec(const ssc_event_full_t *m);
             indicator_session_on_event_rec(&m);
             break;
@@ -1326,7 +1328,12 @@ static void esp32_rp2040_comm_task(void *arg)
      * stall -> retry-storm -> heap-druck -> downstream-corruption in
      * LVGL/comm-task panics. 8K rx-buffer faengt realistische bursts
      * sicher ab.                                                     */
-    ESP_ERROR_CHECK(uart_driver_install(ESP32_COMM_PORT_NUM, BUF_SIZE * 16, 0, 0, NULL, intr_alloc_flags));
+    /* v0.4.0: kein abort() bei DRAM-Knappheit - kleineren Puffer probieren */
+    if (uart_driver_install(ESP32_COMM_PORT_NUM, BUF_SIZE * 16, 0, 0, NULL, intr_alloc_flags) != ESP_OK &&
+        uart_driver_install(ESP32_COMM_PORT_NUM, BUF_SIZE * 4, 0, 0, NULL, intr_alloc_flags) != ESP_OK) {
+        ESP_LOGE(TAG, "!!! uart driver install fehlgeschlagen - keine Verbindung zum RP2040");
+        vTaskDelete(NULL);
+    }
     ESP_ERROR_CHECK(uart_param_config(ESP32_COMM_PORT_NUM, &uart_config));
     ESP_ERROR_CHECK(uart_set_pin(ESP32_COMM_PORT_NUM, ESP32_RP2040_TXD, ESP32_RP2040_RXD, ESP32_RP2040_RTS, ESP32_RP2040_CTS));
 

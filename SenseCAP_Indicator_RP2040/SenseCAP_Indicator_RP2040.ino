@@ -99,7 +99,9 @@ static void session_recovery_scan(void);
 
 /* Log-Prefix fuer besseres Debug-Grep */
 #define LOG_TAG  "[SAUNA] "
+static bool g_usb_quiet = false;   /* waehrend ?D keine Logzeilen in den Dump */
 static inline void slog(const char *msg) {
+    if (g_usb_quiet) return;
     Serial.print(LOG_TAG); Serial.println(msg);
 }
 static inline void slogf(const char *lbl, float v, int decimals = 2) {
@@ -447,6 +449,7 @@ static bool sd_try_init(void) {
         SD.end(false);
         delay(5);
         rp2040.wdt_reset();
+        if (i == 0 && millis() > 30000UL) break;   /* im Betrieb: Karte fehlt -> nicht 6 s blockieren */
     }
     slog("SD: begin() fehlgeschlagen (karte nicht erkannt / falsches FS? "
          "128GB-Karten muessen FAT32 formatiert sein - Arduino-SD-Lib "
@@ -658,7 +661,7 @@ static bool sht85_read(float *t_out, float *rh_out) {
     }
     g_sht85_fails++;
     g_sht_consec_fails++;
-    if ((g_sht_consec_fails % 10) == 1) {
+    if ((g_sht_consec_fails % 10) == 1 && !g_usb_quiet) {
         Serial.print(LOG_TAG);
         Serial.print("SHT3x measure failed (consecutive: ");
         Serial.print(g_sht_consec_fails);
@@ -843,7 +846,7 @@ static float    g_st_acc_t = 0, g_st_acc_rh = 0; static uint16_t g_st_acc_n = 0;
 static uint32_t g_sauna_ok_ms = 0;     /* millis() der letzten gueltigen Messung */
 
 /* ---------------- Rekorder-Zustand --------------------------------- */
-#define SSC_MAX_EVENTS 64
+#define SSC_MAX_EVENTS 128
 struct rec_state_t {
     bool     active, file_ok, resumed, sim, resume_checked;
     char     id[SSC_ID_LEN];
@@ -870,7 +873,12 @@ static rec_state_t g_rec;
 static ssc_event_rec_t        g_tmp_ev[SSC_MAX_EVENTS];
 static ssc_event_label_body_t g_tmp_lbl[SSC_MAX_EVENTS];
 
-static uint8_t  g_auto_enabled = 1;    /* persistiert in /ssc_auto.cfg   */
+static uint8_t  g_auto_enabled = 1;
+extern char     g_rbk_sid[];
+extern uint32_t g_rbk_size;
+static bool     g_resume_tried = false;   /* rec_try_resume lief mit SD */
+static bool     g_pending_final = false;  /* rec_end ohne SD: Dateien nachholen */
+static uint8_t  g_start_src = 0;          /* Zeitquelle beim Session-Start */    /* persistiert in /ssc_auto.cfg   */
 static bool     g_state_dirty = true;
 static uint16_t g_bad_len = 0, g_bad_crc = 0;
 static uint16_t g_uart_ovf = 0;
@@ -996,11 +1004,14 @@ static int evt_read(const char *id, ssc_event_rec_t *ev, ssc_event_label_body_t 
     char line[224];
     while (f.available() && n < SSC_MAX_EVENTS) {
         size_t len = 0;
+        bool rd_err = false;
         while (f.available() && len < sizeof(line) - 1) {
             int c = f.read();
-            if (c < 0 || c == '\n') break;
+            if (c < 0) { rd_err = true; break; }
+            if (c == '\n') break;
             line[len++] = (char)c;
         }
+        if (rd_err) break;   /* M7: Lesefehler -> nicht endlos drehen */
         line[len] = 0;
         if (len < 10) continue;
         unsigned a[15]; unsigned long ts[3]; int t0, tpk;
@@ -1074,11 +1085,17 @@ static float json_extract_float(const char *src, const char *key, float def) {
 
 /* Liest <id>.json. measured=true wenn der RP2040 (v0.4+) die Messwerte
  * selbst geschrieben hat ("fw"-Key vorhanden).                          */
+/* v0.4-Zusatzfelder einer JSON (origin/sim/rows/write_errs) */
+static uint8_t  g_js_origin = 0, g_js_sim = 0;
+static uint32_t g_js_rows = 0;
+static uint16_t g_js_werrs = 0;
+
 static int read_session_json(const char *id, ssc_meta_wire_t *out, bool *measured) {
     if (!sd_init_flag) return -1;
     char path[48];
     snprintf(path, sizeof(path), "/sessions/%s.json", id);
     File f = SD.open(path, FILE_READ);
+    if (!f) { snprintf(path, sizeof(path), "/sessions/%s.jsx", id); f = SD.open(path, FILE_READ); }
     if (!f) return -2;
     static char buf[900];
     size_t n = f.read((uint8_t *)buf, sizeof(buf) - 1);
@@ -1097,6 +1114,10 @@ static int read_session_json(const char *id, ssc_meta_wire_t *out, bool *measure
     json_extract_str(buf, "aufguss_headline", out->aufguss_headline, sizeof(out->aufguss_headline));
     json_extract_str(buf, "notes", out->notes, sizeof(out->notes));
     if (measured) *measured = strstr(buf, "\"fw\":") != NULL;
+    g_js_origin = (uint8_t)json_extract_long(buf, "origin", 0);
+    g_js_sim    = (uint8_t)json_extract_long(buf, "sim", 0);
+    g_js_rows   = (uint32_t)json_extract_long(buf, "rows", 0);
+    g_js_werrs  = (uint16_t)json_extract_long(buf, "write_errs", 0);
     return 0;
 }
 
@@ -1186,7 +1207,7 @@ static int16_t x10s(float v) { return isnan(v) ? 0 : (int16_t)lroundf(v * 10.0f)
 static uint16_t x10u(float v) { return (isnan(v) || v < 0) ? 0 : (uint16_t)lroundf(v * 10.0f); }
 
 static ssc_event_rec_t *rec_new_event(uint8_t kind) {
-    if (g_rec.n_ev >= SSC_MAX_EVENTS) return NULL;
+    if (g_rec.n_ev >= SSC_MAX_EVENTS) { slog("!!! Event-Liste voll"); set_marker("EV_FULL"); return NULL; }
     uint8_t i = g_rec.n_ev++;
     memset(&g_rec.ev[i], 0, sizeof(g_rec.ev[i]));
     memset(&g_rec.lbl[i], 0, sizeof(g_rec.lbl[i]));
@@ -1202,8 +1223,10 @@ static void rec_event_commit(ssc_event_rec_t *e, const char *token) {
     evt_write(g_rec.id, g_rec.ev, g_rec.lbl, g_rec.n_ev);
     active_file_save();
     g_state_dirty = true;
-    Serial.print(LOG_TAG); Serial.print("event "); Serial.print(token);
-    Serial.print(" no="); Serial.println(e->no);
+    if (!g_usb_quiet) {
+        Serial.print(LOG_TAG); Serial.print("event "); Serial.print(token);
+        Serial.print(" no="); Serial.println(e->no);
+    }
 }
 
 /* Detektor-Zeiten (clk) in Session-Zeit (t_ms) umrechnen. */
@@ -1309,9 +1332,9 @@ static uint8_t rec_start(uint8_t origin) {
         if (!found) return SSC_RC_STATE;
     }
     File f = SD.open(path, FILE_WRITE);
-    if (!f) return SSC_RC_SD_ERR;
+    if (!f) { sd_init_flag = false; g_state_dirty = true; return SSC_RC_SD_ERR; }
     const char *hdr = "t_ms,temp,rh,q,event\n";
-    if (f.write((const uint8_t *)hdr, strlen(hdr)) != strlen(hdr)) { f.close(); return SSC_RC_SD_ERR; }
+    if (f.write((const uint8_t *)hdr, strlen(hdr)) != strlen(hdr)) { f.close(); sd_init_flag = false; return SSC_RC_SD_ERR; }
     f.flush();
 
     rec_reset_counters();
@@ -1326,6 +1349,7 @@ static uint8_t rec_start(uint8_t origin) {
     g_rec.id[sizeof(g_rec.id) - 1] = 0;
     strncpy(g_rec.path, path, sizeof(g_rec.path) - 1);
     g_rec.start_utc = time_valid() ? utc_now() : 0;
+    g_start_src = time_valid() ? g_ts_src : 0;
     g_rec.t0_clk = clk_ms();
     g_rec.t_off = 0;
     g_rec.last_flush_ms = g_rec.last_save_ms = g_rec.last_probe_ms = millis();
@@ -1361,10 +1385,15 @@ static void rec_end(uint8_t reason) {
     g_rec.f = File();
     g_rec.file_ok = false;
     if (sht_ready) sht_heater_force_off("session-end");
-    evt_write(g_rec.id, g_rec.ev, g_rec.lbl, g_rec.n_ev);
-    rec_write_json(true);
-    SD.remove("/ssc_active.txt");
-    SD.remove("/ssc_active.tmp");
+    if (!sd_init_flag) {
+        g_pending_final = true;   /* beim Remount nachholen */
+    } else {
+        evt_write(g_rec.id, g_rec.ev, g_rec.lbl, g_rec.n_ev);
+        rec_write_json(true);
+        SD.remove("/ssc_active.txt");
+        SD.remove("/ssc_active.tmp");
+    }
+    if (strncmp(g_rbk_sid, g_rec.id, SSC_ID_LEN) == 0) { g_rbk_sid[0] = 0; g_rbk_size = 0; }  /* M5 */
     Serial.print(LOG_TAG); Serial.print("session end: "); Serial.print(g_rec.id);
     Serial.print(" reason="); Serial.print(reason);
     Serial.print(" rows="); Serial.println(g_rec.rows);
@@ -1397,6 +1426,7 @@ static void rec_try_resume(void) {
         SD.remove("/ssc_active.tmp");
         return;
     }
+    bool ended_in_csv = false;
     /* Letzte Zeitmarke aus dem CSV-Ende lesen: _active.txt wird nur
      * jede Minute geschrieben, die CSV alle 5 s geflusht. So bleibt
      * t_ms nach dem Resume monoton (v0.4.0-Test: sprang sonst zurueck). */
@@ -1414,12 +1444,19 @@ static void rec_try_resume(void) {
                     if (l > 0 && ln[0] >= '0' && ln[0] <= '9') {
                         unsigned long v = strtoul(ln, NULL, 10);
                         if (v > t_ms) t_ms = v;
+                        if (strstr(ln, ",END")) ended_in_csv = true;
                     }
                     l = 0;
                 } else if (l < sizeof(ln) - 1) ln[l++] = (char)c;
             }
             r.close();
         }
+    }
+    if (ended_in_csv) {   /* Ende war schon geschrieben, nur Aufraeumen fehlte (L5) */
+        slog("resume: Session war bereits beendet -> nur aufraeumen");
+        SD.remove("/ssc_active.txt");
+        SD.remove("/ssc_active.tmp");
+        return;
     }
     File f = SD.open(path, FILE_WRITE);   /* Append-Modus */
     if (!f) return;
@@ -1465,7 +1502,7 @@ static void rec_check_resume_gap(void) {
     /* Nur mit wirklich bekannter Zeit (manuell gesetzt oder NTP). Die
      * NVS-Fallback-Zeit des ESP32 kennt den Stromausfall selbst nicht
      * und wuerde die Luecke als 0 messen (Review H1).                  */
-    if (!g_rec.active || g_rec.resume_checked || !time_valid() || g_ts_src < 3) return;
+    if (!g_rec.active || g_rec.resume_checked || !time_valid() || g_ts_src < 3 || g_start_src < 3) return;
     g_rec.resume_checked = true;
     uint32_t now_utc = utc_now();
     if (g_rec.start_utc == 0 || now_utc < g_rec.start_utc) return;
@@ -1689,7 +1726,8 @@ static void selftest_start(void) {
 
 static void selftest_abort(const char *why) {
     sht_heater_force_off(why);
-    g_st_phase = ST_SETTLE;
+    /* Heizer war in der Basislinie nie an -> kein Abklingen noetig (L4) */
+    g_st_phase = (g_st_phase == ST_BASE) ? ST_IDLE : ST_SETTLE;
     g_st_phase_ms = millis();
     g_st_result = SSC_ST_ABORTED;
     Serial.print(LOG_TAG); Serial.print("Selbsttest abgebrochen: "); Serial.println(why);
@@ -1827,8 +1865,8 @@ static void send_session_state(void) {
 #define RBK_REC 12
 #define SSC_RBK_BUF_SIZE (RBK_HDR + RBK_BUCKETS * RBK_REC)
 static uint8_t  g_rbk_buf[SSC_RBK_BUF_SIZE];
-static uint32_t g_rbk_size = 0;
-static char     g_rbk_sid[SSC_ID_LEN] = {0};
+uint32_t g_rbk_size = 0;
+char     g_rbk_sid[SSC_ID_LEN] = {0};
 
 /* Zeile parsen: v2 "t_ms,temp,rh,q,event" / v1 "t_s,temp,rh,mark" */
 static bool csv_parse_line(const char *line, bool v2, uint32_t *t_ms, float *T, float *RH,
@@ -1887,8 +1925,8 @@ static bool rbk_build(const char *sid) {
     uint32_t bw = dur / RBK_BUCKETS + 1;
     if (bw < 500) bw = 500;
     uint16_t nb = (uint16_t)min((uint32_t)RBK_BUCKETS, dur / bw + 1);
-    int16_t  tmin[RBK_BUCKETS], tmax[RBK_BUCKETS];
-    uint16_t hmin[RBK_BUCKETS], hmax[RBK_BUCKETS];
+    static int16_t  tmin[RBK_BUCKETS], tmax[RBK_BUCKETS];   /* static: Stack (L6) */
+    static uint16_t hmin[RBK_BUCKETS], hmax[RBK_BUCKETS];
     for (int i = 0; i < RBK_BUCKETS; i++) { tmin[i] = 0x7FFF; tmax[i] = (int16_t)0x8000; hmin[i] = 0xFFFF; hmax[i] = 0; }
     f.seek(data_start);
     len = 0;
@@ -1957,6 +1995,7 @@ static void handle_sd_readback(const uint8_t *payload, size_t len) {
             else ok = false;
         }
     }
+    if (ok && strncmp(sid, g_rbk_sid, SSC_ID_LEN) != 0) ok = false;   /* M5: nie fremde Huelle */
     uint32_t total = ok ? g_rbk_size : 0;
     if (offset > total) offset = total;
     uint16_t lim = (max_len == 0 || max_len > 200) ? 200 : max_len;
@@ -2094,7 +2133,10 @@ static uint8_t handle_meta_push(const uint8_t *p) {
             if (g_tmp_ev[i].kind == SSC_EK_LUEFTEN) lueften++;
         }
     }
-    int rc = write_session_json(&m, gaenge, lueften, 0, m.id[0] == 'X', 0, 0);
+    int origin = meas ? g_js_origin : 0, sim = meas ? g_js_sim : (m.id[0] == 'X' || m.id[0] == 'Y');
+    uint32_t rows = meas ? g_js_rows : 0;
+    uint16_t werrs = meas ? g_js_werrs : 0;
+    int rc = write_session_json(&m, gaenge, lueften, origin, sim, rows, werrs);
     return rc == 0 ? SSC_RC_OK : SSC_RC_SD_ERR;
 }
 
@@ -2106,8 +2148,8 @@ static uint8_t handle_delete(const uint8_t *p, bool json_only) {
     if (g_rec.active && strcmp(id, g_rec.id) == 0) return SSC_RC_STATE;  /* nie die aktive */
     if (!sd_init_flag) return SSC_RC_SD_ERR;
     char path[48];
-    const char *ext_all[] = { ".csv", ".json", ".evt" };
-    int n = json_only ? 1 : 3;
+    const char *ext_all[] = { ".csv", ".json", ".evt", ".evx", ".jsx" };
+    int n = json_only ? 1 : 5;
     for (int i = 0; i < n; i++) {
         snprintf(path, sizeof(path), "/sessions/%s%s", id, json_only ? ".json" : ext_all[i]);
         if (SD.exists(path)) SD.remove(path);
@@ -2277,15 +2319,21 @@ static void onPacketReceived(const uint8_t *buffer, size_t size) {
     }
     case SSC_CMD_TIME_SYNC: {
         ssc_time_sync_t t; memcpy(&t, p, sizeof(t));
-        if (t.utc > 1600000000UL) {
+        if (t.utc > 1600000000UL && t.source <= 4 && t.tz_off_s > -50400 && t.tz_off_s < 50400) {
             /* monoton: nie hinter eine bereits bekannte gute Zeit zurueck */
             uint32_t cur = utc_now();
             if (!(time_valid() && t.source < g_ts_src && t.utc + 120 < cur)) {
                 g_ts_utc = t.utc; g_ts_ms = millis(); g_ts_tz = t.tz_off_s;
                 g_ts_src = t.source; g_ts_have = true;
             }
-            if (g_rec.active && g_rec.start_utc == 0 && time_valid())
+            /* Startzeit nachziehen, wenn erst jetzt eine bessere Zeitquelle
+             * da ist (Start mit NVS-Fallback, spaeter manuell/NTP, M3).  */
+            if (g_rec.active && time_valid() && !g_rec.resumed &&
+                (g_rec.start_utc == 0 || (g_start_src < 3 && g_ts_src >= 3))) {
                 g_rec.start_utc = utc_now() - rec_t_ms() / 1000UL;
+                g_start_src = g_ts_src;
+                active_file_save();
+            }
             rec_check_resume_gap();
         }
         break;
@@ -2505,6 +2553,7 @@ static void periodic(uint32_t now) {
         if (g_rec.active && g_rec.sim) rec_end(SSC_END_MANUAL);
         g_sim = false;
         ssc_det_init(&g_det);
+        g_det.hot_armed = false;   /* heisse Kabine nach Test nicht als Start werten (L9) */
         g_state_dirty = true;
     }
 
@@ -2531,25 +2580,53 @@ static void periodic(uint32_t now) {
     }
     /* SD neu mounten (echter Remount: SD.end + begin) und laufende
      * Session wieder anhaengen.                                       */
+    /* Idle-SD-Check: Karte gezogen/getauscht erkennen, auch ohne Session
+     * (Review H1). Echter Lesezugriff auf eine Datei statt exists().  */
+    static uint32_t last_idle_probe = 0;
+    if (sd_init_flag && !g_rec.active && now - last_idle_probe > 60000) {
+        last_idle_probe = now;
+        File pf = SD.open("/ssc_probe.txt", FILE_WRITE);
+        bool ok = pf && pf.write((const uint8_t *)"x", 1) == 1;
+        if (pf) pf.close();
+        if (!ok) { slog("SD-Probe fehlgeschlagen -> remount"); sd_init_flag = false; g_state_dirty = true; }
+        else SD.remove("/ssc_probe.txt");
+    }
     static uint32_t last_sd_retry = 0;
-    if (!sd_init_flag && now - last_sd_retry > 15000) {
+    static uint8_t  sd_fail_n = 0;
+    uint32_t sd_retry_ms = sd_fail_n > 4 ? 60000UL : 15000UL;   /* M4: Backoff */
+    if (!sd_init_flag && now - last_sd_retry > sd_retry_ms) {
         last_sd_retry = now;
         SD.end(false);
         sd_init_flag = sd_try_init();
-        if (sd_init_flag && !g_rec.active) {
-            /* rec_end lief evtl. mit toter SD: Altlast entfernen, sonst
-             * wuerde ein spaeterer Reset die beendete Session fortsetzen. */
+        if (sd_init_flag && !g_resume_tried) {
+            /* Boot ohne SD: unterbrochene Session jetzt fortsetzen (M1) */
+            g_resume_tried = true;
+            auto_cfg_load();
+            rec_try_resume();
+        }
+        if (sd_init_flag && !g_rec.active && g_pending_final) {
+            /* rec_end lief mit toter SD: Abschluss nachholen (M2) */
+            g_pending_final = false;
+            evt_write(g_rec.id, g_rec.ev, g_rec.lbl, g_rec.n_ev);
+            rec_write_json(true);
             SD.remove("/ssc_active.txt");
             SD.remove("/ssc_active.tmp");
+            slog("SD wieder da - Session-Abschluss nachgeholt");
         }
         if (sd_init_flag && g_rec.active && !g_rec.file_ok) {
+            bool fresh = !SD.exists(g_rec.path);
             g_rec.f = SD.open(g_rec.path, FILE_WRITE);
+            if (g_rec.f && fresh) {   /* andere Karte: Header neu (L8) */
+                const char *hdr = "t_ms,temp,rh,q,event\n";
+                g_rec.f.write((const uint8_t *)hdr, strlen(hdr));
+            }
             if (g_rec.f) {
                 g_rec.file_ok = true;
                 set_marker("SD_GAP");
                 slog("SD wieder da - Session wird fortgesetzt");
             }
         }
+        if (sd_init_flag) sd_fail_n = 0; else if (sd_fail_n < 255) sd_fail_n++;
         g_state_dirty = true;
     }
     static uint32_t last_hlog = 0;
@@ -2608,6 +2685,7 @@ static void usb_cdc_service(void) {
             snprintf(path, sizeof(path), "/sessions/%s", nm);
             File f = safe ? SD.open(path) : File();
             if (f) {
+                g_usb_quiet = true;
                 Serial.print(F("[SAUNA] DUMP_BEGIN ")); Serial.println(nm);
                 uint8_t blk[256];
                 while (f.available()) {
@@ -2618,6 +2696,7 @@ static void usb_cdc_service(void) {
                 }
                 f.close();
                 Serial.println();
+                g_usb_quiet = false;
                 Serial.print(F("[SAUNA] DUMP_END ")); Serial.println(nm);
             } else {
                 Serial.print(F("[SAUNA] DUMP_ERR not found ")); Serial.println(path);

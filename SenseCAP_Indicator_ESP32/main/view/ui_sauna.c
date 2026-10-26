@@ -123,7 +123,7 @@ static lv_obj_t *home_probe_badge;   /* DEV/AHT20-FB/SD-warn-Hinweis */
 /* v0.4.0: Auto-Modus-UI */
 static lv_obj_t *scr_events = NULL, *scr_ev_edit = NULL;
 static char      s_ev_view_id[SSC_SESSION_ID_LEN] = {0};
-EXT_RAM_BSS_ATTR static ssc_event_full_t s_ui_ev[64];
+EXT_RAM_BSS_ATTR static ssc_event_full_t s_ui_ev[128];
 static int       s_ui_ev_n = -1;
 static lv_obj_t *live_warn_banner = NULL;
 static void events_refresh(void);
@@ -138,6 +138,7 @@ static bool s_last_ended_valid = false;
 static int64_t s_start_grace_until = 0;
 static bool s_sum_return_home = false;   /* Edit aus Home-Hinweis -> zurueck nach Home */
 static void detail_events_update(void);
+static void ui_post(int32_t id, const void *data, size_t len);
 static int dd_index_exact(lv_obj_t *dd, const char *opt);
 static void ui_hints_update(void);
 static void live_status_update(void);
@@ -1225,8 +1226,13 @@ static void on_live_stop_clicked(lv_event_t *e) {
     ESP_LOGI(TAG, "scr_summary geladen");
 }
 
+static char s_cancel_for[SSC_SESSION_ID_LEN];
 static void do_live_cancel(void *ud) {
     (void)ud;
+    if (s_ui_live.rec_state == SSC_REC_RECORDING && strcmp(s_cancel_for, s_ui_live.id) != 0) {
+        ESP_LOGW(TAG, "cancel verworfen: andere session laeuft");
+        return;
+    }
     esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
                       VIEW_EVENT_SESSION_DISCARD, NULL, 0, pdMS_TO_TICKS(30));
     live_running = false;
@@ -1238,6 +1244,8 @@ static void on_live_cancel_clicked(lv_event_t *e) {
     /* v0.4.0 (Audit M9): laufende Session nur nach Rueckfrage verwerfen.
      * Ohne laufende Session ist der Knopf einfach "zurueck".            */
     if (live_running || s_ui_live.rec_state == SSC_REC_RECORDING) {
+        strncpy(s_cancel_for, s_ui_live.id, SSC_SESSION_ID_LEN - 1);
+        s_cancel_for[SSC_SESSION_ID_LEN - 1] = 0;
         show_confirm("SESSION ABBRECHEN",
                      "aufzeichnung beenden und komplett loeschen?\n"
                      "(zum normalen beenden: STOPPEN)",
@@ -1643,9 +1651,12 @@ static void on_summary_save_clicked(lv_event_t *e) {
                  meta.id, meta.operator_tag, meta.aufguss_headline,
                  (unsigned)meta.participants,
                  (unsigned)strlen(meta.notes));
-        esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
-                          VIEW_EVENT_SESSION_EDIT, &meta, sizeof(meta),
-                          pdMS_TO_TICKS(30));
+        if (esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
+                              VIEW_EVENT_SESSION_EDIT, &meta, sizeof(meta),
+                              pdMS_TO_TICKS(30)) != ESP_OK) {
+            if (sum_meta_summary) lv_label_set_text(sum_meta_summary, "geraet beschaeftigt - bitte nochmal SPEICHERN");
+            return;
+        }
         /* Detail-screen-labels sofort mit den neuen werten aktualisieren,
          * damit der user die aenderung ohne screen-wechsel sieht. Die
          * hist_cached[]-tabelle wird kurz darauf vom HISTORY_LIST-event
@@ -1680,9 +1691,13 @@ static void on_summary_save_clicked(lv_event_t *e) {
     } else {
         /* Save-flow (frische session beenden) */
         if (s_last_ended_valid && strcmp(s_last_ended.id, meta.id) == 0) s_last_ended_valid = false;
-        esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
-                          VIEW_EVENT_SESSION_SAVE, &meta, sizeof(meta),
-                          pdMS_TO_TICKS(30));
+        if (esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
+                              VIEW_EVENT_SESSION_SAVE, &meta, sizeof(meta),
+                              pdMS_TO_TICKS(30)) != ESP_OK) {
+            /* nicht still verwerfen: Formular bleiben, nochmal tippen */
+            if (sum_meta_summary) lv_label_set_text(sum_meta_summary, "geraet beschaeftigt - bitte nochmal SPEICHERN");
+            return;
+        }
         /* History neu laden damit home-recent + history-liste aktualisiert. */
         esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
                           VIEW_EVENT_HISTORY_LIST_REQ, NULL, 0, pdMS_TO_TICKS(30));
@@ -1928,7 +1943,7 @@ static void build_summary(void) {
 static void summary_prefill(const struct view_data_session_meta *m) {
     sum_current_meta = *m;
     char info[96];
-    uint32_t dur = (uint32_t)(m->end_ts - m->start_ts);
+    uint32_t dur = (m->end_ts > m->start_ts) ? (uint32_t)(m->end_ts - m->start_ts) : 0;
     char dbuf[16]; fmt_duration(dbuf, sizeof(dbuf), dur);
     snprintf(info, sizeof(info),
              "Dauer %s   Peak %.0f C / %.0f%%   %u Aufg.",
@@ -2160,6 +2175,7 @@ static void do_detail_delete(void *user_data) {
      * vom session-modul-handler (delete loescht + on_history_list_req). */
     sum_edit_hist_idx = -1;
     s_detail_valid = false;
+    if (s_last_ended_valid && strcmp(s_last_ended.id, id) == 0) { s_last_ended_valid = false; ui_hints_update(); }
     lv_scr_load_anim(scr_history, LV_SCR_LOAD_ANIM_OVER_RIGHT, 220, 0, false);
 }
 
@@ -2183,6 +2199,7 @@ static void on_detail_edit_clicked(lv_event_t *e) {
     sum_edit_mode = true;
     s_sum_return_home = false;
     summary_prefill(m);
+    if (sum_save_btn_label) lv_obj_clear_state(lv_obj_get_parent(sum_save_btn_label), LV_STATE_DISABLED);
     /* Labels an edit-mode anpassen */
     if (sum_title_label) lv_label_set_text(sum_title_label, "SESSION BEARBEITEN");
     if (sum_save_btn_label) lv_label_set_text(sum_save_btn_label,
@@ -2198,7 +2215,10 @@ static lv_obj_t     *s_confirm_overlay = NULL;
 static confirm_cb_t  s_confirm_cb = NULL;
 static void         *s_confirm_user_data = NULL;
 
+static lv_obj_t   *s_confirm_scr = NULL;
+static lv_timer_t *s_confirm_tmr = NULL;
 static void confirm_close(void) {
+    if (s_confirm_tmr) { lv_timer_del(s_confirm_tmr); s_confirm_tmr = NULL; }
     if (s_confirm_overlay) {
         lv_obj_del(s_confirm_overlay);
         s_confirm_overlay = NULL;
@@ -2217,12 +2237,22 @@ static void on_confirm_ok(lv_event_t *e) {
     if (cb) cb(ud);
 }
 
+/* Dialog gehoert zu einem Screen: wechselt der Screen (z.B. Auto-Ende),
+ * wird er geschlossen - sonst wirkt ein alter "LOESCHEN" spaeter auf eine
+ * ganz andere Session (Review H2).                                    */
+static void confirm_watch_cb(lv_timer_t *t) {
+    (void)t;
+    if (s_confirm_overlay && lv_scr_act() != s_confirm_scr) confirm_close();
+}
+
 static void show_confirm(const char *title, const char *body,
                          const char *confirm_label,
                          confirm_cb_t on_ok, void *user_data) {
     if (s_confirm_overlay) confirm_close();
     s_confirm_cb = on_ok;
     s_confirm_user_data = user_data;
+    s_confirm_scr = lv_scr_act();
+    s_confirm_tmr = lv_timer_create(confirm_watch_cb, 250, NULL);
 
     /* Fullscreen modal-overlay mit semi-transparentem backdrop */
     lv_obj_t *active = lv_scr_act();
@@ -3861,6 +3891,19 @@ static void on_session_live(const struct view_data_session_live *L) {
     }
     live_status_update();
     ui_hints_update();
+    {   /* Ereignisliste fuer eine angezeigte Session nicht angekommen
+         * (Model-Cache wurde umgeschaltet): nach 3 s neu anfordern (M8). */
+        static int64_t ev_wait_since = 0;
+        bool waiting = s_ev_view_id[0] && s_ui_ev_n < 0 &&
+                       ((scr_events && lv_scr_act() == scr_events) || lv_scr_act() == scr_detail);
+        int64_t nowu = esp_timer_get_time();
+        if (!waiting) ev_wait_since = 0;
+        else if (!ev_wait_since) ev_wait_since = nowu;
+        else if (nowu - ev_wait_since > 3000000) {
+            ev_wait_since = nowu;
+            ui_post(VIEW_EVENT_EVENTS_REQ, s_ev_view_id, SSC_SESSION_ID_LEN);
+        }
+    }
     if (!rp_rec && !live_running) {
         /* Bereit: Kurve laeuft als Vorschau mit, Timer steht. */
     }
@@ -4064,7 +4107,8 @@ static void on_history_detail_done(const struct view_data_session_detail_done *d
     ESP_LOGI(TAG, "detail_done: sid=%s count=%u", d->session_id,
              (unsigned)s_detail_buf.count);
     if (strncmp(s_detail_buf.sid, d->session_id, SSC_SESSION_ID_LEN) != 0) {
-        ESP_LOGW(TAG, "detail_done: sid mismatch, ignore");
+        ESP_LOGW(TAG, "detail_done: sid mismatch / keine daten");
+        if (detail_spinner) lv_obj_add_flag(detail_spinner, LV_OBJ_FLAG_HIDDEN);
         return;
     }
     uint16_t n = s_detail_buf.count;
@@ -4348,7 +4392,18 @@ static void rebuild_operator_dropdown(void) {
         strncat(opts, "\n", sizeof(opts) - strlen(opts) - 1);
         strncat(opts, sorted[i], sizeof(opts) - strlen(opts) - 1);
     }
+    char keep[SSC_OPERATOR_MAXLEN] = {0};
+    lv_dropdown_get_selected_str(sum_operator_dd, keep, sizeof(keep));
     lv_dropdown_set_options(sum_operator_dd, opts);
+    /* Auswahl erhalten: Listen-Refresh darf die Eingabe nicht zuruecksetzen */
+    if (keep[0]) {
+        int ki = dd_index_exact(sum_operator_dd, keep);
+        if (ki < 0) {
+            lv_dropdown_add_option(sum_operator_dd, keep, LV_DROPDOWN_POS_LAST);
+            ki = dd_index_exact(sum_operator_dd, keep);
+        }
+        if (ki >= 0) lv_dropdown_set_selected(sum_operator_dd, (uint16_t)ki);
+    }
 }
 
 static void on_operator_presets(const struct view_data_operator_presets *p) {
@@ -4550,6 +4605,7 @@ static void build_events(void) {
 static void events_open(const char *id, lv_obj_t *ret) {
     if (!id || !id[0]) return;
     build_events();
+    eve_idx = -1;
     ev_return_scr = ret;
     if (strcmp(s_ev_view_id, id) != 0) s_ui_ev_n = -1;
     strncpy(s_ev_view_id, id, SSC_SESSION_ID_LEN - 1);
@@ -4936,7 +4992,7 @@ static void eve_open(int idx) {
 
 static void on_events_updated(const char *id) {
     if (!id || strcmp(id, s_ev_view_id) != 0) return;
-    int n = indicator_session_events_copy(id, s_ui_ev, 64);
+    int n = indicator_session_events_copy(id, s_ui_ev, 128);
     if (n < 0) return;
     s_ui_ev_n = n;
     if (scr_events && lv_scr_act() == scr_events) events_refresh();
@@ -5094,6 +5150,10 @@ static void ui_on_cmd_result(const ssc_ack_t *a) {
 
 static void on_view_event(void *arg, esp_event_base_t base,
                           int32_t id, void *ev_data) {
+    /* N1: NVS-Schreiben (Flash, kann bei GC hunderte ms dauern) NICHT
+     * unter dem LVGL-Lock - sonst friert das Display ein.             */
+    if (id == VIEW_EVENT_OPERATOR_PRESETS_UPDATE && ev_data)
+        operators_nvs_save((const struct view_data_operator_presets *)ev_data);
     lv_port_sem_take();
     switch (id) {
     case VIEW_EVENT_SESSION_LIVE:
@@ -5134,7 +5194,7 @@ static void on_view_event(void *arg, esp_event_base_t base,
     case VIEW_EVENT_OPERATOR_PRESETS_UPDATE:
         if (ev_data) {
             const struct view_data_operator_presets *p = ev_data;
-            operators_nvs_save(p);
+            /* (NVS-Speichern passiert oben ausserhalb des Locks) */
             /* UI (dropdown + textarea) mit neuen Werten reflektieren */
             on_operator_presets(p);
         }
@@ -5289,14 +5349,15 @@ static void console_exec(char *l) {
     lv_port_sem_take();
     if (!strncmp(a, "start", 5)) on_live_start_clicked(NULL);
     else if (!strncmp(a, "stop", 4)) on_live_stop_clicked(NULL);
-    else if (!strncmp(a, "cancel", 6)) do_live_cancel(NULL);
+    else if (!strncmp(a, "cancel", 6)) on_live_cancel_clicked(NULL);   /* mit Rueckfrage, dann "ui ok" */
     else if (!strncmp(a, "add", 3)) on_ev_add_clicked(NULL);
+    else if (!strcmp(a, "ok")) on_confirm_ok(NULL);         /* Dialog bestaetigen */
     else if (!strncmp(a, "selftest", 8)) do_selftest(NULL);
     else if (!strncmp(a, "auto ", 5)) { uint8_t on = a[5] == '1';
         esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_AUTO_MODE_SET, &on, 1, pdMS_TO_TICKS(30)); }
     else if (!strncmp(a, "chip", 4)) on_live_events_clicked(NULL);
     else if (!strncmp(a, "hint", 4)) on_home_hint_clicked(NULL);
-    else if (sscanf(a, "edit %d", &n) == 1) eve_open(n);
+    else if (sscanf(a, "edit %d", &n) == 1) { build_events(); eve_open(n); }
     else if (sscanf(a, "save %63[^\n]", arg) == 1) {
         /* save <op>|<name>|<aroma>|<teilnehmer> */
         char *f[4] = { arg, NULL, NULL, NULL }; int k = 1;
@@ -5309,9 +5370,9 @@ static void console_exec(char *l) {
         if (eve_name_ta && f[1]) lv_textarea_set_text(eve_name_ta, f[1]);
         if (eve_aroma_ta && f[2]) lv_textarea_set_text(eve_aroma_ta, f[2]);
         if (f[3]) { eve_part_n = atoi(f[3]); eve_part_update(); }
-        on_eve_save(NULL);
+        if (scr_events && scr_ev_edit) on_eve_save(NULL);
     }
-    else if (!strncmp(a, "fehlalarm", 9)) do_eve_delete(NULL);
+    else if (!strncmp(a, "fehlalarm", 9)) { if (scr_events) do_eve_delete(NULL); }
     else if (sscanf(a, "hist %d", &n) == 1 && n >= 0 && n < hist_cache_count) {
         lv_event_t ev; memset(&ev, 0, sizeof(ev)); ev.user_data = (void *)(uintptr_t)n;
         on_history_row_clicked(&ev);
@@ -5332,7 +5393,7 @@ static void console_exec(char *l) {
              (home_hint_btn && !lv_obj_has_flag(home_hint_btn, LV_OBJ_FLAG_HIDDEN)) ? lv_label_get_text(home_hint_lbl) : "-",
              (live_events_btn && !lv_obj_has_flag(live_events_btn, LV_OBJ_FLAG_HIDDEN)) ? lv_label_get_text(live_events_lbl) : "-",
              live_status_label ? lv_label_get_text(live_status_label) : "");
-    for (int i = 0; i < s_ui_ev_n && i < 64; i++) {
+    for (int i = 0; i < s_ui_ev_n && i < 128; i++) {
         const ssc_event_full_t *x = &s_ui_ev[i];
         ESP_LOGW(TAG, "  ev no=%u kind=%u seq=%u gang=%u flags=0x%02x op='%s' name='%s' aroma='%s' tn=%u",
                  x->e.no, x->e.kind, x->e.seq, x->e.gang, x->e.flags, x->l.operator_tag, x->l.name,
