@@ -1699,7 +1699,10 @@ static void rt_service(void) {
  * Sensirion-Research 2026-10-24: keine Session, Kabine 5..40 °C,
  * RH 20..85 %, T stabil, >= 6 h seit letztem Test, max 30 s Heizen.
  * Bewertung: k = gemessene RH-Abnahme / erwartete (bei konstanter
- * abs. Feuchte und gemessenem T-Hub). k >= 0.6 gesund, < 0.3 blind.  */
+ * abs. Feuchte und gemessenem T-Hub). Gemittelt ueber die ganze
+ * Heizphase, die RH-Schicht reagiert traeger als T -> ein neuer,
+ * gesunder FS400-SHT35 liefert k ~0.54 (gemessen 10/2026). Blind ~0.
+ * k >= 0.35 gesund, < 0.15 blind, dazwischen unklar.                 */
 static uint8_t selftest_refuse_reason(void) {
     if (g_sauna_probe != SAUNA_PROBE_SHT85 || !sht_ready) return SSC_STR_NO_PROBE;
     if (g_rec.active) return SSC_STR_SESSION;
@@ -1770,7 +1773,7 @@ static void selftest_service(void) {
                 float d_exp = g_st_rh0 - rh_exp, d_meas = g_st_rh0 - g_st_rhend;
                 float k = (d_exp > 0.05f) ? d_meas / d_exp : 0.0f;
                 g_st_k_x100 = (uint16_t)constrain(k * 100.0f, 0.0f, 999.0f);
-                g_st_result = (k >= 0.6f) ? SSC_ST_PASS : (k < 0.3f ? SSC_ST_BLIND : SSC_ST_INCONCLUSIVE);
+                g_st_result = (k >= 0.35f) ? SSC_ST_PASS : (k < 0.15f ? SSC_ST_BLIND : SSC_ST_INCONCLUSIVE);
             }
             Serial.print(LOG_TAG); Serial.print("Selbsttest Ergebnis="); Serial.print(g_st_result);
             Serial.print(" dT="); Serial.print(dT, 2); Serial.print(" k="); Serial.println(g_st_k_x100 / 100.0f, 2);
@@ -2534,13 +2537,15 @@ static void periodic(uint32_t now) {
     /* Automatisches taegliches Ausheizen (Sensirion-Plausibilitaetstest):
      * einmal pro 24 h, nur bei kalter, ruhiger Kabine ohne Session -
      * dieselben Interlocks wie der manuelle Selbsttest. Nach dem Boot
-     * frhestens nach 30 min (Kabine muss stabil sein).                */
+     * frühestens 10 min nach dem Boot und erst wenn 60 Werte fuer den
+     * Stabilitaets-Check da sind (sonst waere die Kabine beim Einschalten
+     * am Saunaabend meist schon zu heiss).                             */
     static uint32_t last_auto_st_check = 0;
     if (now - last_auto_st_check >= 60000UL) {
         last_auto_st_check = now;
         bool due = g_st_last_ms ? (now - g_st_last_ms >= 24UL * 3600000UL)
-                                : (now >= 30UL * 60000UL);
-        if (due && g_st_phase == ST_IDLE && !g_sim && selftest_refuse_reason() == 0) {
+                                : (now >= 10UL * 60000UL);
+        if (due && g_det.r5_fill >= 60 && g_st_phase == ST_IDLE && !g_sim && selftest_refuse_reason() == 0) {
             slog("Auto-Ausheizen (taeglicher Selbsttest) startet");
             selftest_start();
             sensor_health_send();
